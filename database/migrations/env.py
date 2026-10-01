@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import asyncio
+
+from alembic import context
+from sqlalchemy import pool
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from enterprise_platform.config.settings import get_settings
+from enterprise_platform.database.base import Base
+from enterprise_platform.database.engine import build_database_url
+
+target_metadata = Base.metadata
+
+
+def configure_migration_context(
+    connection: Connection,
+) -> None:
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        compare_server_default=True,
+    )
+
+
+def run_migrations_offline() -> None:
+    settings = get_settings()
+    database_url = build_database_url(settings)
+
+    context.configure(
+        url=database_url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={
+            "paramstyle": "named",
+        },
+        compare_type=True,
+        compare_server_default=True,
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+async def run_async_migrations() -> None:
+    settings = get_settings()
+
+    engine = create_async_engine(
+        build_database_url(settings),
+        poolclass=pool.NullPool,
+        connect_args={
+            "timeout": settings.database_connect_timeout_seconds,
+        },
+    )
+
+    try:
+        async with engine.connect() as connection:
+            await connection.run_sync(configure_migration_context)
+
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        await engine.dispose()
+
+
+def run_migrations_online() -> None:
+    asyncio.run(run_async_migrations())
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()

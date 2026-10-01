@@ -1,0 +1,157 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: connected-vehicle-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: "${DATABASE_NAME:-connected_vehicle}"
+      POSTGRES_USER: "${DATABASE_USERNAME:-connected_vehicle}"
+      POSTGRES_PASSWORD: "${DATABASE_PASSWORD:-connected_vehicle}"
+
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-15432}:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DATABASE_USERNAME:-connected_vehicle} -d ${DATABASE_NAME:-connected_vehicle}",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+    stop_grace_period: 30s
+
+    networks:
+      - connected_vehicle
+
+
+  redis:
+    image: redis:7-alpine
+    container_name: connected-vehicle-redis
+    restart: unless-stopped
+
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-16379}:6379"
+
+    volumes:
+      - redis_data:/data
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "ping",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+    stop_grace_period: 15s
+
+    networks:
+      - connected_vehicle
+
+
+  localstack:
+    image: localstack/localstack:2026.08.3
+    container_name: connected-vehicle-localstack
+    restart: unless-stopped
+
+    environment:
+      AWS_DEFAULT_REGION: "${AWS_REGION:-ap-northeast-1}"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-test}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-test}"
+
+      PERSISTENCE: "1"
+      DEBUG: "0"
+
+      LOCALSTACK_AUTH_TOKEN: "${LOCALSTACK_AUTH_TOKEN:-}"
+
+    ports:
+      - "127.0.0.1:${LOCALSTACK_HOST_PORT:-4566}:4566"
+
+    volumes:
+      - localstack_data:/var/lib/localstack
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:4566/_localstack/health >/dev/null || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+    stop_grace_period: 30s
+
+    networks:
+      - connected_vehicle
+
+
+  mqtt:
+    image: eclipse-mosquitto:2.1.1-alpine
+    container_name: connected-vehicle-mqtt
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:${MQTT_HOST_PORT:-1883}:1883"
+
+    volumes:
+      - ./config/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mosquitto_pub -h 127.0.0.1 -p 1883 -t local/health -m ping || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+    stop_grace_period: 15s
+
+    networks:
+      - connected_vehicle
+
+
+networks:
+  connected_vehicle:
+    name: connected-vehicle-network
+    driver: bridge
+
+
+volumes:
+  postgres_data:
+    name: connected-vehicle-postgres-data
+
+  redis_data:
+    name: connected-vehicle-redis-data
+
+  localstack_data:
+    name: connected-vehicle-localstack-data
+
+  mosquitto_data:
+    name: connected-vehicle-mosquitto-data
+
+  mosquitto_log:
+    name: connected-vehicle-mosquitto-log
