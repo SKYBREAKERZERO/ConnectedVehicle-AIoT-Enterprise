@@ -8,13 +8,14 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from enterprise_platform.config.settings import get_settings
+from enterprise_platform.database import models as _models  # noqa: F401
 from enterprise_platform.database.base import Base
 from enterprise_platform.database.engine import build_database_url
 
 target_metadata = Base.metadata
 
 
-def configure_migration_context(
+def run_migrations_with_connection(
     connection: Connection,
 ) -> None:
     context.configure(
@@ -23,6 +24,9 @@ def configure_migration_context(
         compare_type=True,
         compare_server_default=True,
     )
+
+    with context.begin_transaction():
+        context.run_migrations()
 
 
 def run_migrations_offline() -> None:
@@ -57,10 +61,7 @@ async def run_async_migrations() -> None:
 
     try:
         async with engine.connect() as connection:
-            await connection.run_sync(configure_migration_context)
-
-            with context.begin_transaction():
-                context.run_migrations()
+            await connection.run_sync(run_migrations_with_connection)
     finally:
         await engine.dispose()
 
