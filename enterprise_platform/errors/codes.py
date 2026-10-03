@@ -1,0 +1,20 @@
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class ErrorCode(StrEnum):
+    """Stable machine-readable application error codes."""
+
+    INVALID_REQUEST = "INVALID_REQUEST"
+
+    AUTHENTICATION_REQUIRED = "AUTHENTICATION_REQUIRED"
+    AUTHORIZATION_DENIED = "AUTHORIZATION_DENIED"
+
+    RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
+    CONFLICT = "CONFLICT"
+
+    DEPENDENCY_UNAVAILABLE = "DEPENDENCY_UNAVAILABLE"
+    DEPENDENCY_TIMEOUT = "DEPENDENCY_TIMEOUT"
+
+    INTERNAL_ERROR = "INTERNAL_ERROR"
