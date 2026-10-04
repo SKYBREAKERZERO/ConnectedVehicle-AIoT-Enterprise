@@ -14,6 +14,7 @@ class OutboxStatus(StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"
     PUBLISHED = "published"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True, slots=True)

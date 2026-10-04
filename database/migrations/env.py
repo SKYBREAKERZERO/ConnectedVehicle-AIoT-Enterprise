@@ -7,6 +7,10 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from connected_vehicle.remote_command.persistence import (
+    models as _remote_command_models,  # noqa: F401
+)
+from connected_vehicle.vehicle.persistence import models as _vehicle_models  # noqa: F401
 from enterprise_platform.config.settings import get_settings
 from enterprise_platform.database import models as _models  # noqa: F401
 from enterprise_platform.database.base import Base

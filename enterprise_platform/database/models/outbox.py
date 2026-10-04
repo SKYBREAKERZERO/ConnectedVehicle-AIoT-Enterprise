@@ -83,6 +83,21 @@ class OutboxEventModel(Base):
         nullable=True,
     )
 
+    failed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    failure_code: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+
+    failure_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
     __table_args__ = (
         Index(
             "ix_outbox_events_pending_available",
