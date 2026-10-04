@@ -7,6 +7,10 @@ from enterprise_platform.security.context import (
     SecurityContext,
     get_security_context,
 )
+from enterprise_platform.security.exceptions import (
+    AuthenticationRequiredError,
+    AuthorizationDeniedError,
+)
 from enterprise_platform.security.identity import Role
 from enterprise_platform.security.permissions import (
     ALL_PERMISSIONS,
@@ -43,22 +47,6 @@ ROLE_PERMISSIONS: Final[Mapping[Role, frozenset[Permission]]] = {
     Role.SYSTEM_SERVICE: ALL_PERMISSIONS,
     Role.PLATFORM_ADMIN: ALL_PERMISSIONS,
 }
-
-
-class AuthenticationRequiredError(Exception):
-    """Raised when an operation requires an authenticated principal."""
-
-    def __init__(self) -> None:
-        super().__init__("Authentication is required.")
-
-
-class AuthorizationDeniedError(Exception):
-    """Raised when a principal lacks a required permission."""
-
-    def __init__(self, permission: Permission) -> None:
-        self.permission = permission
-
-        super().__init__(f"Permission '{permission.value}' is required.")
 
 
 def resolve_permissions(

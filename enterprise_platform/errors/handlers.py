@@ -14,7 +14,7 @@ from enterprise_platform.observability.middleware import (
     CORRELATION_ID_HEADER,
     REQUEST_ID_HEADER,
 )
-from enterprise_platform.security.authorization import (
+from enterprise_platform.security.exceptions import (
     AuthenticationRequiredError,
     AuthorizationDeniedError,
 )

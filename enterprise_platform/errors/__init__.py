@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from enterprise_platform.errors.base import (
     ApplicationError,
     ConflictError,
@@ -7,7 +11,6 @@ from enterprise_platform.errors.base import (
     ResourceNotFoundError,
 )
 from enterprise_platform.errors.codes import ErrorCode
-from enterprise_platform.errors.handlers import register_exception_handlers
 
 __all__ = [
     "ApplicationError",
@@ -19,3 +22,17 @@ __all__ = [
     "ResourceNotFoundError",
     "register_exception_handlers",
 ]
+
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+
+def register_exception_handlers(
+    app: FastAPI,
+) -> None:
+    from enterprise_platform.errors.handlers import (
+        register_exception_handlers as _register_exception_handlers,
+    )
+
+    _register_exception_handlers(app)
