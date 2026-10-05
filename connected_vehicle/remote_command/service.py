@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from connected_vehicle.remote_command.application_errors import (
+    RemoteCommandIdempotencyConflictError,
+    RemoteCommandVehicleNotFoundError,
+    RemoteCommandVehicleUnavailableError,
+)
 from connected_vehicle.remote_command.domain import (
     DEFAULT_REMOTE_COMMAND_TTL_SECONDS,
     RemoteCommand,
@@ -30,22 +35,6 @@ from enterprise_platform.database.unit_of_work import (
 from enterprise_platform.reliability.outbox import (
     PendingOutboxEvent,
 )
-
-
-class RemoteCommandApplicationError(Exception):
-    """Base exception for remote-command application failures."""
-
-
-class RemoteCommandVehicleNotFoundError(RemoteCommandApplicationError):
-    """Raised when a vehicle is unavailable in the tenant scope."""
-
-
-class RemoteCommandVehicleUnavailableError(RemoteCommandApplicationError):
-    """Raised when the vehicle cannot accept remote commands."""
-
-
-class RemoteCommandIdempotencyConflictError(RemoteCommandApplicationError):
-    """Raised when an idempotency key is reused for another request."""
 
 
 @dataclass(frozen=True, slots=True)

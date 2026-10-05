@@ -5,6 +5,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from apps.api.routers.remote_command import (
+    router as remote_command_router,
+)
 from enterprise_platform.config.settings import get_settings
 from enterprise_platform.database.engine import (
     create_database_engine,
@@ -43,7 +46,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Connected Vehicle AIoT Enterprise",
         version="0.1.0",
-        description="Enterprise Connected Vehicle, IoT and AIoT Platform",
+        description=("Enterprise Connected Vehicle, IoT and AIoT Platform"),
         lifespan=lifespan,
     )
 
@@ -55,6 +58,8 @@ def create_app() -> FastAPI:
         app,
         settings,
     )
+
+    app.include_router(remote_command_router)
 
     @app.get(
         "/health/live",
