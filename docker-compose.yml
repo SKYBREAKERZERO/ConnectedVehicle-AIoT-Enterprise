@@ -81,11 +81,14 @@ services:
 
       LOCALSTACK_AUTH_TOKEN: "${LOCALSTACK_AUTH_TOKEN:-}"
 
+      VEHICLE_COMMAND_QUEUE_NAME: "${VEHICLE_COMMAND_QUEUE_NAME:-connected-vehicle-command}"
+
     ports:
       - "127.0.0.1:${LOCALSTACK_HOST_PORT:-4566}:4566"
 
     volumes:
       - localstack_data:/var/lib/localstack
+      - ./scripts/localstack/init-aws.sh:/etc/localstack/init/ready.d/10-provision-connected-vehicle.sh:ro
 
     healthcheck:
       test:

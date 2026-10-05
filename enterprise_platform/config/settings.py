@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     aws_read_timeout_seconds: float = Field(default=10.0, gt=0)
     aws_max_attempts: int = Field(default=3, ge=1, le=10)
 
+    vehicle_command_queue_name: str = Field(
+        default="connected-vehicle-command",
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+
     database_host: str = "localhost"
     database_port: int = Field(default=5432, ge=1, le=65535)
     database_name: str = "connected_vehicle"
