@@ -76,19 +76,17 @@ services:
       AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-test}"
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-test}"
 
+      # Persist LocalStack state across normal container restarts.
       PERSISTENCE: "1"
       DEBUG: "0"
 
       LOCALSTACK_AUTH_TOKEN: "${LOCALSTACK_AUTH_TOKEN:-}"
-
-      VEHICLE_COMMAND_QUEUE_NAME: "${VEHICLE_COMMAND_QUEUE_NAME:-connected-vehicle-command}"
 
     ports:
       - "127.0.0.1:${LOCALSTACK_HOST_PORT:-4566}:4566"
 
     volumes:
       - localstack_data:/var/lib/localstack
-      - ./scripts/localstack/init-aws.sh:/etc/localstack/init/ready.d/10-provision-connected-vehicle.sh:ro
 
     healthcheck:
       test:
