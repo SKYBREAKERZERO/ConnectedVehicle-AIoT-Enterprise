@@ -28,5 +28,80 @@ locals {
     }
   }
 
-}
+  application_runtime_role_name = "${local.name_prefix}-application-runtime"
 
+  application_runtime_assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "AllowEcsTasksToAssumeRole"
+        Effect = "Allow"
+
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  outbox_dispatcher_role_name = "${local.name_prefix}-outbox-dispatcher"
+
+  outbox_dispatcher_assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "AllowEcsTasksToAssumeRole"
+        Effect = "Allow"
+
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  remote_command_dispatcher_role_name = "${local.name_prefix}-remote-cmd-dispatcher"
+
+  remote_command_dispatcher_assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "AllowEcsTasksToAssumeRole"
+        Effect = "Allow"
+
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  secret_bootstrap_role_name = "${local.name_prefix}-secret-bootstrap"
+
+  secret_bootstrap_assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "AllowLocalAccountToAssumeBootstrapRole"
+        Effect = "Allow"
+
+        Principal = {
+          AWS = "arn:aws:iam::000000000000:root"
+        }
+
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+}

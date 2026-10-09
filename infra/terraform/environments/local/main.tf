@@ -1,3 +1,231 @@
+module "secret_bootstrap_role" {
+  source = "../../modules/security/iam-role"
+
+  role_name = local.secret_bootstrap_role_name
+
+  description = (
+    "Controlled identity for bootstrapping application secret values."
+  )
+
+  assume_role_policy_json = (
+    local.secret_bootstrap_assume_role_policy
+  )
+
+  max_session_duration_seconds = 3600
+
+  tags = merge(
+    local.common_tags,
+    {
+      SecurityDomain = "identity"
+      ResourceType   = "iam-role"
+      RoleType       = "secret-bootstrap"
+    }
+  )
+}
+
+module "secret_bootstrap_policy" {
+  source = "../../modules/security/iam-policy"
+
+  policy_name = "${local.name_prefix}-secret-bootstrap"
+
+  description = (
+    "Least-privilege access for bootstrapping the application database secret value."
+  )
+
+  policy_json = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "BootstrapDatabaseApplicationSecret"
+        Effect = "Allow"
+
+        Action = [
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+
+        Resource = module.platform_secret["database_application"].secret_arn
+      },
+      {
+        Sid    = "UseSecretsKeyViaSecretsManager"
+        Effect = "Allow"
+
+        Action = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt"
+        ]
+
+        Resource = module.platform_kms["secrets"].key_arn
+
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = merge(
+    local.common_tags,
+    {
+      SecurityDomain = "identity"
+      ResourceType   = "iam-policy"
+      PolicyType     = "secret-bootstrap"
+    }
+  )
+}
+
+resource "aws_iam_role_policy_attachment" "secret_bootstrap" {
+  role       = module.secret_bootstrap_role.role_name
+  policy_arn = module.secret_bootstrap_policy.policy_arn
+}
+
+module "remote_command_dispatcher_secret_read_policy" {
+  source = "../../modules/security/iam-policy"
+
+  policy_name = "${local.name_prefix}-remote-cmd-dispatcher-secret-read"
+
+  description = (
+    "Least-privilege access for the remote command dispatcher to read the application database secret."
+  )
+
+  policy_json = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "ReadDatabaseApplicationSecret"
+        Effect = "Allow"
+
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+
+        Resource = module.platform_secret["database_application"].secret_arn
+      },
+      {
+        Sid    = "DecryptDatabaseSecretViaSecretsManager"
+        Effect = "Allow"
+
+        Action = [
+          "kms:Decrypt"
+        ]
+
+        Resource = module.platform_kms["secrets"].key_arn
+
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = merge(
+    local.common_tags,
+    {
+      SecurityDomain = "identity"
+      ResourceType   = "iam-policy"
+      PolicyType     = "remote-command-dispatcher-secret-read"
+    }
+  )
+}
+
+resource "aws_iam_role_policy_attachment" "remote_command_dispatcher_secret_read" {
+  role       = module.remote_command_dispatcher_role.role_name
+  policy_arn = module.remote_command_dispatcher_secret_read_policy.policy_arn
+}
+
+module "remote_command_dispatcher_messaging_policy" {
+  source = "../../modules/security/iam-policy"
+
+  policy_name = "${local.name_prefix}-remote-cmd-dispatcher-messaging"
+
+  description = (
+    "Least-privilege SQS consumer and KMS access for the remote command dispatcher."
+  )
+
+  policy_json = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "ConsumeRemoteCommandsFromQueue"
+        Effect = "Allow"
+
+        Action = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:ChangeMessageVisibility",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl"
+        ]
+
+        Resource = module.remote_command_messaging.queue_arn
+      },
+      {
+        Sid    = "DecryptMessagingKeyViaSqs"
+        Effect = "Allow"
+
+        Action = [
+          "kms:Decrypt"
+        ]
+
+        Resource = module.platform_kms["messaging"].key_arn
+
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "sqs.${var.aws_region}.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = merge(
+    local.common_tags,
+    {
+      SecurityDomain = "identity"
+      ResourceType   = "iam-policy"
+      PolicyType     = "remote-command-dispatcher-messaging"
+    }
+  )
+}
+
+resource "aws_iam_role_policy_attachment" "remote_command_dispatcher_messaging" {
+  role       = module.remote_command_dispatcher_role.role_name
+  policy_arn = module.remote_command_dispatcher_messaging_policy.policy_arn
+}
+
+module "remote_command_dispatcher_role" {
+  source = "../../modules/security/iam-role"
+
+  role_name = local.remote_command_dispatcher_role_name
+
+  description = (
+    "Runtime identity for the Connected Vehicle remote command dispatcher."
+  )
+
+  assume_role_policy_json = (
+    local.remote_command_dispatcher_assume_role_policy
+  )
+
+  max_session_duration_seconds = 3600
+
+  tags = merge(
+    local.common_tags,
+    {
+      SecurityDomain = "identity"
+      ResourceType   = "iam-role"
+      RoleType       = "remote-command-dispatcher"
+    }
+  )
+}
+
 module "remote_command_messaging" {
   source = "../../modules/messaging"
 
@@ -101,4 +329,236 @@ module "platform_secret" {
       ResourceType   = "secret"
     }
   )
+}
+
+module "application_runtime_role" {
+  source = "../../modules/security/iam-role"
+
+  role_name = local.application_runtime_role_name
+
+  description = (
+    "Runtime identity for Connected Vehicle application workloads."
+  )
+
+  assume_role_policy_json = (
+    local.application_runtime_assume_role_policy
+  )
+
+  max_session_duration_seconds = 3600
+
+  tags = merge(
+    local.common_tags,
+    {
+      SecurityDomain = "identity"
+      ResourceType   = "iam-role"
+      RoleType       = "application-runtime"
+    }
+  )
+}
+
+module "application_secret_read_policy" {
+  source = "../../modules/security/iam-policy"
+
+  policy_name = "${local.name_prefix}-application-secret-read"
+
+  description = (
+    "Least-privilege access for application workloads to read the database secret."
+  )
+
+  policy_json = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "ReadDatabaseApplicationSecret"
+        Effect = "Allow"
+
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+
+        Resource = (
+          module.platform_secret["database_application"].secret_arn
+        )
+      },
+      {
+        Sid    = "DecryptDatabaseSecretViaSecretsManager"
+        Effect = "Allow"
+
+        Action = [
+          "kms:Decrypt"
+        ]
+
+        Resource = (
+          module.platform_kms["secrets"].key_arn
+        )
+
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = (
+              "secretsmanager.${var.aws_region}.amazonaws.com"
+            )
+          }
+        }
+      }
+    ]
+  })
+
+  tags = merge(
+    local.common_tags,
+    {
+      SecurityDomain = "identity"
+      ResourceType   = "iam-policy"
+      PolicyType     = "secret-read"
+    }
+  )
+}
+
+resource "aws_iam_role_policy_attachment" "application_secret_read" {
+  role       = module.application_runtime_role.role_name
+  policy_arn = module.application_secret_read_policy.policy_arn
+}
+
+module "outbox_dispatcher_role" {
+  source = "../../modules/security/iam-role"
+
+  role_name = local.outbox_dispatcher_role_name
+
+  description = (
+    "Runtime identity for the Connected Vehicle transactional outbox dispatcher."
+  )
+
+  assume_role_policy_json = (
+    local.outbox_dispatcher_assume_role_policy
+  )
+
+  max_session_duration_seconds = 3600
+
+  tags = merge(
+    local.common_tags,
+    {
+      SecurityDomain = "identity"
+      ResourceType   = "iam-role"
+      RoleType       = "outbox-dispatcher"
+    }
+  )
+}
+
+module "outbox_dispatcher_messaging_policy" {
+  source = "../../modules/security/iam-policy"
+
+  policy_name = "${local.name_prefix}-outbox-dispatcher-messaging"
+
+  description = (
+    "Least-privilege SQS and KMS access for the transactional outbox dispatcher."
+  )
+
+  policy_json = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "PublishRemoteCommandsToQueue"
+        Effect = "Allow"
+
+        Action = [
+          "sqs:SendMessage",
+          "sqs:GetQueueUrl",
+          "sqs:GetQueueAttributes"
+        ]
+
+        Resource = module.remote_command_messaging.queue_arn
+      },
+      {
+        Sid    = "UseMessagingKeyViaSqs"
+        Effect = "Allow"
+
+        Action = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt"
+        ]
+
+        Resource = module.platform_kms["messaging"].key_arn
+
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "sqs.${var.aws_region}.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = merge(
+    local.common_tags,
+    {
+      SecurityDomain = "identity"
+      ResourceType   = "iam-policy"
+      PolicyType     = "outbox-dispatcher-messaging"
+    }
+  )
+}
+
+resource "aws_iam_role_policy_attachment" "outbox_dispatcher_messaging" {
+  role       = module.outbox_dispatcher_role.role_name
+  policy_arn = module.outbox_dispatcher_messaging_policy.policy_arn
+}
+
+module "outbox_dispatcher_secret_read_policy" {
+  source = "../../modules/security/iam-policy"
+
+  policy_name = "${local.name_prefix}-outbox-dispatcher-secret-read"
+
+  description = (
+    "Least-privilege access for the transactional outbox dispatcher to read the application database secret."
+  )
+
+  policy_json = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "ReadDatabaseApplicationSecret"
+        Effect = "Allow"
+
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+
+        Resource = module.platform_secret["database_application"].secret_arn
+      },
+      {
+        Sid    = "DecryptDatabaseSecretViaSecretsManager"
+        Effect = "Allow"
+
+        Action = [
+          "kms:Decrypt"
+        ]
+
+        Resource = module.platform_kms["secrets"].key_arn
+
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = merge(
+    local.common_tags,
+    {
+      SecurityDomain = "identity"
+      ResourceType   = "iam-policy"
+      PolicyType     = "outbox-dispatcher-secret-read"
+    }
+  )
+}
+
+resource "aws_iam_role_policy_attachment" "outbox_dispatcher_secret_read" {
+  role       = module.outbox_dispatcher_role.role_name
+  policy_arn = module.outbox_dispatcher_secret_read_policy.policy_arn
 }

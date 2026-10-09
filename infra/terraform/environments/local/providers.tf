@@ -17,6 +17,7 @@ provider "aws" {
     events         = var.aws_endpoint_url
     kms            = var.aws_endpoint_url
     secretsmanager = var.aws_endpoint_url
+    iam            = var.aws_endpoint_url
   }
 
   default_tags {

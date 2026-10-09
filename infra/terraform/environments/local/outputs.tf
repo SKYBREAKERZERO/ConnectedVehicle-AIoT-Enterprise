@@ -71,3 +71,45 @@ output "platform_secrets" {
     }
   }
 }
+
+output "application_runtime_security" {
+  description = "Security resources attached to the application runtime identity."
+
+  value = {
+    role_name              = module.application_runtime_role.role_name
+    role_arn               = module.application_runtime_role.role_arn
+    secret_read_policy_arn = module.application_secret_read_policy.policy_arn
+  }
+}
+
+output "outbox_dispatcher_identity" {
+  description = "Security resources used by the transactional outbox dispatcher."
+
+  value = {
+    role_name              = module.outbox_dispatcher_role.role_name
+    role_arn               = module.outbox_dispatcher_role.role_arn
+    messaging_policy_arn   = module.outbox_dispatcher_messaging_policy.policy_arn
+    secret_read_policy_arn = module.outbox_dispatcher_secret_read_policy.policy_arn
+  }
+}
+
+output "remote_command_dispatcher_identity" {
+  description = "Security resources used by the remote command dispatcher."
+
+  value = {
+    role_name              = module.remote_command_dispatcher_role.role_name
+    role_arn               = module.remote_command_dispatcher_role.role_arn
+    messaging_policy_arn   = module.remote_command_dispatcher_messaging_policy.policy_arn
+    secret_read_policy_arn = module.remote_command_dispatcher_secret_read_policy.policy_arn
+  }
+}
+
+output "secret_bootstrap_identity" {
+  description = "Security resources used to bootstrap application secret values."
+
+  value = {
+    role_name  = module.secret_bootstrap_role.role_name
+    role_arn   = module.secret_bootstrap_role.role_arn
+    policy_arn = module.secret_bootstrap_policy.policy_arn
+  }
+}
