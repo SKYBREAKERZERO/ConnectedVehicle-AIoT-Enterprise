@@ -121,3 +121,5 @@ Account IAM enforcement, IoT policies, certificate paths and AWS network deploym
 require an account-backed staging run. Whole-repository `mypy .` still reports
 pre-existing errors in older test fixtures; production and new runtime tests use the
 strict explicit scope above without weakening repository typing rules.
+
+Vehicle reports, telemetry, OIDC identity, audited replay and configuration/deployment evidence are documented in [PLATFORM_ACCEPTANCE.md](PLATFORM_ACCEPTANCE.md). Production rejects local static service tokens.

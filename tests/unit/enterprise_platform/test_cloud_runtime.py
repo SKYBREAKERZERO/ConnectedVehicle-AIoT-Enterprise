@@ -1,10 +1,10 @@
 from enterprise_platform.cloud.runtime import resolve_cloud_runtime
 from enterprise_platform.config.environment import CloudRuntime
-from enterprise_platform.config.settings import Settings
+from tests.settings_helpers import isolated_settings
 
 
 def test_localstack_runtime_uses_configured_endpoint() -> None:
-    settings = Settings(
+    settings = isolated_settings(
         cloud_runtime=CloudRuntime.LOCALSTACK,
         aws_region="ap-northeast-1",
         aws_endpoint_url="http://localstack:4566",
@@ -21,7 +21,7 @@ def test_localstack_runtime_uses_configured_endpoint() -> None:
 
 
 def test_localstack_runtime_uses_safe_default_endpoint() -> None:
-    settings = Settings(
+    settings = isolated_settings(
         cloud_runtime=CloudRuntime.LOCALSTACK,
         aws_endpoint_url=None,
         _env_file=None,
@@ -33,7 +33,7 @@ def test_localstack_runtime_uses_safe_default_endpoint() -> None:
 
 
 def test_aws_runtime_does_not_use_localstack_endpoint() -> None:
-    settings = Settings(
+    settings = isolated_settings(
         cloud_runtime=CloudRuntime.AWS,
         aws_region="ap-northeast-1",
         aws_endpoint_url="http://localhost:4566",

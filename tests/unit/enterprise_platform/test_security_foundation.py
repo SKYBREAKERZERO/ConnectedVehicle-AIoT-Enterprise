@@ -3,8 +3,6 @@ from __future__ import annotations
 import pytest
 
 from enterprise_platform.security.authorization import (
-    AuthenticationRequiredError,
-    AuthorizationDeniedError,
     has_permission,
     require_permission,
     require_security_context,
@@ -14,6 +12,10 @@ from enterprise_platform.security.context import (
     SecurityContext,
     bind_security_context,
     get_security_context,
+)
+from enterprise_platform.security.exceptions import (
+    AuthenticationRequiredError,
+    AuthorizationDeniedError,
 )
 from enterprise_platform.security.identity import (
     Principal,

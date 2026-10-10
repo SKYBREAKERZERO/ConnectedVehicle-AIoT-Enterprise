@@ -3,26 +3,33 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 
-from connected_vehicle import device_data as _device_data  # noqa: F401
+from connected_vehicle.device_data import CommandReport, TelemetrySample
+from connected_vehicle.device_service import DeviceDataService
 from connected_vehicle.remote_command.dispatch_service import RemoteCommandDispatchService
 from connected_vehicle.remote_command.domain import RemoteCommandType
+from connected_vehicle.remote_command.persistence.models import RemoteCommandModel
 from connected_vehicle.remote_command.service import IssueRemoteCommandService
 from connected_vehicle.vehicle import VIN, Vehicle, VehicleId, VehicleStatus
 from connected_vehicle.vehicle.persistence.repository import SQLAlchemyVehicleRepository
+from database.dlq_operations import redrive
+from database.operations import reconcile, replay_outbox, timeout_commands
 from database.provision_runtime_credentials import SQLDriver, provision
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.base import Base
 from enterprise_platform.database.engine import create_database_engine
+from enterprise_platform.database.models.operations import OperatorActionModel
+from enterprise_platform.database.models.outbox import OutboxEventModel
 from enterprise_platform.database.outbox_store import SQLAlchemyOutboxStore
 from enterprise_platform.database.session import create_session_factory
 
@@ -140,18 +147,146 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
             issued.command.id
         )
         publisher.publish.assert_awaited_once()
+        device_service = DeviceDataService(sessions["app_user"])
+        report = CommandReport(event_id=uuid4(), status="succeeded", occurred_at=datetime.now(UTC))
+        assert (
+            await device_service.report(
+                tenant=vehicle.tenant_id,
+                vehicle=str(vehicle.id),
+                command_id=str(issued.command.id),
+                report=report,
+            )
+            == "succeeded"
+        )
+        sample = TelemetrySample(
+            event_id=uuid4(),
+            measured_at=datetime.now(UTC),
+            speed_kph=10,
+            battery_percent=50,
+            temperature_c=30,
+        )
+        assert await device_service.ingest(
+            tenant=vehicle.tenant_id, vehicle=str(vehicle.id), sample=sample
+        )
+        assert not await device_service.ingest(
+            tenant=vehicle.tenant_id, vehicle=str(vehicle.id), sample=sample
+        )
+        owner_sessions = create_session_factory(admin)
+        # Replay only an unsent, unexpired valid command; audit and reset share one transaction.
+        replayable = await IssueRemoteCommandService(sessions["app_user"]).issue(
+            vehicle_id=vehicle.id,
+            tenant_id=vehicle.tenant_id,
+            command_type=RemoteCommandType.HONK,
+            idempotency_key="operations-replay",
+        )
+        async with owner_sessions() as session, session.begin():
+            item = await session.scalar(
+                select(OutboxEventModel).where(
+                    OutboxEventModel.event_id == f"remote-command:{replayable.command.id}:requested"
+                )
+            )
+            assert item
+            item.status, item.attempts, item.failure_code = "failed", 10, "retry_exhausted"
+            item_id = item.id
+        op_id = str(uuid4())
+        options: dict[str, Any] = dict(
+            outbox_id=item_id,
+            operation_id=op_id,
+            actor="incident-operator",
+            reason="Recovered queue outage",
+            expected_attempts=10,
+        )
+        assert (await replay_outbox(owner_sessions, **options))["dry_run"]
+        async with owner_sessions() as session:
+            assert await session.get(OperatorActionModel, op_id) is None
+        assert not (await replay_outbox(owner_sessions, **options, apply=True))["dry_run"]
+        assert (await replay_outbox(owner_sessions, **options, apply=True))["already_applied"]
+        async with owner_sessions() as session, session.begin():
+            item = await session.get(OutboxEventModel, item_id)
+            assert item and item.status == "pending" and item.attempts == 0
+            item.status, item.attempts = "failed", 10
+            cmd = await session.get(RemoteCommandModel, str(replayable.command.id))
+            assert cmd
+            cmd.status = "succeeded"
+        with pytest.raises(ValueError, match="terminal"):
+            await replay_outbox(
+                owner_sessions, **(options | {"operation_id": str(uuid4())}), apply=True
+            )
+        assert (await reconcile(owner_sessions))["outbox_status_counts"]
+        overdue = await IssueRemoteCommandService(sessions["app_user"]).issue(
+            vehicle_id=vehicle.id,
+            tenant_id=vehicle.tenant_id,
+            command_type=RemoteCommandType.LOCK,
+            idempotency_key="operations-timeout",
+        )
+        async with owner_sessions() as session, session.begin():
+            cmd = await session.get(RemoteCommandModel, str(overdue.command.id))
+            assert cmd
+            cmd.status = "acknowledged"
+            cmd.created_at = datetime.now(UTC) - timedelta(minutes=2)
+            cmd.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        timeout_options: dict[str, Any] = {
+            "actor": "incident-operator",
+            "reason": "Execution ACK deadline exceeded",
+        }
+        assert (await timeout_commands(owner_sessions, **timeout_options))["count"] == 1
+        assert (await timeout_commands(owner_sessions, **timeout_options, apply=True))["count"] == 1
+        assert (await timeout_commands(owner_sessions, **timeout_options, apply=True))["count"] == 0
+        async with owner_sessions() as session:
+            cmd = await session.get(RemoteCommandModel, str(overdue.command.id))
+            assert cmd and cmd.status == "timed_out"
+            audit = await session.scalar(
+                select(OperatorActionModel).where(
+                    OperatorActionModel.target_id == str(overdue.command.id)
+                )
+            )
+            assert audit and audit.evidence["previous_status"] == "acknowledged"
+        client = Mock()
+        client.get_queue_attributes.side_effect = lambda **kw: (
+            {"Attributes": {"QueueArn": "arn:aws:sqs:ap-northeast-1:123456789012:dlq"}}
+            if kw["QueueUrl"] == "dlq"
+            else {
+                "Attributes": {
+                    "QueueArn": "arn:aws:sqs:ap-northeast-1:123456789012:source",
+                    "RedrivePolicy": json.dumps(
+                        {"deadLetterTargetArn": "arn:aws:sqs:ap-northeast-1:123456789012:dlq"}
+                    ),
+                }
+            }
+        )
+        dlq_options: dict[str, Any] = dict(
+            source_url="dlq",
+            destination_url="source",
+            operation_id=str(uuid4()),
+            actor="incident-operator",
+            reason="Reviewed all expired/poison messages",
+        )
+        assert (await redrive(owner_sessions, client, **dlq_options))["dry_run"]
+        client.start_message_move_task.assert_not_called()
+        with pytest.raises(ValueError, match="bulk"):
+            await redrive(owner_sessions, client, **dlq_options, apply=True)
+        client.start_message_move_task.side_effect = TimeoutError("Ambiguous transport failure")
+        with pytest.raises(TimeoutError):
+            await redrive(owner_sessions, client, **dlq_options, apply=True, allow_bulk=True)
+        with pytest.raises(ValueError, match="Ambiguous"):
+            await redrive(owner_sessions, client, **dlq_options, apply=True, allow_bulk=True)
+        client.start_message_move_task.assert_called_once()
         denied = {
             "app_user": [
                 "UPDATE remote_commands SET tenant_id = tenant_id",
                 "DELETE FROM outbox_events",
             ],
             "outbox_worker": [
+                "SELECT * FROM command_reports",
+                "SELECT * FROM telemetry_samples",
                 "SELECT * FROM vehicles",
                 "SELECT * FROM remote_commands",
                 "UPDATE outbox_events SET event_body = event_body",
                 "DELETE FROM outbox_events",
             ],
             "remote_command_worker": [
+                "SELECT * FROM command_reports",
+                "SELECT * FROM telemetry_samples",
                 "SELECT * FROM vehicles",
                 "SELECT * FROM outbox_events",
                 "UPDATE remote_commands SET tenant_id = tenant_id",
@@ -161,6 +296,7 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
         for user, statements in denied.items():
             for statement in [
                 *statements,
+                "SELECT * FROM operator_actions",
                 "CREATE TABLE public.forbidden (id int)",
                 "CREATE TEMP TABLE forbidden (id int)",
                 "ALTER TABLE remote_commands ADD COLUMN forbidden int",

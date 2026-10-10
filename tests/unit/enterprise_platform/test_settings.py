@@ -1,9 +1,9 @@
 from enterprise_platform.config.environment import AppEnvironment, CloudRuntime
-from enterprise_platform.config.settings import Settings
+from tests.settings_helpers import isolated_settings
 
 
 def test_default_settings_use_local_environment() -> None:
-    settings = Settings(_env_file=None)
+    settings = isolated_settings(_env_file=None)
 
     assert settings.app_env is AppEnvironment.LOCAL
     assert settings.cloud_runtime is CloudRuntime.LOCALSTACK
@@ -11,13 +11,13 @@ def test_default_settings_use_local_environment() -> None:
 
 
 def test_application_port_accepts_valid_value() -> None:
-    settings = Settings(app_port=9000, _env_file=None)
+    settings = isolated_settings(app_port=9000, _env_file=None)
 
     assert settings.app_port == 9000
 
 
 def test_default_aws_sdk_resilience_settings() -> None:
-    settings = Settings(_env_file=None)
+    settings = isolated_settings(_env_file=None)
 
     assert settings.aws_connect_timeout_seconds == 3.0
     assert settings.aws_read_timeout_seconds == 10.0
@@ -25,7 +25,7 @@ def test_default_aws_sdk_resilience_settings() -> None:
 
 
 def test_default_database_settings() -> None:
-    settings = Settings(_env_file=None)
+    settings = isolated_settings(_env_file=None)
 
     assert settings.database_host == "localhost"
     assert settings.database_port == 5432
@@ -41,7 +41,7 @@ def test_default_database_settings() -> None:
 
 
 def test_default_redis_settings() -> None:
-    settings = Settings()
+    settings = isolated_settings()
 
     assert settings.redis_host == "localhost"
     assert settings.redis_port == 16379

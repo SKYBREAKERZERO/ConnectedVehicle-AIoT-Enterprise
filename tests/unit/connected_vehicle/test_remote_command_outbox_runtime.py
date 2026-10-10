@@ -11,6 +11,7 @@ from enterprise_platform.messaging.envelope import (
     EventEnvelope,
     create_event_envelope,
 )
+from tests.settings_helpers import isolated_settings
 
 
 class FakeSQSEventQueue:
@@ -50,7 +51,7 @@ async def test_remote_command_destination_routes_to_configured_sqs_queue(
         fake_create_named_sqs_event_queue,
     )
 
-    settings = Settings(
+    settings = isolated_settings(
         vehicle_command_queue_name=("connected-vehicle-command-test"),
         _env_file=None,
     )

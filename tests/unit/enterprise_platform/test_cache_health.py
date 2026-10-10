@@ -12,7 +12,7 @@ from enterprise_platform.cache.health import check_redis_health
 
 async def test_redis_health_returns_healthy_for_successful_ping() -> None:
     client = cast(Redis, AsyncMock())
-    client.ping = AsyncMock(return_value=True)
+    cast(AsyncMock, client).ping = AsyncMock(return_value=True)
 
     result = await check_redis_health(
         client,
@@ -25,7 +25,7 @@ async def test_redis_health_returns_healthy_for_successful_ping() -> None:
 
 async def test_redis_health_returns_redis_error() -> None:
     client = cast(Redis, AsyncMock())
-    client.ping = AsyncMock(side_effect=ConnectionError("Redis unavailable"))
+    cast(AsyncMock, client).ping = AsyncMock(side_effect=ConnectionError("Redis unavailable"))
 
     result = await check_redis_health(
         client,
@@ -42,7 +42,7 @@ async def test_redis_health_returns_timeout() -> None:
         return True
 
     client = cast(Redis, AsyncMock())
-    client.ping = AsyncMock(side_effect=slow_ping)
+    cast(AsyncMock, client).ping = AsyncMock(side_effect=slow_ping)
 
     result = await check_redis_health(
         client,

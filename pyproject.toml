@@ -17,7 +17,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
     "fastapi>=0.115,<1.0",
     "uvicorn[standard]>=0.34,<1.0",
-    "pydantic>=2.10,<3.0",
+    "pydantic==2.13.5",
     "pydantic-settings>=2.7,<3.0",
     "sqlalchemy[asyncio]>=2.0,<3.0",
     "alembic>=1.14,<2.0",
@@ -45,8 +45,9 @@ dev = [
     "pytest-asyncio>=0.25,<2.0",
     "pytest-cov>=6.0,<8.0",
     "httpx2",
-    "ruff>=0.9,<1.0",
-    "mypy>=1.14,<2.0",
+    "ruff==0.16.10",
+    "types-PyYAML>=6.0,<7.0",
+    "mypy==1.20.2",
     "boto3-stubs[s3,sqs,sns,events,kms,secretsmanager]",
 ]
 

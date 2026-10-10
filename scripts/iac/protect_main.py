@@ -12,7 +12,7 @@ GITHUB_ACTIONS_APP_ID = 15368
 
 
 def protection_payload(current: dict[str, Any]) -> dict[str, Any]:
-    """Preserve existing branch requirements while adding the IaC check."""
+    """Preserve existing branch requirements while adding both required gates."""
     old_status = current.get("required_status_checks") or {}
     checks = list(old_status.get("checks") or [])
     contexts = set(old_status.get("contexts") or []) | {check["context"] for check in checks}
@@ -66,6 +66,18 @@ def protection_errors(current: dict[str, Any]) -> list[str]:
     ):
         if not value:
             errors.append(name)
+    review = current.get("required_pull_request_reviews") or {}
+    for name in (
+        "dismiss_stale_reviews",
+        "require_code_owner_reviews",
+        "require_last_push_approval",
+    ):
+        if not review.get(name):
+            errors.append(name)
+    if review.get("required_approving_review_count", 0) < 1:
+        errors.append("at least one approving review")
+    if not (current.get("required_conversation_resolution") or {}).get("enabled"):
+        errors.append("required conversation resolution")
     for name in ("allow_force_pushes", "allow_deletions"):
         if (current.get(name) or {}).get("enabled", False):
             errors.append(name)
@@ -82,13 +94,14 @@ def identities(value: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Require IaC quality gate on main (GitHub admin access)"
+        description="Require both quality gates on main (GitHub admin access)"
     )
     parser.add_argument("--repo", required=True)
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
         "--verify", action="store_true", help="Read and verify protection without writes"
     )
-    parser.add_argument(
+    modes.add_argument(
         "--apply", action="store_true", help="Write protection; default only previews JSON"
     )
     args = parser.parse_args()

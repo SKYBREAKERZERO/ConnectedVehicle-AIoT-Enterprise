@@ -20,6 +20,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
@@ -29,6 +30,19 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
-          mypy apps enterprise_platform connected_vehicle database scripts/iac tests/e2e tests/unit/test_runtime_process.py tests/unit/connected_vehicle/test_mqtt_publisher.py tests/unit/api/test_service_auth.py
+          mypy .
+      - name: Module boundaries and baseline schema compatibility
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          PUSH_BASE: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${PR_BASE:-${QUEUE_BASE:-${PUSH_BASE:-HEAD}}}"
+          if [[ "$base" == "0000000000000000000000000000000000000000" ]]; then base=HEAD; fi
+          baseline=$(mktemp -d)
+          git archive "$base" | tar -x -C "$baseline"
+          python -m scripts.contracts --baseline "$baseline"
       - name: Unit, contract, real permissions and independent-process E2E tests
         run: pytest tests/unit tests/contract tests/e2e/test_independent_runtimes.py tests/integration/security/test_database_runtime_permissions.py -q

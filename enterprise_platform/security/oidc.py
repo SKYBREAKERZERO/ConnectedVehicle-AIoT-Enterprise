@@ -67,6 +67,8 @@ class OIDCVerifier:
         if (
             not isinstance(tenant, str)
             or not tenant.strip()
+            or tenant != tenant.strip()
+            or len(tenant) > 255
             or not isinstance(subject, str)
             or not isinstance(scope, str)
         ):
@@ -76,7 +78,9 @@ class OIDCVerifier:
             vehicle = str(UUID(claims["vehicle_id"])) if kind is PrincipalType.DEVICE else None
         except (ValueError, KeyError, TypeError) as exc:
             raise jwt.InvalidTokenError("Invalid device identity") from exc
-        allowed = {p for p in Permission if p.value in scope.split()}
+        allowed = {
+            p for p in Permission if self.settings.oidc_scope_prefix + p.value in scope.split()
+        }
         if kind is PrincipalType.DEVICE:
             allowed &= {Permission.TELEMETRY_PUBLISH, Permission.COMMAND_REPORT}
         return SecurityContext(

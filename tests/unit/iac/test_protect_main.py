@@ -49,6 +49,7 @@ def test_verify_requires_both_gates_and_actions_identity() -> None:
     current["enforce_admins"] = {"enabled": True}
     current["allow_force_pushes"] = {"enabled": False}
     current["allow_deletions"] = {"enabled": False}
+    current["required_conversation_resolution"] = {"enabled": True}
     assert protection_errors(current) == []
     current["required_status_checks"]["checks"].pop()
     assert any("Runtime quality gate" in error for error in protection_errors(current))

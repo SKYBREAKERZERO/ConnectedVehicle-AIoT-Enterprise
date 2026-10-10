@@ -4,9 +4,11 @@ from threading import Lock
 
 from fastapi import FastAPI
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from enterprise_platform.config.settings import Settings
 
@@ -45,6 +47,10 @@ def _configure_tracer_provider(settings: Settings) -> None:
                     }
                 )
             )
+            if settings.otlp_endpoint:
+                provider.add_span_processor(
+                    BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otlp_endpoint, timeout=3))
+                )
             trace.set_tracer_provider(provider)
 
         _provider_configured = True
@@ -85,3 +91,9 @@ def configure_tracing(
     )
 
     return True
+
+
+def flush_tracing() -> None:
+    provider = trace.get_tracer_provider()
+    if isinstance(provider, TracerProvider):
+        provider.force_flush(timeout_millis=3000)

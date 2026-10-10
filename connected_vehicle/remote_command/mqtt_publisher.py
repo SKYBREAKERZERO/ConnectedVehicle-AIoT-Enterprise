@@ -7,6 +7,7 @@ from connected_vehicle.remote_command.domain import (
     RemoteCommand,
     RemoteCommandStatus,
 )
+from connected_vehicle.remote_command.wire_contracts import DispatchPayload
 
 
 class MQTTClientProtocol(Protocol):
@@ -52,6 +53,8 @@ class MQTTRemoteCommandPublisher:
             "created_at": command.created_at.isoformat(),
             "expires_at": command.expires_at.isoformat(),
         }
+
+        DispatchPayload.model_validate(payload)
 
         encoded = json.dumps(
             payload,

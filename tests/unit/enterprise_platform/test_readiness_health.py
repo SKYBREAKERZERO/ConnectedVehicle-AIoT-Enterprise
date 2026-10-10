@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import cast
 from unittest.mock import AsyncMock
 
+import pytest
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -20,7 +21,7 @@ from enterprise_platform.observability.health import (
 
 
 async def test_readiness_is_ready_when_all_dependencies_are_healthy(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_probe = AsyncMock(return_value=DatabaseHealthResult(healthy=True))
     redis_probe = AsyncMock(
@@ -58,7 +59,7 @@ async def test_readiness_is_ready_when_all_dependencies_are_healthy(
 
 
 async def test_readiness_is_not_ready_when_database_is_unhealthy(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         health_module,
@@ -95,7 +96,7 @@ async def test_readiness_is_not_ready_when_database_is_unhealthy(
 
 
 async def test_readiness_is_not_ready_when_redis_is_unhealthy(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         health_module,

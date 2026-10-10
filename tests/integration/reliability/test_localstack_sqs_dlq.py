@@ -17,6 +17,7 @@ from enterprise_platform.messaging.envelope import (
 from enterprise_platform.messaging.factory import (
     create_sqs_event_queue,
 )
+from enterprise_platform.messaging.sqs import ReceivedEventMessage
 from enterprise_platform.reliability.dlq import (
     DeadLetterPolicy,
 )
@@ -172,7 +173,7 @@ async def test_localstack_sqs_redrives_failed_message_to_dlq() -> None:
 
         assert message_id
 
-        dlq_messages = ()
+        dlq_messages: tuple[ReceivedEventMessage, ...] = ()
 
         for _ in range(10):
             source_messages = await source_queue.receive_events(

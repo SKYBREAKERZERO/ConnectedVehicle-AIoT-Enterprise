@@ -3,11 +3,11 @@ from __future__ import annotations
 from fastapi import FastAPI
 from opentelemetry.sdk.trace import TracerProvider
 
-from enterprise_platform.config.settings import Settings
 from enterprise_platform.observability.tracing import (
     configure_tracing,
     get_current_trace_id,
 )
+from tests.settings_helpers import isolated_settings
 
 
 def test_get_current_trace_id_is_none_without_active_span() -> None:
@@ -32,7 +32,7 @@ def test_get_current_trace_id_returns_valid_hex_trace_id() -> None:
 def test_configure_tracing_does_nothing_when_disabled() -> None:
     app = FastAPI()
 
-    settings = Settings(
+    settings = isolated_settings(
         _env_file=None,
         tracing_enabled=False,
     )
@@ -43,7 +43,7 @@ def test_configure_tracing_does_nothing_when_disabled() -> None:
 def test_configure_tracing_is_idempotent_for_same_app() -> None:
     app = FastAPI()
 
-    settings = Settings(
+    settings = isolated_settings(
         _env_file=None,
         tracing_enabled=True,
     )

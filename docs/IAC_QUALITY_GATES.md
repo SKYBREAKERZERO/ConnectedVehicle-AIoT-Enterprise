@@ -103,3 +103,5 @@ not a claim that main is already protected.
 
 Native test mocking: [HashiCorp documentation](https://developer.hashicorp.com/terraform/language/tests/mocking).
 Scanner fail/skip controls: [Checkov CLI documentation](https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html).
+
+See [platform acceptance evidence and remaining AWS checks](PLATFORM_ACCEPTANCE.md). `protect_main` now requires both `IaC quality gate` and `Runtime quality gate`; use `--verify` for read-only confirmation.

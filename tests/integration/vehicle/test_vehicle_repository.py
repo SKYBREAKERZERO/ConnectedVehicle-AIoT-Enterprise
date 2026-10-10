@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from connected_vehicle.vehicle import VIN, Vehicle, VehicleId
 from connected_vehicle.vehicle.persistence.models import VehicleModel
@@ -25,7 +26,7 @@ def create_test_vehicle() -> Vehicle:
 
 
 async def cleanup_vehicle(
-    engine,
+    engine: AsyncEngine,
     *,
     vehicle_id: VehicleId,
 ) -> None:

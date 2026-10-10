@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import pytest
 
@@ -63,7 +64,7 @@ def test_retry_policy_rejects_invalid_numeric_configuration(
     field_name: str,
     value: float,
 ) -> None:
-    kwargs: dict[str, float | int] = {
+    kwargs: dict[str, Any] = {
         "max_attempts": 3,
         "base_delay_seconds": 0.1,
         "max_delay_seconds": 5.0,

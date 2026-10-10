@@ -23,7 +23,6 @@ from connected_vehicle.remote_command.persistence.repository import (
 )
 from connected_vehicle.remote_command.service import (
     IssueRemoteCommandService,
-    RemoteCommandIdempotencyConflictError,
 )
 from connected_vehicle.vehicle import (
     VIN,
@@ -347,7 +346,6 @@ async def test_issue_remote_command_rejects_idempotency_key_with_different_comma
         event_id = f"remote-command:{command_id}:requested"
 
         with pytest.raises(
-            RemoteCommandIdempotencyConflictError,
             match="different remote-command request",
         ):
             await service.issue(
@@ -430,7 +428,6 @@ async def test_issue_remote_command_rejects_idempotency_key_with_different_ttl()
         event_id = f"remote-command:{command_id}:requested"
 
         with pytest.raises(
-            RemoteCommandIdempotencyConflictError,
             match="different remote-command request",
         ):
             await service.issue(

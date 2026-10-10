@@ -13,8 +13,8 @@ async def test_close_redis_resources_closes_client_and_pool() -> None:
     client = cast(Redis, AsyncMock())
     pool = cast(ConnectionPool, AsyncMock())
 
-    client.aclose = AsyncMock()
-    pool.aclose = AsyncMock()
+    cast(AsyncMock, client).aclose = AsyncMock()
+    cast(AsyncMock, pool).aclose = AsyncMock()
 
     resources = RedisResources(
         client=client,
@@ -23,5 +23,5 @@ async def test_close_redis_resources_closes_client_and_pool() -> None:
 
     await close_redis_resources(resources)
 
-    client.aclose.assert_awaited_once_with(close_connection_pool=False)
-    pool.aclose.assert_awaited_once_with()
+    cast(AsyncMock, client.aclose).assert_awaited_once_with(close_connection_pool=False)
+    cast(AsyncMock, pool.aclose).assert_awaited_once_with()

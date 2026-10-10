@@ -7,11 +7,11 @@ from botocore.config import Config
 
 from enterprise_platform.cloud.client_factory import AWSClientFactory
 from enterprise_platform.config.environment import CloudRuntime
-from enterprise_platform.config.settings import Settings
+from tests.settings_helpers import isolated_settings
 
 
 def test_localstack_client_receives_endpoint_url() -> None:
-    settings = Settings(
+    settings = isolated_settings(
         cloud_runtime=CloudRuntime.LOCALSTACK,
         aws_region="ap-northeast-1",
         aws_endpoint_url="http://localstack:4566",
@@ -40,7 +40,7 @@ def test_localstack_client_receives_endpoint_url() -> None:
 
 
 def test_aws_client_does_not_receive_endpoint_override() -> None:
-    settings = Settings(
+    settings = isolated_settings(
         cloud_runtime=CloudRuntime.AWS,
         aws_region="ap-northeast-1",
         aws_endpoint_url="http://localhost:4566",
@@ -69,7 +69,7 @@ def test_aws_client_does_not_receive_endpoint_override() -> None:
 
 
 def test_client_factory_configures_timeouts_and_retries() -> None:
-    settings = Settings(
+    settings = isolated_settings(
         aws_connect_timeout_seconds=4.0,
         aws_read_timeout_seconds=12.0,
         aws_max_attempts=5,
@@ -89,7 +89,7 @@ def test_client_factory_configures_timeouts_and_retries() -> None:
     sdk_config = kwargs["config"]
 
     assert isinstance(sdk_config, Config)
-    assert sdk_config.connect_timeout == 4.0
-    assert sdk_config.read_timeout == 12.0
-    assert sdk_config.retries["total_max_attempts"] == 5
-    assert sdk_config.retries["mode"] == "standard"
+    assert vars(sdk_config)["connect_timeout"] == 4.0
+    assert vars(sdk_config)["read_timeout"] == 12.0
+    assert vars(sdk_config)["retries"]["total_max_attempts"] == 5
+    assert vars(sdk_config)["retries"]["mode"] == "standard"

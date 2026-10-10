@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from hashlib import sha256
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -13,6 +14,7 @@ from enterprise_platform.reliability.idempotency import (
 )
 from enterprise_platform.reliability.redis_idempotency import (
     RedisIdempotencyStore,
+    RedisScriptClient,
 )
 
 
@@ -51,7 +53,7 @@ async def test_redis_idempotency_allows_exactly_one_concurrent_acquisition() -> 
     client, key_builder = _create_test_resources()
 
     store = RedisIdempotencyStore(
-        client,
+        cast(RedisScriptClient, client),
         key_builder=key_builder,
     )
 
@@ -90,7 +92,7 @@ async def test_redis_idempotency_completed_state_blocks_future_execution() -> No
     client, key_builder = _create_test_resources()
 
     store = RedisIdempotencyStore(
-        client,
+        cast(RedisScriptClient, client),
         key_builder=key_builder,
     )
 
@@ -137,7 +139,7 @@ async def test_redis_idempotency_release_allows_reacquisition() -> None:
     client, key_builder = _create_test_resources()
 
     store = RedisIdempotencyStore(
-        client,
+        cast(RedisScriptClient, client),
         key_builder=key_builder,
     )
 
@@ -176,7 +178,7 @@ async def test_redis_idempotency_release_does_not_delete_completed_state() -> No
     client, key_builder = _create_test_resources()
 
     store = RedisIdempotencyStore(
-        client,
+        cast(RedisScriptClient, client),
         key_builder=key_builder,
     )
 
@@ -220,7 +222,7 @@ async def test_redis_idempotency_applies_ttl() -> None:
     client, key_builder = _create_test_resources()
 
     store = RedisIdempotencyStore(
-        client,
+        cast(RedisScriptClient, client),
         key_builder=key_builder,
     )
 

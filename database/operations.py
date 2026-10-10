@@ -7,15 +7,27 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from hashlib import sha256
-from uuid import UUID
+from typing import cast
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from connected_vehicle import device_data as _device_models  # noqa: F401
-from connected_vehicle.remote_command.events import REMOTE_COMMAND_DESTINATION
+from connected_vehicle.remote_command.domain import RemoteCommandId, RemoteCommandStatus
+from connected_vehicle.remote_command.events import (
+    REMOTE_COMMAND_DESTINATION,
+    REMOTE_COMMAND_EVENT_SOURCE,
+    REMOTE_COMMAND_REQUESTED_EVENT_TYPE,
+)
 from connected_vehicle.remote_command.persistence.models import RemoteCommandModel
+from connected_vehicle.remote_command.persistence.repository import (
+    SQLAlchemyRemoteCommandRepository,
+)
+from connected_vehicle.remote_command.wire_contracts import RequestedPayload
 from connected_vehicle.vehicle.persistence import models as _vehicle_models  # noqa: F401
+from database.dlq_operations import RedriveClient, redrive, redrive_status
+from enterprise_platform.cloud.client_factory import AWSClientFactory
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.credentials import migration_database_settings
 from enterprise_platform.database.engine import create_database_engine
@@ -56,6 +68,62 @@ async def reconcile(sessions: async_sessionmaker[AsyncSession]) -> dict[str, obj
         }
 
 
+async def timeout_commands(
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    actor: str,
+    reason: str,
+    apply: bool = False,
+    limit: int = 100,
+) -> dict[str, object]:
+    if not actor.strip() or not reason.strip() or len(actor) > 255 or len(reason) > 1000:
+        raise ValueError("A bounded operator identity and incident reason are required.")
+    if not 1 <= limit <= 100:
+        raise ValueError("Timeout reconciliation batch must be 1-100 commands.")
+    now = datetime.now(UTC)
+    async with sessions() as session, session.begin():
+        rows = list(
+            (
+                await session.scalars(
+                    select(RemoteCommandModel)
+                    .where(
+                        RemoteCommandModel.status.in_(["sent", "acknowledged", "dispatching"]),
+                        RemoteCommandModel.expires_at < now,
+                    )
+                    .order_by(RemoteCommandModel.expires_at)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
+        )
+        repository = SQLAlchemyRemoteCommandRepository(session)
+        ids = [row.id for row in rows]
+        if apply:
+            for row in rows:
+                previous_status = row.status
+                command = await repository.get_for_update(RemoteCommandId(row.id))
+                assert command
+                await repository.save(
+                    command.transition_to(
+                        RemoteCommandStatus.TIMED_OUT, now=max(now, command.updated_at)
+                    )
+                )
+                session.add(
+                    OperatorActionModel(
+                        operation_id=str(uuid4()),
+                        actor=actor,
+                        reason=reason,
+                        action="command_timeout",
+                        target_id=row.id,
+                        payload_hash="",
+                        state="complete",
+                        evidence={"previous_status": previous_status},
+                        created_at=now,
+                    )
+                )
+        return {"command_ids": ids, "count": len(ids), "dry_run": not apply}
+
+
 async def replay_outbox(
     sessions: async_sessionmaker[AsyncSession],
     *,
@@ -93,12 +161,22 @@ async def replay_outbox(
         event = deserialize_event_envelope(row.event_body)
         if (
             row.destination != REMOTE_COMMAND_DESTINATION
-            or event.event_type != "vehicle.command.requested"
+            or event.event_type != REMOTE_COMMAND_REQUESTED_EVENT_TYPE
+            or event.source != REMOTE_COMMAND_EVENT_SOURCE
+            or event.schema_version != "1.0"
         ):
             raise ValueError("Only validated remote-command events can be replayed.")
-        command = await session.get(RemoteCommandModel, str(UUID(str(event.payload["command_id"]))))
+        payload = RequestedPayload.model_validate(event.payload)
+        if event.event_id != f"remote-command:{payload.command_id}:requested":
+            raise ValueError("Invalid deterministic event identity.")
+        command = await session.get(RemoteCommandModel, str(payload.command_id))
         if (
             command is None
+            or command.tenant_id != payload.tenant_id
+            or command.vehicle_id != str(payload.vehicle_id)
+            or command.command_type != payload.command_type.value
+            or command.created_at != payload.created_at
+            or command.expires_at != payload.expires_at
             or command.expires_at <= datetime.now(UTC)
             or command.status not in {"requested", "queued", "dispatching"}
         ):
@@ -145,7 +223,11 @@ async def run(args: argparse.Namespace) -> None:
         sessions = create_session_factory(engine)
         if args.action == "reconcile":
             result = await reconcile(sessions)
-        else:
+        elif args.action == "command-timeouts":
+            result = await timeout_commands(
+                sessions, actor=args.actor, reason=args.reason, apply=args.apply, limit=args.limit
+            )
+        elif args.action == "outbox-replay":
             result = await replay_outbox(
                 sessions,
                 outbox_id=args.id,
@@ -155,6 +237,26 @@ async def run(args: argparse.Namespace) -> None:
                 expected_attempts=args.expected_attempts,
                 apply=args.apply,
             )
+        else:
+            client = cast(
+                RedriveClient,
+                AWSClientFactory(Settings().model_copy(update={"aws_max_attempts": 1})).sqs(),
+            )
+            if args.action == "dlq-status":
+                result = await redrive_status(sessions, client, operation_id=args.operation_id)
+            else:
+                result = await redrive(
+                    sessions,
+                    client,
+                    source_url=args.source_url,
+                    destination_url=args.destination_url,
+                    operation_id=args.operation_id,
+                    actor=args.actor,
+                    reason=args.reason,
+                    rate=args.rate,
+                    apply=args.apply,
+                    allow_bulk=args.allow_bulk,
+                )
         print(json.dumps(result, default=str, indent=2))
     finally:
         await engine.dispose()
@@ -164,11 +266,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
     commands.add_parser("reconcile")
+    timeouts = commands.add_parser("command-timeouts")
+    timeouts.add_argument("--actor", required=True)
+    timeouts.add_argument("--reason", required=True)
+    timeouts.add_argument("--limit", type=int, default=100)
+    timeouts.add_argument("--apply", action="store_true")
     replay = commands.add_parser("outbox-replay")
     for name in ("id", "operation-id", "actor", "reason"):
         replay.add_argument("--" + name, required=True)
     replay.add_argument("--expected-attempts", type=int, required=True)
     replay.add_argument("--apply", action="store_true")
+    dlq = commands.add_parser("dlq-redrive")
+    for name in ("source-url", "destination-url", "operation-id", "actor", "reason"):
+        dlq.add_argument("--" + name, required=True)
+    dlq.add_argument("--rate", type=int, default=1)
+    dlq.add_argument("--allow-bulk", action="store_true")
+    dlq.add_argument("--apply", action="store_true")
+    status = commands.add_parser("dlq-status")
+    status.add_argument("--operation-id", required=True)
     asyncio.run(run(parser.parse_args()))
 
 

@@ -14,7 +14,7 @@ class Holder:
 
 
 def test_outbox_entrypoint_accepts_dispatcher_or_holder() -> None:
-    dispatcher = Holder("dispatch_batch", AsyncMock())
+    dispatcher = AsyncMock(spec=["dispatch_batch"])
     assert resolve_dispatcher(dispatcher) is dispatcher
     assert resolve_dispatcher(Holder("dispatcher", dispatcher)) is dispatcher
 
@@ -25,7 +25,7 @@ def test_outbox_entrypoint_rejects_incompatible_runtime() -> None:
 
 
 def test_remote_entrypoint_accepts_worker_or_holder() -> None:
-    worker = Holder("run_once", AsyncMock())
+    worker = AsyncMock(spec=["run_once"])
     assert resolve_worker(worker) is worker
     assert resolve_worker(Holder("worker", worker)) is worker
 

@@ -17,6 +17,7 @@ from enterprise_platform.config.settings import (
 from enterprise_platform.messaging.sqs import (
     ReceivedEventMessage,
 )
+from tests.settings_helpers import isolated_settings
 
 
 @dataclass
@@ -80,7 +81,7 @@ async def test_worker_runtime_uses_configured_queue_and_can_close(
         fake_create_named_sqs_event_queue,
     )
 
-    settings = Settings(
+    settings = isolated_settings(
         vehicle_command_queue_name=("connected-vehicle-command-runtime-test"),
         redis_key_prefix=("connected-vehicle-runtime-test"),
         _env_file=None,
