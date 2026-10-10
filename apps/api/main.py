@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from sqlalchemy import text
 
+from apps.api.routers.device_data import router as device_data_router
 from apps.api.routers.remote_command import (
     router as remote_command_router,
 )
@@ -25,6 +26,7 @@ from enterprise_platform.observability.middleware import (
     http_observability_middleware,
 )
 from enterprise_platform.observability.tracing import configure_tracing
+from enterprise_platform.security.oidc import OIDCMiddleware
 
 
 def create_app() -> FastAPI:
@@ -57,6 +59,7 @@ def create_app() -> FastAPI:
     )
 
     app.add_middleware(ServiceTokenMiddleware, settings=settings)
+    app.add_middleware(OIDCMiddleware, settings=settings)
 
     register_exception_handlers(app)
 
@@ -68,6 +71,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(remote_command_router)
+    app.include_router(device_data_router)
 
     @app.get(
         "/health/live",

@@ -7,6 +7,7 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from connected_vehicle import device_data as _device_data  # noqa: F401
 from connected_vehicle.remote_command.persistence import (
     models as _remote_command_models,  # noqa: F401
 )

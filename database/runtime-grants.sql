@@ -52,6 +52,9 @@ GRANT UPDATE (status, attempts, available_at, claim_token, lease_expires_at, pub
   ON public.outbox_events TO outbox_worker;
 GRANT SELECT ON public.remote_commands TO remote_command_worker;
 GRANT UPDATE (status, updated_at) ON public.remote_commands TO remote_command_worker;
+-- New API device ingress has only append/read ledger privileges and status updates.
+GRANT SELECT, INSERT ON public.command_reports, public.telemetry_samples TO app_user;
+GRANT UPDATE (status, updated_at) ON public.remote_commands TO app_user;
 -- New migration-owned tables never automatically become accessible to runtimes.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC, app_user, outbox_worker, remote_command_worker;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC, app_user, outbox_worker, remote_command_worker;

@@ -36,6 +36,7 @@ class Principal:
     principal_type: PrincipalType
     tenant_id: str | None = None
     roles: frozenset[Role] = frozenset()
+    device_vehicle_id: str | None = None
 
     def __post_init__(self) -> None:
         principal_id = self.principal_id.strip()

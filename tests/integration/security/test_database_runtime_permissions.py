@@ -13,6 +13,7 @@ from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
+from connected_vehicle import device_data as _device_data  # noqa: F401
 from connected_vehicle.remote_command.dispatch_service import RemoteCommandDispatchService
 from connected_vehicle.remote_command.domain import RemoteCommandType
 from connected_vehicle.remote_command.service import IssueRemoteCommandService
@@ -140,7 +141,10 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
         )
         publisher.publish.assert_awaited_once()
         denied = {
-            "app_user": ["UPDATE remote_commands SET status = status", "DELETE FROM outbox_events"],
+            "app_user": [
+                "UPDATE remote_commands SET tenant_id = tenant_id",
+                "DELETE FROM outbox_events",
+            ],
             "outbox_worker": [
                 "SELECT * FROM vehicles",
                 "SELECT * FROM remote_commands",

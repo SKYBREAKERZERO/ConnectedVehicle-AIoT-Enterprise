@@ -13,6 +13,9 @@ class Permission(StrEnum):
     DEVICE_READ = "device:read"
     DEVICE_MANAGE = "device:manage"
 
+    COMMAND_REPORT = "command:report"
+    TELEMETRY_READ = "telemetry:read"
+
     TELEMETRY_PUBLISH = "telemetry:publish"
 
     OTA_READ = "ota:read"
