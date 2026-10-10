@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import NotRequired, Protocol, TypedDict, cast
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import pytest
@@ -31,6 +33,7 @@ from connected_vehicle.vehicle.persistence.models import VehicleModel
 from connected_vehicle.vehicle.persistence.repository import (
     SQLAlchemyVehicleRepository,
 )
+from enterprise_platform.cloud.client_factory import AWSClientFactory
 from enterprise_platform.config.environment import CloudRuntime
 from enterprise_platform.config.settings import get_settings
 from enterprise_platform.database.engine import create_database_engine
@@ -38,9 +41,9 @@ from enterprise_platform.database.models.outbox import OutboxEventModel
 from enterprise_platform.database.outbox_store import SQLAlchemyOutboxStore
 from enterprise_platform.database.session import create_session_factory
 from enterprise_platform.database.unit_of_work import SQLAlchemyUnitOfWork
-from enterprise_platform.messaging.sqs import SQSEventQueue
 from enterprise_platform.messaging.sqs_runtime import (
     create_named_sqs_event_queue,
+    normalize_localstack_queue_url,
 )
 from enterprise_platform.reliability.outbox_dispatcher import (
     OutboxDispatcher,
@@ -67,29 +70,31 @@ def create_retry_policy() -> RetryPolicy:
     )
 
 
-async def drain_queue(
-    queue: SQSEventQueue,
-) -> None:
-    for _ in range(10):
-        messages = await queue.receive_events(
-            max_messages=10,
-            wait_time_seconds=0,
-        )
+class QueueCreationResponse(TypedDict):
+    QueueUrl: NotRequired[str]
 
-        if not messages:
-            return
 
-        for message in messages:
-            await queue.delete_message(message.receipt_handle)
+class SQSAdminClient(Protocol):
+    def create_queue(self, *, QueueName: str) -> QueueCreationResponse: ...
 
-    raise AssertionError("Vehicle command queue could not be drained.")
+    def delete_queue(self, *, QueueUrl: str) -> object: ...
+
+    def close(self) -> None: ...
 
 
 @pytest.mark.asyncio
 async def test_remote_command_outbox_is_dispatched_to_localstack_sqs() -> None:
-    settings = get_settings()
+    base_settings = get_settings()
 
-    assert settings.cloud_runtime is CloudRuntime.LOCALSTACK
+    assert base_settings.cloud_runtime is CloudRuntime.LOCALSTACK
+
+    endpoint_url = base_settings.aws_endpoint_url
+    if endpoint_url is None or urlsplit(endpoint_url).hostname not in {"127.0.0.1", "localhost"}:
+        raise AssertionError("Integration test requires a local LocalStack endpoint.")
+
+    queue_name = f"connected-vehicle-command-outbox-{uuid4().hex[:16]}"
+    settings = base_settings.model_copy(update={"vehicle_command_queue_name": queue_name})
+    admin_client = cast(SQSAdminClient, AWSClientFactory(settings).sqs())
 
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
@@ -98,14 +103,23 @@ async def test_remote_command_outbox_is_dispatched_to_localstack_sqs() -> None:
     command_id: str | None = None
     event_id: str | None = None
 
-    queue = create_named_sqs_event_queue(
-        settings,
-        queue_name=settings.vehicle_command_queue_name,
-    )
-
-    await drain_queue(queue)
+    queue_url: str | None = None
+    queue = None
 
     try:
+        response = admin_client.create_queue(QueueName=queue_name)
+        created_url = response.get("QueueUrl")
+        assert created_url is not None
+
+        queue_url = normalize_localstack_queue_url(
+            created_url,
+            endpoint_url=endpoint_url,
+        )
+
+        queue = create_named_sqs_event_queue(
+            settings,
+            queue_name=queue_name,
+        )
         async with SQLAlchemyUnitOfWork(session_factory) as uow:
             vehicle_repository = SQLAlchemyVehicleRepository(uow.session)
 
@@ -192,21 +206,29 @@ async def test_remote_command_outbox_is_dispatched_to_localstack_sqs() -> None:
             assert after_dispatch.lease_expires_at is None
 
     finally:
-        await drain_queue(queue)
+        try:
+            async with engine.begin() as connection:
+                if event_id is not None:
+                    await connection.execute(
+                        delete(OutboxEventModel).where(OutboxEventModel.event_id == event_id)
+                    )
 
-        async with engine.begin() as connection:
-            if event_id is not None:
+                if command_id is not None:
+                    await connection.execute(
+                        delete(RemoteCommandModel).where(RemoteCommandModel.id == command_id)
+                    )
+
                 await connection.execute(
-                    delete(OutboxEventModel).where(OutboxEventModel.event_id == event_id)
+                    delete(VehicleModel).where(VehicleModel.id == vehicle.id.value)
                 )
-
-            if command_id is not None:
-                await connection.execute(
-                    delete(RemoteCommandModel).where(RemoteCommandModel.id == command_id)
-                )
-
-            await connection.execute(
-                delete(VehicleModel).where(VehicleModel.id == vehicle.id.value)
-            )
-
-        await engine.dispose()
+        finally:
+            try:
+                if queue is not None:
+                    await queue.close()
+            finally:
+                await engine.dispose()
+                try:
+                    if queue_url is not None:
+                        admin_client.delete_queue(QueueUrl=queue_url)
+                finally:
+                    admin_client.close()

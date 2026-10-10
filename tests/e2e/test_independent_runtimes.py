@@ -144,7 +144,10 @@ async def exercise(tmp_path: Path) -> None:
 
     def launch(role: str) -> None:
         logs[role] = (tmp_path / f"{role}.log").open("wb")
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        if sys.platform == "win32":
+            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP")  # noqa: B009
+        else:
+            flags = 0
         processes[role] = subprocess.Popen(
             [sys.executable, "-m", f"apps.{role}"],
             cwd=tmp_path,
@@ -466,9 +469,11 @@ async def exercise(tmp_path: Path) -> None:
         # Real process termination signal, no forced terminate in the success path.
         for role in ["outbox", "remote_command", "api"]:
             process = processes[role]
-            process.send_signal(
-                signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGTERM
-            )
+            if sys.platform == "win32":
+                stop_signal = getattr(signal, "CTRL_BREAK_EVENT")  # noqa: B009
+            else:
+                stop_signal = signal.SIGTERM
+            process.send_signal(stop_signal)
             await asyncio.to_thread(process.wait, timeout=12)
             if role == "api":
                 assert "Application shutdown complete" in log(role)
