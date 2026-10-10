@@ -14,6 +14,7 @@ from connected_vehicle.vehicle.persistence import models as _vehicle_models  # n
 from enterprise_platform.config.settings import get_settings
 from enterprise_platform.database import models as _models  # noqa: F401
 from enterprise_platform.database.base import Base
+from enterprise_platform.database.credentials import migration_database_settings
 from enterprise_platform.database.engine import build_database_url
 
 target_metadata = Base.metadata
@@ -34,7 +35,7 @@ def run_migrations_with_connection(
 
 
 def run_migrations_offline() -> None:
-    settings = get_settings()
+    settings = migration_database_settings(get_settings())
     database_url = build_database_url(settings)
 
     context.configure(
@@ -53,7 +54,7 @@ def run_migrations_offline() -> None:
 
 
 async def run_async_migrations() -> None:
-    settings = get_settings()
+    settings = migration_database_settings(get_settings())
 
     engine = create_async_engine(
         build_database_url(settings),

@@ -22,7 +22,6 @@ from enterprise_platform.reliability.outbox import (
 from enterprise_platform.reliability.outbox_dispatcher import (
     MappingOutboxDestinationResolver,
     OutboxDispatcher,
-    UnknownOutboxDestinationError,
 )
 from enterprise_platform.reliability.policies import (
     RetryPolicy,
@@ -36,6 +35,8 @@ class FakeOutboxStore:
         ...,
     ] = ()
 
+    failed_calls: list[tuple[str, str]] = field(default_factory=list)
+    mark_failed_result: bool = True
     mark_published_result: bool = True
     schedule_retry_result: bool = True
 
@@ -96,6 +97,17 @@ class FakeOutboxStore:
         )
 
         return self.mark_published_result
+
+    async def mark_failed(
+        self,
+        *,
+        outbox_id: str,
+        claim_token: str,
+        failed_at: datetime,
+        failure_code: str,
+    ) -> bool:
+        self.failed_calls.append((outbox_id, failure_code))
+        return self.mark_failed_result
 
     async def schedule_retry(
         self,
@@ -424,11 +436,9 @@ async def test_dispatcher_rejects_unknown_destination() -> None:
         clock=lambda: now,
     )
 
-    with pytest.raises(
-        UnknownOutboxDestinationError,
-        match="unknown-destination",
-    ):
-        await dispatcher.dispatch_batch(now=now)
+    result = await dispatcher.dispatch_batch(now=now)
+    assert result.failed == 1
+    assert store.failed_calls == [(claimed.id, "non_retryable")]
 
     assert store.mark_calls == []
     assert store.retry_calls == []
@@ -467,11 +477,48 @@ async def test_dispatcher_does_not_retry_non_retryable_failure() -> None:
         clock=lambda: now,
     )
 
-    with pytest.raises(
-        ValueError,
-        match="permanent publish failure",
-    ):
-        await dispatcher.dispatch_batch(now=now)
+    result = await dispatcher.dispatch_batch(now=now)
+    assert result.failed == 1
+    assert store.failed_calls == [(claimed.id, "non_retryable")]
 
     assert store.mark_calls == []
     assert store.retry_calls == []
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+async def test_retry_exhaustion_is_fenced_and_persisted(fenced: bool) -> None:
+    claimed, _ = create_claimed_event(attempts=5)
+    store = FakeOutboxStore(claimed_events=(claimed,), mark_failed_result=not fenced)
+
+    async def publisher(event: EventEnvelope) -> None:
+        raise MessagePublishError()
+
+    result = await OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": publisher}),
+        retry_policy=create_retry_policy(),
+    ).dispatch_batch()
+    assert store.failed_calls == [(claimed.id, "retry_exhausted")]
+    assert store.retry_calls == []
+    assert result.failed == int(not fenced)
+    assert result.stale_claims == int(fenced)
+
+
+async def test_poison_outbox_does_not_block_later_valid_events() -> None:
+    from dataclasses import replace
+
+    poison, _ = create_claimed_event()
+    valid, _ = create_claimed_event()
+    store = FakeOutboxStore(claimed_events=(replace(poison, event_body="bad-json"), valid))
+    published: list[str] = []
+
+    async def publisher(event: EventEnvelope) -> None:
+        published.append(event.event_id)
+
+    result = await OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": publisher}),
+        retry_policy=create_retry_policy(),
+    ).dispatch_batch()
+    assert result.failed == 1 and result.published == 1
+    assert published == [valid.event_id]

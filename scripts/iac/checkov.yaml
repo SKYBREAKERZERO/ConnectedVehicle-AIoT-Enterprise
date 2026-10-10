@@ -1,0 +1,8 @@
+# Explicit scanner configuration; omissions never soft-fail the gate.
+framework:
+  - terraform
+download-external-modules: false
+skip-download: true
+quiet: true
+output:
+  - json

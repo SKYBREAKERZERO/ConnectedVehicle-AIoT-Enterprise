@@ -21,6 +21,16 @@ locals {
   }
 
   platform_secrets = {
+    database_outbox = {
+      name        = "/connected-vehicle/${var.environment}/database/outbox"
+      description = "Outbox worker database credentials."
+      domain      = "database"
+    }
+    database_remote_command = {
+      name        = "/connected-vehicle/${var.environment}/database/remote-command"
+      description = "Remote command worker database credentials."
+      domain      = "database"
+    }
     database_application = {
       name        = "/connected-vehicle/${var.environment}/database/application"
       description = "Application database credentials for the Connected Vehicle platform."

@@ -51,3 +51,8 @@ dist/
 
 # Node
 node_modules/
+
+# Isolated IaC tooling and reports
+.venv-iac/
+.iac-reports/
+.iac-scan-*.json

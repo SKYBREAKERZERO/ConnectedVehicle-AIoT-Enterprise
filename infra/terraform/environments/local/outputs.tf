@@ -113,3 +113,20 @@ output "secret_bootstrap_identity" {
     policy_arn = module.secret_bootstrap_policy.policy_arn
   }
 }
+output "database_runtime_configuration" {
+  description = "Per-task role and database secret environment configuration; no secret values."
+  value = {
+    application = {
+      task_role_arn = module.application_runtime_role.role_arn
+      environment   = { APPLICATION_DATABASE_SECRET_ID = module.platform_secret["database_application"].secret_arn }
+    }
+    outbox = {
+      task_role_arn = module.outbox_dispatcher_role.role_arn
+      environment   = { OUTBOX_DATABASE_SECRET_ID = module.platform_secret["database_outbox"].secret_arn }
+    }
+    remote_command = {
+      task_role_arn = module.remote_command_dispatcher_role.role_arn
+      environment   = { REMOTE_COMMAND_DATABASE_SECRET_ID = module.platform_secret["database_remote_command"].secret_arn }
+    }
+  }
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from typing import Protocol
@@ -78,6 +79,10 @@ class ReliableSQSEventProcessor:
 
         try:
             await handler(message.event)
+        except asyncio.CancelledError:
+            # Never ACK cancelled work. Release the active claim for redelivery.
+            await self._idempotency.abandon(idempotency_key)
+            raise
         except Exception as handler_error:
             try:
                 await self._idempotency.abandon(idempotency_key)

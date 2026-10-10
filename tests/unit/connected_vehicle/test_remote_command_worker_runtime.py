@@ -38,6 +38,9 @@ class FakeQueue:
 
         return ()
 
+    async def close(self) -> None:
+        pass
+
     async def delete_message(
         self,
         receipt_handle: str,
@@ -107,8 +110,8 @@ async def test_worker_runtime_uses_configured_queue_and_can_close(
 
         assert queue.calls == [
             (
-                10,
-                20,
+                1,
+                5,
             )
         ]
 

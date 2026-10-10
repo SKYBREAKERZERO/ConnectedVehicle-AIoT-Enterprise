@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from sqlalchemy import text
 
 from apps.api.routers.remote_command import (
     router as remote_command_router,
 )
+from apps.api.service_auth import ServiceTokenMiddleware
 from enterprise_platform.config.settings import get_settings
+from enterprise_platform.database.credentials import load_runtime_database_settings
 from enterprise_platform.database.engine import (
     create_database_engine,
 )
@@ -32,7 +36,9 @@ def create_app() -> FastAPI:
     async def lifespan(
         app: FastAPI,
     ) -> AsyncIterator[None]:
-        engine = create_database_engine(settings)
+        engine = create_database_engine(
+            await load_runtime_database_settings(settings, "application")
+        )
         session_factory = create_session_factory(engine)
 
         app.state.database_engine = engine
@@ -49,6 +55,8 @@ def create_app() -> FastAPI:
         description=("Enterprise Connected Vehicle, IoT and AIoT Platform"),
         lifespan=lifespan,
     )
+
+    app.add_middleware(ServiceTokenMiddleware, settings=settings)
 
     register_exception_handlers(app)
 
@@ -68,6 +76,16 @@ def create_app() -> FastAPI:
     )
     async def liveness() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/ready", tags=["Health"], summary="Database readiness probe")
+    async def readiness() -> dict[str, str]:
+        try:
+            async with asyncio.timeout(settings.database_health_timeout_seconds):
+                async with app.state.database_engine.connect() as connection:
+                    await connection.execute(text("SELECT 1"))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Database unavailable") from exc
+        return {"status": "ready"}
 
     return app
 

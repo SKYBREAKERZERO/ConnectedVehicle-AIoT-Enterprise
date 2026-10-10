@@ -11,6 +11,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 
 dependencies = [
+    "aiomqtt==2.5.1",
     "fastapi>=0.115,<1.0",
     "uvicorn[standard]>=0.34,<1.0",
     "pydantic>=2.10,<3.0",
@@ -26,11 +27,18 @@ dependencies = [
     "opentelemetry-api>=1.30,<2.0",
     "opentelemetry-sdk>=1.30,<2.0",
     "opentelemetry-instrumentation-fastapi>=0.50b0,<1.0",
+    "aiomqtt==2.5.1",
 ]
 
 
+[project.scripts]
+vehicle-api = "apps.api.__main__:main"
+vehicle-outbox = "apps.outbox.__main__:main"
+vehicle-remote-command = "apps.remote_command.__main__:main"
+
 [project.optional-dependencies]
 dev = [
+    "PyYAML==6.0.3",
     "pytest>=8.3,<10.0",
     "pytest-asyncio>=0.25,<2.0",
     "pytest-cov>=6.0,<8.0",
@@ -45,6 +53,7 @@ dev = [
 where = ["."]
 include = [
     "apps*",
+    "connected_vehicle*",
     "enterprise_platform*",
 ]
 exclude = [

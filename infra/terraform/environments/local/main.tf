@@ -45,7 +45,7 @@ module "secret_bootstrap_policy" {
           "secretsmanager:DescribeSecret"
         ]
 
-        Resource = module.platform_secret["database_application"].secret_arn
+        Resource = [for secret in module.platform_secret : secret.secret_arn]
       },
       {
         Sid    = "UseSecretsKeyViaSecretsManager"
@@ -88,7 +88,7 @@ module "remote_command_dispatcher_secret_read_policy" {
   policy_name = "${local.name_prefix}-remote-cmd-dispatcher-secret-read"
 
   description = (
-    "Least-privilege access for the remote command dispatcher to read the application database secret."
+    "Least-privilege access for the remote command dispatcher to read the remote command database secret."
   )
 
   policy_json = jsonencode({
@@ -104,7 +104,7 @@ module "remote_command_dispatcher_secret_read_policy" {
           "secretsmanager:DescribeSecret"
         ]
 
-        Resource = module.platform_secret["database_application"].secret_arn
+        Resource = module.platform_secret["database_remote_command"].secret_arn
       },
       {
         Sid    = "DecryptDatabaseSecretViaSecretsManager"
@@ -117,6 +117,9 @@ module "remote_command_dispatcher_secret_read_policy" {
         Resource = module.platform_kms["secrets"].key_arn
 
         Condition = {
+          StringLike = {
+            "kms:EncryptionContext:SecretARN" = module.platform_secret["database_remote_command"].secret_arn
+          }
           StringEquals = {
             "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com"
           }
@@ -395,6 +398,9 @@ module "application_secret_read_policy" {
         )
 
         Condition = {
+          StringLike = {
+            "kms:EncryptionContext:SecretARN" = module.platform_secret["database_application"].secret_arn
+          }
           StringEquals = {
             "kms:ViaService" = (
               "secretsmanager.${var.aws_region}.amazonaws.com"
@@ -511,7 +517,7 @@ module "outbox_dispatcher_secret_read_policy" {
   policy_name = "${local.name_prefix}-outbox-dispatcher-secret-read"
 
   description = (
-    "Least-privilege access for the transactional outbox dispatcher to read the application database secret."
+    "Least-privilege access for the transactional outbox dispatcher to read the outbox database secret."
   )
 
   policy_json = jsonencode({
@@ -527,7 +533,7 @@ module "outbox_dispatcher_secret_read_policy" {
           "secretsmanager:DescribeSecret"
         ]
 
-        Resource = module.platform_secret["database_application"].secret_arn
+        Resource = module.platform_secret["database_outbox"].secret_arn
       },
       {
         Sid    = "DecryptDatabaseSecretViaSecretsManager"
@@ -540,6 +546,9 @@ module "outbox_dispatcher_secret_read_policy" {
         Resource = module.platform_kms["secrets"].key_arn
 
         Condition = {
+          StringLike = {
+            "kms:EncryptionContext:SecretARN" = module.platform_secret["database_outbox"].secret_arn
+          }
           StringEquals = {
             "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com"
           }

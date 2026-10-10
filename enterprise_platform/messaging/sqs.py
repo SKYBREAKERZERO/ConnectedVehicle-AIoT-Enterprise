@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import NotRequired, Protocol, TypedDict
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from enterprise_platform.messaging.envelope import EventEnvelope
 from enterprise_platform.messaging.exceptions import (
@@ -102,7 +102,7 @@ class SQSEventQueue:
                 QueueUrl=self._queue_url,
                 MessageBody=body,
             )
-        except ClientError as exc:
+        except (BotoCoreError, ClientError) as exc:
             raise MessagePublishError() from exc
 
         message_id = response.get("MessageId")
@@ -131,7 +131,7 @@ class SQSEventQueue:
                 MaxNumberOfMessages=max_messages,
                 WaitTimeSeconds=wait_time_seconds,
             )
-        except ClientError as exc:
+        except (BotoCoreError, ClientError) as exc:
             raise MessageReceiveError() from exc
 
         messages = response.get(
@@ -179,5 +179,10 @@ class SQSEventQueue:
                 QueueUrl=self._queue_url,
                 ReceiptHandle=(normalized_receipt_handle),
             )
-        except ClientError as exc:
+        except (BotoCoreError, ClientError) as exc:
             raise MessageDeleteError() from exc
+
+    async def close(self) -> None:
+        close = getattr(self._client, "close", None)
+        if close is not None:
+            await asyncio.to_thread(close)

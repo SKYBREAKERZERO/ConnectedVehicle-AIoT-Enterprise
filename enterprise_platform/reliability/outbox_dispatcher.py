@@ -61,6 +61,15 @@ class OutboxStore(Protocol):
         published_at: datetime | None = None,
     ) -> bool: ...
 
+    async def mark_failed(
+        self,
+        *,
+        outbox_id: str,
+        claim_token: str,
+        failed_at: datetime,
+        failure_code: str,
+    ) -> bool: ...
+
     async def schedule_retry(
         self,
         *,
@@ -124,6 +133,7 @@ class OutboxDispatchBatchResult:
     published: int
     retries_scheduled: int
     stale_claims: int
+    failed: int = 0
 
 
 class OutboxDispatcher:
@@ -174,19 +184,36 @@ class OutboxDispatcher:
         published = 0
         retries_scheduled = 0
         stale_claims = 0
+        failed = 0
 
         for claimed in claimed_events:
-            event = deserialize_event_envelope(claimed.event_body)
-
-            publisher = self._destinations.resolve(claimed.destination)
-
             try:
+                event = deserialize_event_envelope(claimed.event_body)
+                publisher = self._destinations.resolve(claimed.destination)
                 await publisher(event)
             except Exception as exc:
                 disposition = self._failure_classifier.classify(exc)
 
-                if disposition is FailureDisposition.NON_RETRYABLE:
-                    raise
+                if (
+                    disposition is FailureDisposition.NON_RETRYABLE
+                    or claimed.attempts >= self._retry_policy.max_attempts
+                ):
+                    code = (
+                        "non_retryable"
+                        if disposition is FailureDisposition.NON_RETRYABLE
+                        else "retry_exhausted"
+                    )
+                    updated = await self._store.mark_failed(
+                        outbox_id=claimed.id,
+                        claim_token=claimed.claim_token,
+                        failed_at=self._now(),
+                        failure_code=code,
+                    )
+                    if updated:
+                        failed += 1
+                    else:
+                        stale_claims += 1
+                    continue
 
                 retry_scheduled = await self._schedule_retry(
                     claimed,
@@ -217,6 +244,7 @@ class OutboxDispatcher:
             published=published,
             retries_scheduled=retries_scheduled,
             stale_claims=stale_claims,
+            failed=failed,
         )
 
     async def _schedule_retry(

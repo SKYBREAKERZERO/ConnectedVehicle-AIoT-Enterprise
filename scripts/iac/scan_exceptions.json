@@ -1,0 +1,32 @@
+{
+  "exceptions": [
+    {
+      "check_id": "CKV_AWS_61",
+      "resource": "module.secret_bootstrap_role.aws_iam_role.this",
+      "file": "modules/security/iam-role/main.tf",
+      "expires": "2027-01-01",
+      "reason": "LocalStack-only bootstrap trusts exactly account 000000000000 root. No service wildcard. Resolved trust policy is checked independently by plan_policy.py. Never valid for an AWS deployment."
+    },
+    {
+      "check_id": "CKV2_AWS_57",
+      "resource": "module.platform_secret[\"database_application\"].aws_secretsmanager_secret.this",
+      "file": "modules/security/secret/main.tf",
+      "expires": "2027-01-01",
+      "reason": "LocalStack credential rotation is a controlled provisioning operation. Automatic PostgreSQL/Lambda rotation is not implemented. CMK encryption is mandatory; production needs a rotation design."
+    },
+    {
+      "check_id": "CKV2_AWS_57",
+      "resource": "module.platform_secret[\"database_outbox\"].aws_secretsmanager_secret.this",
+      "file": "modules/security/secret/main.tf",
+      "expires": "2027-01-01",
+      "reason": "Same LocalStack-only controlled PostgreSQL rotation constraint. Not a waiver for encryption or runtime IAM scope."
+    },
+    {
+      "check_id": "CKV2_AWS_57",
+      "resource": "module.platform_secret[\"database_remote_command\"].aws_secretsmanager_secret.this",
+      "file": "modules/security/secret/main.tf",
+      "expires": "2027-01-01",
+      "reason": "Same LocalStack-only controlled PostgreSQL rotation constraint. Not a waiver for encryption or runtime IAM scope."
+    }
+  ]
+}

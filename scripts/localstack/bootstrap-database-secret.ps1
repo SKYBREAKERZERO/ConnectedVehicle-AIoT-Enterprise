@@ -23,6 +23,9 @@ param(
 
     [string]$DatabaseName = "",
 
+    [ValidateSet("application", "outbox", "remote-command")]
+    [string]$Runtime = "application",
+
     [string]$DatabaseUsername = ""
 )
 
@@ -70,15 +73,15 @@ if ([string]::IsNullOrWhiteSpace($DatabaseName)) {
     $DatabaseName = Read-Host "Database name"
 }
 
-if ([string]::IsNullOrWhiteSpace($DatabaseUsername)) {
-    $DatabaseUsername = Get-FirstNonEmptyValue @(
-        $env:DATABASE_USERNAME,
-        $env:POSTGRES_USER
-    )
+$runtimeUsers = @{ application = "app_user"; outbox = "outbox_worker"; "remote-command" = "remote_command_worker" }
+if (-not $PSBoundParameters.ContainsKey("SecretId")) {
+    $SecretId = "/connected-vehicle/local/database/$Runtime"
 }
-
 if ([string]::IsNullOrWhiteSpace($DatabaseUsername)) {
-    $DatabaseUsername = Read-Host "Database username"
+    $DatabaseUsername = $runtimeUsers[$Runtime]
+}
+if ($DatabaseUsername -ne $runtimeUsers[$Runtime]) {
+    throw "Database username does not match the selected runtime."
 }
 
 if ([string]::IsNullOrWhiteSpace($DatabaseName)) {
@@ -90,8 +93,7 @@ if ([string]::IsNullOrWhiteSpace($DatabaseUsername)) {
 }
 
 $plainPassword = Get-FirstNonEmptyValue @(
-    $env:DATABASE_PASSWORD,
-    $env:POSTGRES_PASSWORD
+    $env:RUNTIME_DATABASE_PASSWORD
 )
 
 if ([string]::IsNullOrEmpty($plainPassword)) {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from enterprise_platform.config.environment import AppEnvironment, CloudRuntime
@@ -18,6 +18,8 @@ class Settings(BaseSettings):
 
     app_name: str = "connected-vehicle-aiot-enterprise"
     app_env: AppEnvironment = AppEnvironment.LOCAL
+    api_service_token: SecretStr | None = None
+    api_service_tenant_id: str | None = None
     app_host: str = "0.0.0.0"
     app_port: int = Field(default=8000, ge=1, le=65535)
 
@@ -42,6 +44,13 @@ class Settings(BaseSettings):
     database_username: str = "connected_vehicle"
     database_password: SecretStr = SecretStr("connected_vehicle")
 
+    database_secret_prefix: str = "/connected-vehicle"
+    application_database_secret_id: str | None = None
+    outbox_database_secret_id: str | None = None
+    remote_command_database_secret_id: str | None = None
+    migration_database_username: str | None = None
+    migration_database_password: SecretStr | None = None
+
     database_pool_size: int = Field(default=10, ge=1, le=100)
     database_max_overflow: int = Field(default=20, ge=0, le=200)
     database_pool_timeout_seconds: float = Field(default=30.0, gt=0)
@@ -65,9 +74,44 @@ class Settings(BaseSettings):
         min_length=1,
         max_length=100,
     )
+    mqtt_host: str = Field(default="localhost", min_length=1)
+    mqtt_port: int = Field(default=1883, ge=1, le=65535)
+    mqtt_username: str | None = None
+    mqtt_password: SecretStr | None = None
+    mqtt_tls_enabled: bool = False
+    mqtt_ca_file: str | None = None
+    mqtt_cert_file: str | None = None
+    mqtt_key_file: str | None = None
+    mqtt_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
+    worker_error_delay_seconds: float = Field(default=2.0, gt=0, le=60)
+    worker_shutdown_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    worker_operation_timeout_seconds: float = Field(default=25.0, gt=0, le=300)
+    remote_command_wait_seconds: int = Field(default=5, ge=0, le=20)
+    outbox_max_attempts: int = Field(default=10, ge=1, le=100)
+    outbox_batch_size: int = Field(default=10, ge=1, le=100)
+    outbox_lease_seconds: int = Field(default=60, ge=1, le=600)
     log_level: str = "INFO"
     log_format: str = "json"
     tracing_enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_runtime_contracts(self) -> Settings:
+        if bool(self.api_service_token) != bool(self.api_service_tenant_id):
+            raise ValueError("API service token and tenant must be configured together.")
+        if self.api_service_token and len(self.api_service_token.get_secret_value()) < 32:
+            raise ValueError("API service token must contain at least 32 characters.")
+        if self.api_service_tenant_id and not self.api_service_tenant_id.strip():
+            raise ValueError("API service tenant must not be blank.")
+        if self.outbox_lease_seconds <= self.worker_operation_timeout_seconds:
+            raise ValueError("Outbox lease must exceed the worker operation timeout.")
+        if self.worker_operation_timeout_seconds <= (
+            self.remote_command_wait_seconds + self.mqtt_timeout_seconds
+        ):
+            raise ValueError("Worker deadline must exceed SQS polling plus MQTT timeout.")
+        if self.worker_operation_timeout_seconds >= 60:
+            raise ValueError("Worker deadline must be shorter than the idempotency lease (60s).")
+        return self
 
 
 @lru_cache

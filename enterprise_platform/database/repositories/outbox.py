@@ -199,3 +199,36 @@ class SQLAlchemyOutboxRepository:
         result = await self._session.execute(statement)
 
         return result.scalar_one_or_none() is not None
+
+    async def mark_failed(
+        self,
+        *,
+        outbox_id: str,
+        claim_token: str,
+        failed_at: datetime,
+        failure_code: str,
+    ) -> bool:
+        if not outbox_id.strip() or not claim_token.strip():
+            raise ValueError("Outbox ID and claim token must not be blank.")
+        if failed_at.tzinfo is None:
+            raise ValueError("Outbox failed_at must be timezone-aware.")
+        if failure_code not in {"non_retryable", "retry_exhausted"}:
+            raise ValueError("Unsupported outbox failure code.")
+        result = await self._session.execute(
+            update(OutboxEventModel)
+            .where(
+                OutboxEventModel.id == outbox_id,
+                OutboxEventModel.status == OutboxStatus.PROCESSING.value,
+                OutboxEventModel.claim_token == claim_token,
+            )
+            .values(
+                status=OutboxStatus.FAILED.value,
+                claim_token=None,
+                lease_expires_at=None,
+                failed_at=failed_at,
+                failure_code=failure_code,
+                failure_reason="Publication failed; inspect sanitized worker telemetry.",
+            )
+            .returning(OutboxEventModel.id)
+        )
+        return result.scalar_one_or_none() is not None

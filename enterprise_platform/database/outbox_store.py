@@ -86,3 +86,21 @@ class SQLAlchemyOutboxStore:
             await uow.commit()
 
             return updated
+
+    async def mark_failed(
+        self,
+        *,
+        outbox_id: str,
+        claim_token: str,
+        failed_at: datetime,
+        failure_code: str,
+    ) -> bool:
+        async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            updated = await SQLAlchemyOutboxRepository(uow.session).mark_failed(
+                outbox_id=outbox_id,
+                claim_token=claim_token,
+                failed_at=failed_at,
+                failure_code=failure_code,
+            )
+            await uow.commit()
+            return updated

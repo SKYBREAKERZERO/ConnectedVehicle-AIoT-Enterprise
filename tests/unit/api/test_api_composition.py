@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -7,12 +9,19 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from apps.api.main import create_app
+from enterprise_platform.config.settings import Settings
 
 
 def test_api_lifespan_initializes_database_runtime() -> None:
     app = create_app()
 
-    with TestClient(app) as client:
+    with (
+        patch(
+            "apps.api.main.load_runtime_database_settings",
+            new=AsyncMock(return_value=Settings.model_construct(database_username="app_user")),
+        ),
+        TestClient(app) as client,
+    ):
         response = client.get("/health/live")
 
         assert response.status_code == 200

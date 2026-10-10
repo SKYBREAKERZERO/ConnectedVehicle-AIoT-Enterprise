@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 import pytest
@@ -251,3 +252,19 @@ async def test_processor_completes_before_acknowledgement() -> None:
         "complete",
         "delete",
     ]
+
+
+async def test_cancelled_handler_abandons_claim_and_never_acknowledges() -> None:
+    acknowledger = FakeAcknowledger()
+    idempotency = FakeIdempotencyCoordinator(decision=IdempotencyDecision.ACQUIRED)
+    processor = ReliableSQSEventProcessor(acknowledger=acknowledger, idempotency=idempotency)
+    message = create_message()
+
+    async def handler(event: EventEnvelope) -> None:
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await processor.process(message, handler=handler)
+    assert idempotency.abandoned == [message.event.event_id]
+    assert idempotency.completed == []
+    assert acknowledger.deleted == []

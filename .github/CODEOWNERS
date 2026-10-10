@@ -1,0 +1,5 @@
+# Changes to the gate, exceptions and module contracts require the repository owner.
+/.github/ @SKYBREAKERZERO
+/scripts/iac/ @SKYBREAKERZERO
+/infra/terraform/ @SKYBREAKERZERO
+/tests/unit/iac/ @SKYBREAKERZERO

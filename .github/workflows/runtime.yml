@@ -1,0 +1,34 @@
+name: Runtime quality gates
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: Runtime quality gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install runtime and quality tools
+        run: python -m pip install -e ".[dev]"
+      - name: Lint and check types
+        run: |
+          ruff check .
+          ruff format --check .
+          mypy apps enterprise_platform connected_vehicle database scripts/iac tests/e2e tests/unit/test_runtime_process.py tests/unit/connected_vehicle/test_mqtt_publisher.py tests/unit/api/test_service_auth.py
+      - name: Unit, contract, real permissions and independent-process E2E tests
+        run: pytest tests/unit tests/contract tests/e2e/test_independent_runtimes.py tests/integration/security/test_database_runtime_permissions.py -q

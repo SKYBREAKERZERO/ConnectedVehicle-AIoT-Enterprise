@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -14,6 +15,8 @@ from enterprise_platform.messaging.reliable_sqs_consumer import (
 from enterprise_platform.messaging.sqs import (
     ReceivedEventMessage,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteCommandSQSQueue(Protocol):
@@ -83,7 +86,8 @@ class RemoteCommandSQSWorker:
                     message,
                     handler=self._handler,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning("remote_command_message_failed: %s", type(exc).__name__)
                 failed += 1
                 continue
 

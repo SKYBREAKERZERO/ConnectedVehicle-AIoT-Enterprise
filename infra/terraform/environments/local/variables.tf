@@ -165,7 +165,7 @@ variable "remote_command_enable_redrive_allow_policy" {
 variable "platform_kms_enable_key_rotation" {
   description = "Whether automatic rotation is enabled for platform-managed KMS keys in the local environment."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 }
 

@@ -1,0 +1,6 @@
+# Separate CI toolchain; do not install into the application environment.
+checkov==3.3.26
+pytest==9.1.1
+ruff==0.16.10
+mypy==1.20.2
+PyYAML==6.0.3
