@@ -290,6 +290,20 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
         for root in (base_local, local):
             (root / "ci.tfvars.json").write_text(json.dumps(variables), encoding="utf-8")
             (root / "terraform.tfvars.json").write_text(json.dumps(variables), encoding="utf-8")
+        baseline_lock = base_local / ".terraform.lock.hcl"
+        if not baseline_lock.is_file():
+            raise RuntimeError("Missing baseline provider lock")
+
+        # Reconcile official checksums in the disposable workspace.
+        terraform(
+            base_local,
+            "providers",
+            "lock",
+            "-platform=linux_amd64",
+            "-platform=windows_amd64",
+            env=env,
+            quiet=True,
+        )
         initialize(base_local, env=env)
         terraform(
             base_local,

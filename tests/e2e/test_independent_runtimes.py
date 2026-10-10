@@ -343,20 +343,44 @@ async def exercise(tmp_path: Path) -> None:
             await eventually(lambda: state_is("dispatching"))
             await eventually(lambda: async_bool("failed=1" in log("remote_command")))
             assert not await state_is("sent")
+
+            # Pause consumption before recovering the broker.
+            failed_worker = processes["remote_command"]
+            if sys.platform == "win32":
+                shutdown_signal = getattr(signal, "CTRL_BREAK_EVENT")  # noqa: B009
+            else:
+                shutdown_signal = signal.SIGTERM
+
+            failed_worker.send_signal(shutdown_signal)
+            await asyncio.to_thread(failed_worker.wait, timeout=12)
+
+            assert failed_worker.returncode == 0, log("remote_command")
+            assert "worker_stopped" in log("remote_command")
+
+            logs["remote_command"].close()
+            del logs["remote_command"]
+            del processes["remote_command"]
+
             docker("start", f"{prefix}-mqtt")
 
             async def broker_ready() -> bool:
                 try:
-                    reader, writer = await asyncio.open_connection("127.0.0.1", mqtt_port)
-                    writer.close()
-                    await writer.wait_closed()
-                    return True
-                except OSError:
+                    async with aiomqtt.Client(
+                        "127.0.0.1",
+                        port=mqtt_port,
+                        timeout=3,
+                    ):
+                        return True
+                except (aiomqtt.MqttError, OSError, TimeoutError):
                     return False
 
-            await eventually(broker_ready, timeout=10)
+            await eventually(broker_ready, timeout=30)
             async with aiomqtt.Client("127.0.0.1", port=mqtt_port, timeout=5) as subscriber:
                 await subscriber.subscribe("tenants/e2e-tenant/vehicles/+/commands", qos=1)
+
+                # Resume delivery only after the subscription is active.
+                launch("remote_command")
+
                 async with asyncio.timeout(35):
                     message = await anext(subscriber.messages)
                 payload = json.loads(bytes(message.payload))
