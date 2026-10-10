@@ -297,6 +297,13 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
         # Reconcile official checksums in the disposable workspace.
         terraform(
             base_local,
+            "get",
+            "-no-color",
+            env=env,
+            quiet=True,
+        )
+        terraform(
+            base_local,
             "providers",
             "lock",
             "-platform=linux_amd64",
