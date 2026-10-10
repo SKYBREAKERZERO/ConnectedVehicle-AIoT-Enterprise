@@ -132,8 +132,7 @@ async def redrive_status(
         raise ValueError("Invalid AWS task list.")
     for task in results:
         if isinstance(task, dict) and handle and task.get("TaskHandle") == handle:
-            # Task metadata only; never export message bodies or secret values.
-            return {
+            result = {
                 key: task.get(key)
                 for key in (
                     "Status",
@@ -143,4 +142,20 @@ async def redrive_status(
                     "FailureReason",
                 )
             }
+            # Task metadata only; never export message bodies or secret values.
+            async with sessions() as session, session.begin():
+                action = await session.scalar(
+                    select(OperatorActionModel)
+                    .where(OperatorActionModel.operation_id == str(UUID(operation_id)))
+                    .with_for_update()
+                )
+                assert action
+                status = str(task.get("Status", "UNKNOWN"))
+                action.state = {
+                    "COMPLETED": "complete",
+                    "FAILED": "failed",
+                    "CANCELLED": "cancelled",
+                }.get(status, "started")
+                action.evidence = action.evidence | {"last_observation": result}
+            return result
     return {"state": "unresolved", "intent_requires_manual_reconciliation": True}
