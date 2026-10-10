@@ -14,7 +14,7 @@ from scripts.iac.plan_policy import evaluate, policy_errors
 ACCOUNT = "000000000000"
 KEY = f"arn:aws:kms:ap-northeast-1:{ACCOUNT}:key/12345678-1234-1234-1234-123456789abc"
 QUEUE = f"arn:aws:sqs:ap-northeast-1:{ACCOUNT}:command"
-SCOPED = {
+SCOPED: dict[str, Any] = {
     "Version": "2012-10-17",
     "Statement": [
         {

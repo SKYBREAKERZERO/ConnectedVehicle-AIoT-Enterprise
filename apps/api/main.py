@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from sqlalchemy import text
 
+from apps.api.routers.device_data import router as device_data_router
 from apps.api.routers.remote_command import (
     router as remote_command_router,
 )
@@ -21,10 +22,12 @@ from enterprise_platform.database.session import (
 )
 from enterprise_platform.errors import register_exception_handlers
 from enterprise_platform.observability.logging import configure_logging
+from enterprise_platform.observability.metrics import configure_metrics
 from enterprise_platform.observability.middleware import (
     http_observability_middleware,
 )
-from enterprise_platform.observability.tracing import configure_tracing
+from enterprise_platform.observability.tracing import configure_tracing, flush_tracing
+from enterprise_platform.security.oidc import OIDCMiddleware
 
 
 def create_app() -> FastAPI:
@@ -48,6 +51,7 @@ def create_app() -> FastAPI:
             yield
         finally:
             await engine.dispose()
+            await asyncio.to_thread(flush_tracing)
 
     app = FastAPI(
         title="Connected Vehicle AIoT Enterprise",
@@ -57,10 +61,13 @@ def create_app() -> FastAPI:
     )
 
     app.add_middleware(ServiceTokenMiddleware, settings=settings)
+    app.add_middleware(OIDCMiddleware, settings=settings)
 
     register_exception_handlers(app)
 
     app.middleware("http")(http_observability_middleware)
+
+    configure_metrics(app, settings)
 
     configure_tracing(
         app,
@@ -68,6 +75,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(remote_command_router)
+    app.include_router(device_data_router)
 
     @app.get(
         "/health/live",

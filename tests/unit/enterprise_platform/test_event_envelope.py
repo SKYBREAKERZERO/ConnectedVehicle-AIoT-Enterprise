@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -116,7 +117,7 @@ def test_event_envelope_accepts_explicit_timestamp() -> None:
 )
 def test_event_envelope_rejects_empty_required_values(
     field_name: str,
-    kwargs: dict[str, str],
+    kwargs: dict[str, Any],
 ) -> None:
     with pytest.raises(
         ValueError,

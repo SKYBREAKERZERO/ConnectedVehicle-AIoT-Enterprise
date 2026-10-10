@@ -4,15 +4,15 @@ from unittest.mock import Mock, patch
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.engine import (
     build_database_url,
     create_database_engine,
 )
+from tests.settings_helpers import isolated_settings
 
 
 def test_build_database_url_uses_asyncpg() -> None:
-    settings = Settings(
+    settings = isolated_settings(
         database_host="db.internal",
         database_port=5433,
         database_name="vehicle_platform",
@@ -32,7 +32,7 @@ def test_build_database_url_uses_asyncpg() -> None:
 
 
 def test_create_database_engine_applies_pool_policy() -> None:
-    settings = Settings(
+    settings = isolated_settings(
         database_pool_size=12,
         database_max_overflow=24,
         database_pool_timeout_seconds=15.0,

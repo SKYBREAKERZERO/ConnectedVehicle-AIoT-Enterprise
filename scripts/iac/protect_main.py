@@ -7,23 +7,23 @@ import subprocess
 from typing import Any
 
 REQUIRED_CHECK = "IaC quality gate"
+REQUIRED_CHECKS = (REQUIRED_CHECK, "Runtime quality gate")
 GITHUB_ACTIONS_APP_ID = 15368
 
 
 def protection_payload(current: dict[str, Any]) -> dict[str, Any]:
-    """Preserve existing branch requirements while adding the IaC check."""
+    """Preserve existing branch requirements while adding both required gates."""
     old_status = current.get("required_status_checks") or {}
     checks = list(old_status.get("checks") or [])
     contexts = set(old_status.get("contexts") or []) | {check["context"] for check in checks}
-    if REQUIRED_CHECK not in contexts or not any(
-        check["context"] == REQUIRED_CHECK for check in checks
-    ):
-        checks.append({"context": REQUIRED_CHECK, "app_id": GITHUB_ACTIONS_APP_ID})
+    for required in REQUIRED_CHECKS:
+        if required not in contexts or not any(check["context"] == required for check in checks):
+            checks.append({"context": required, "app_id": GITHUB_ACTIONS_APP_ID})
     for context in old_status.get("contexts") or []:
         if not any(check["context"] == context for check in checks):
             checks.append({"context": context})
     for check in checks:
-        if check["context"] == REQUIRED_CHECK:
+        if check["context"] in REQUIRED_CHECKS:
             check["app_id"] = GITHUB_ACTIONS_APP_ID
     review = current.get("required_pull_request_reviews") or {}
     reviews: dict[str, Any] = {
@@ -52,6 +52,38 @@ def protection_payload(current: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def protection_errors(current: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    status = current.get("required_status_checks") or {}
+    checks = {item["context"]: item.get("app_id") for item in status.get("checks", [])}
+    for required in REQUIRED_CHECKS:
+        if checks.get(required) != GITHUB_ACTIONS_APP_ID:
+            errors.append(f"missing or untrusted required check: {required}")
+    for name, value in (
+        ("strict status checks", status.get("strict")),
+        ("administrator enforcement", (current.get("enforce_admins") or {}).get("enabled")),
+        ("pull request reviews", current.get("required_pull_request_reviews")),
+    ):
+        if not value:
+            errors.append(name)
+    review = current.get("required_pull_request_reviews") or {}
+    for name in (
+        "dismiss_stale_reviews",
+        "require_code_owner_reviews",
+        "require_last_push_approval",
+    ):
+        if not review.get(name):
+            errors.append(name)
+    if review.get("required_approving_review_count", 0) < 1:
+        errors.append("at least one approving review")
+    if not (current.get("required_conversation_resolution") or {}).get("enabled"):
+        errors.append("required conversation resolution")
+    for name in ("allow_force_pushes", "allow_deletions"):
+        if (current.get(name) or {}).get("enabled", False):
+            errors.append(name)
+    return errors
+
+
 def identities(value: dict[str, Any]) -> dict[str, Any]:
     return {
         "users": [item["login"] for item in value.get("users", [])],
@@ -62,10 +94,14 @@ def identities(value: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Require IaC quality gate on main (GitHub admin access)"
+        description="Require both quality gates on main (GitHub admin access)"
     )
     parser.add_argument("--repo", required=True)
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
+        "--verify", action="store_true", help="Read and verify protection without writes"
+    )
+    modes.add_argument(
         "--apply", action="store_true", help="Write protection; default only previews JSON"
     )
     args = parser.parse_args()
@@ -77,6 +113,13 @@ def main() -> int:
         print("Cannot read GitHub branch protection. Authenticate gh with repository admin access.")
         return 1
     current = json.loads(read.stdout) if read.returncode == 0 else {}
+    if args.verify:
+        problems = protection_errors(current)
+        if problems:
+            print("Branch protection FAILED: " + "; ".join(problems))
+            return 1
+        print("Both required gates and branch protection verified.")
+        return 0
     payload = protection_payload(current)
     if not args.apply:
         print(json.dumps(payload, indent=2))
@@ -92,11 +135,10 @@ def main() -> int:
         print("Branch protection update failed; check repository admin permissions.")
         return 1
     actual = json.loads(write.stdout)
-    contexts = (actual.get("required_status_checks") or {}).get("contexts", [])
-    if REQUIRED_CHECK not in contexts:
+    if protection_errors(actual):
         print("GitHub did not confirm the required check; inspect branch protection.")
         return 1
-    print(f"main now requires {REQUIRED_CHECK}, reviews and an up-to-date branch.")
+    print("main now requires both quality gates, reviews and an up-to-date branch.")
     return 0
 
 

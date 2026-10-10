@@ -1,0 +1,462 @@
+{
+  "api-error/1.0": {
+    "$defs": {
+      "ErrorBodyContract": {
+        "additionalProperties": false,
+        "description": "Stable public HTTP error payload.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "correlation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation Id"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "request_id",
+          "correlation_id"
+        ],
+        "title": "ErrorBodyContract",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Stable public HTTP error response envelope.",
+    "properties": {
+      "error": {
+        "$ref": "#/$defs/ErrorBodyContract"
+      }
+    },
+    "required": [
+      "error"
+    ],
+    "title": "ErrorResponseContract",
+    "type": "object"
+  },
+  "api-issue-request/1.0": {
+    "$defs": {
+      "RemoteCommandTypeContract": {
+        "description": "Public HTTP command-type contract.",
+        "enum": [
+          "lock",
+          "unlock",
+          "start",
+          "stop",
+          "honk",
+          "flash_lights"
+        ],
+        "title": "RemoteCommandTypeContract",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "description": "POST remote-command request contract.",
+    "properties": {
+      "command_type": {
+        "$ref": "#/$defs/RemoteCommandTypeContract"
+      }
+    },
+    "required": [
+      "command_type"
+    ],
+    "title": "IssueRemoteCommandRequest",
+    "type": "object"
+  },
+  "api-issue-response/1.0": {
+    "$defs": {
+      "RemoteCommandStatusContract": {
+        "description": "Public HTTP remote-command status contract.",
+        "enum": [
+          "requested",
+          "queued",
+          "dispatching",
+          "sent",
+          "acknowledged",
+          "succeeded",
+          "failed",
+          "timed_out",
+          "expired",
+          "cancelled"
+        ],
+        "title": "RemoteCommandStatusContract",
+        "type": "string"
+      },
+      "RemoteCommandTypeContract": {
+        "description": "Public HTTP command-type contract.",
+        "enum": [
+          "lock",
+          "unlock",
+          "start",
+          "stop",
+          "honk",
+          "flash_lights"
+        ],
+        "title": "RemoteCommandTypeContract",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "description": "202 Accepted remote-command response contract.",
+    "properties": {
+      "command_id": {
+        "format": "uuid",
+        "title": "Command Id",
+        "type": "string"
+      },
+      "command_type": {
+        "$ref": "#/$defs/RemoteCommandTypeContract"
+      },
+      "created": {
+        "title": "Created",
+        "type": "boolean"
+      },
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "expires_at": {
+        "format": "date-time",
+        "title": "Expires At",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/RemoteCommandStatusContract"
+      },
+      "vehicle_id": {
+        "format": "uuid",
+        "title": "Vehicle Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "command_id",
+      "vehicle_id",
+      "command_type",
+      "status",
+      "created",
+      "created_at",
+      "expires_at"
+    ],
+    "title": "IssueRemoteCommandResponse",
+    "type": "object"
+  },
+  "command-report/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "event_id": {
+        "format": "uuid",
+        "title": "Event Id",
+        "type": "string"
+      },
+      "failure_code": {
+        "anyOf": [
+          {
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Failure Code"
+      },
+      "occurred_at": {
+        "format": "date-time",
+        "title": "Occurred At",
+        "type": "string"
+      },
+      "schema_version": {
+        "const": "1.0",
+        "default": "1.0",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "acknowledged",
+          "succeeded",
+          "failed"
+        ],
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "event_id",
+      "status",
+      "occurred_at"
+    ],
+    "title": "CommandReport",
+    "type": "object"
+  },
+  "command-requested/1.0": {
+    "$defs": {
+      "RemoteCommandType": {
+        "enum": [
+          "lock",
+          "unlock",
+          "start",
+          "stop",
+          "honk",
+          "flash_lights"
+        ],
+        "title": "RemoteCommandType",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "command_id": {
+        "format": "uuid",
+        "title": "Command Id",
+        "type": "string"
+      },
+      "command_type": {
+        "$ref": "#/$defs/RemoteCommandType"
+      },
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "expires_at": {
+        "format": "date-time",
+        "title": "Expires At",
+        "type": "string"
+      },
+      "status": {
+        "const": "requested",
+        "title": "Status",
+        "type": "string"
+      },
+      "tenant_id": {
+        "maxLength": 255,
+        "minLength": 1,
+        "title": "Tenant Id",
+        "type": "string"
+      },
+      "vehicle_id": {
+        "format": "uuid",
+        "title": "Vehicle Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "command_id",
+      "vehicle_id",
+      "tenant_id",
+      "command_type",
+      "status",
+      "created_at",
+      "expires_at"
+    ],
+    "title": "RequestedPayload",
+    "type": "object"
+  },
+  "event-envelope/1.0": {
+    "description": "Stable envelope shared by asynchronous platform events.",
+    "properties": {
+      "correlation_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Correlation Id"
+      },
+      "event_id": {
+        "title": "Event Id",
+        "type": "string"
+      },
+      "event_type": {
+        "title": "Event Type",
+        "type": "string"
+      },
+      "occurred_at": {
+        "format": "date-time",
+        "title": "Occurred At",
+        "type": "string"
+      },
+      "payload": {
+        "additionalProperties": true,
+        "title": "Payload",
+        "type": "object"
+      },
+      "schema_version": {
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "source": {
+        "title": "Source",
+        "type": "string"
+      },
+      "trace_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Trace Id"
+      }
+    },
+    "required": [
+      "event_id",
+      "event_type",
+      "schema_version",
+      "source",
+      "occurred_at",
+      "correlation_id",
+      "trace_id",
+      "payload"
+    ],
+    "title": "EventEnvelope",
+    "type": "object"
+  },
+  "mqtt-dispatch/1.0": {
+    "$defs": {
+      "RemoteCommandType": {
+        "enum": [
+          "lock",
+          "unlock",
+          "start",
+          "stop",
+          "honk",
+          "flash_lights"
+        ],
+        "title": "RemoteCommandType",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "command_id": {
+        "format": "uuid",
+        "title": "Command Id",
+        "type": "string"
+      },
+      "command_type": {
+        "$ref": "#/$defs/RemoteCommandType"
+      },
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "expires_at": {
+        "format": "date-time",
+        "title": "Expires At",
+        "type": "string"
+      },
+      "schema_version": {
+        "const": "1.0",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "tenant_id": {
+        "maxLength": 255,
+        "minLength": 1,
+        "title": "Tenant Id",
+        "type": "string"
+      },
+      "vehicle_id": {
+        "format": "uuid",
+        "title": "Vehicle Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "schema_version",
+      "command_id",
+      "vehicle_id",
+      "tenant_id",
+      "command_type",
+      "created_at",
+      "expires_at"
+    ],
+    "title": "DispatchPayload",
+    "type": "object"
+  },
+  "telemetry/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "battery_percent": {
+        "maximum": 100,
+        "minimum": 0,
+        "title": "Battery Percent",
+        "type": "number"
+      },
+      "event_id": {
+        "format": "uuid",
+        "title": "Event Id",
+        "type": "string"
+      },
+      "measured_at": {
+        "format": "date-time",
+        "title": "Measured At",
+        "type": "string"
+      },
+      "schema_version": {
+        "const": "1.0",
+        "default": "1.0",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "speed_kph": {
+        "maximum": 300,
+        "minimum": 0,
+        "title": "Speed Kph",
+        "type": "number"
+      },
+      "temperature_c": {
+        "maximum": 180,
+        "minimum": -80,
+        "title": "Temperature C",
+        "type": "number"
+      }
+    },
+    "required": [
+      "event_id",
+      "measured_at",
+      "speed_kph",
+      "battery_percent",
+      "temperature_c"
+    ],
+    "title": "TelemetrySample",
+    "type": "object"
+  }
+}

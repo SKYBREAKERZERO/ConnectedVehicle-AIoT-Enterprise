@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +22,16 @@ class Settings(BaseSettings):
     app_env: AppEnvironment = AppEnvironment.LOCAL
     api_service_token: SecretStr | None = None
     api_service_tenant_id: str | None = None
+    oidc_issuer: str | None = None
+    oidc_audience: str | None = None
+    oidc_jwks_url: str | None = None
+    oidc_public_key_file: str | None = None
+    oidc_token_profile: Literal["oidc", "cognito"] = "oidc"
+    oidc_tenant_claim: str = "tenant_id"
+    oidc_scope_prefix: str = ""
+    oidc_timeout_seconds: float = Field(default=3.0, gt=0, le=10)
+    metrics_token: SecretStr | None = None
+    otlp_endpoint: str | None = None
     app_host: str = "0.0.0.0"
     app_port: int = Field(default=8000, ge=1, le=65535)
 
@@ -97,6 +109,44 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime_contracts(self) -> Settings:
+        if self.metrics_token and len(self.metrics_token.get_secret_value()) < 32:
+            raise ValueError("Metrics token must contain at least 32 characters.")
+        if self.otlp_endpoint:
+            endpoint = urlsplit(self.otlp_endpoint)
+            if endpoint.scheme not in {"http", "https"} or not endpoint.hostname:
+                raise ValueError("OTLP exporter requires a valid HTTP(S) endpoint.")
+            if self.app_env not in {AppEnvironment.LOCAL, AppEnvironment.TEST} and (
+                endpoint.scheme != "https"
+                and endpoint.hostname not in {"localhost", "127.0.0.1", "::1"}
+            ):
+                raise ValueError("Remote OTLP export requires HTTPS.")
+        if self.oidc_issuer:
+            if not self.oidc_audience or not (self.oidc_jwks_url or self.oidc_public_key_file):
+                raise ValueError("OIDC requires issuer, audience and a trusted key source.")
+            if (
+                urlsplit(self.oidc_issuer).scheme != "https"
+                or not urlsplit(self.oidc_issuer).hostname
+            ):
+                raise ValueError("OIDC issuer requires HTTPS.")
+            if self.oidc_jwks_url and (
+                urlsplit(self.oidc_jwks_url).scheme != "https"
+                or not urlsplit(self.oidc_jwks_url).hostname
+            ):
+                raise ValueError("OIDC JWKS requires HTTPS.")
+            if self.oidc_public_key_file and self.app_env not in {
+                AppEnvironment.LOCAL,
+                AppEnvironment.TEST,
+            }:
+                raise ValueError("Static OIDC key fixtures are only supported locally.")
+        elif any((self.oidc_audience, self.oidc_jwks_url, self.oidc_public_key_file)):
+            raise ValueError("OIDC key configuration requires an issuer.")
+        if self.api_service_token and self.app_env not in {
+            AppEnvironment.LOCAL,
+            AppEnvironment.TEST,
+        }:
+            raise ValueError(
+                "Static API service tokens are only supported locally; configure OIDC."
+            )
         if bool(self.api_service_token) != bool(self.api_service_tenant_id):
             raise ValueError("API service token and tenant must be configured together.")
         if self.api_service_token and len(self.api_service_token.get_secret_value()) < 32:

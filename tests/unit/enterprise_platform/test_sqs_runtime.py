@@ -6,7 +6,6 @@ import pytest
 
 from enterprise_platform.cloud.client_factory import AWSClientFactory
 from enterprise_platform.config.environment import CloudRuntime
-from enterprise_platform.config.settings import Settings
 from enterprise_platform.messaging.sqs_runtime import (
     SQSGetQueueUrlResponse,
     SQSQueueLookupClient,
@@ -15,6 +14,7 @@ from enterprise_platform.messaging.sqs_runtime import (
     normalize_localstack_queue_url,
     resolve_sqs_queue_url,
 )
+from tests.settings_helpers import isolated_settings
 
 
 class FakeSQSLookupClient:
@@ -77,7 +77,7 @@ def test_resolve_sqs_queue_url_uses_configured_queue_name(
         client,
     )
 
-    settings = Settings(
+    settings = isolated_settings(
         cloud_runtime=CloudRuntime.LOCALSTACK,
         aws_endpoint_url="http://localhost:14566",
         _env_file=None,
@@ -103,7 +103,7 @@ def test_resolve_sqs_queue_url_rejects_missing_queue_url(
         client,
     )
 
-    settings = Settings(
+    settings = isolated_settings(
         cloud_runtime=CloudRuntime.LOCALSTACK,
         aws_endpoint_url="http://localhost:14566",
         _env_file=None,
@@ -131,7 +131,7 @@ def test_create_named_sqs_event_queue_uses_resolved_url(
         client,
     )
 
-    settings = Settings(
+    settings = isolated_settings(
         cloud_runtime=CloudRuntime.LOCALSTACK,
         aws_endpoint_url="http://localhost:14566",
         _env_file=None,

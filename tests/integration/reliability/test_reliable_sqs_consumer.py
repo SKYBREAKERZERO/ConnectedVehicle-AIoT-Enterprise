@@ -40,6 +40,7 @@ from enterprise_platform.reliability.idempotency import (
 )
 from enterprise_platform.reliability.redis_idempotency import (
     RedisIdempotencyStore,
+    RedisScriptClient,
 )
 
 
@@ -186,7 +187,7 @@ async def test_real_sqs_and_redis_process_event_once() -> None:
         )
 
         store = RedisIdempotencyStore(
-            redis_resources.client,
+            cast(RedisScriptClient, redis_resources.client),
             key_builder=key_builder,
         )
 
@@ -290,7 +291,7 @@ async def test_completed_event_is_not_reprocessed_after_ack_failure() -> None:
         )
 
         store = RedisIdempotencyStore(
-            redis_resources.client,
+            cast(RedisScriptClient, redis_resources.client),
             key_builder=key_builder,
         )
 

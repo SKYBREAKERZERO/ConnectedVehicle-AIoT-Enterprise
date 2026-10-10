@@ -4,6 +4,7 @@ from connected_vehicle.remote_command.domain import (
     RemoteCommand,
     RemoteCommandStatus,
 )
+from connected_vehicle.remote_command.wire_contracts import RequestedPayload
 from enterprise_platform.messaging.envelope import (
     EventEnvelope,
     create_event_envelope,
@@ -20,7 +21,7 @@ def create_remote_command_requested_event(
     if command.status is not RemoteCommandStatus.REQUESTED:
         raise ValueError("Remote command requested event requires a command in REQUESTED status.")
 
-    return create_event_envelope(
+    event = create_event_envelope(
         event_id=f"remote-command:{command.id.value}:requested",
         event_type=REMOTE_COMMAND_REQUESTED_EVENT_TYPE,
         source=REMOTE_COMMAND_EVENT_SOURCE,
@@ -34,3 +35,6 @@ def create_remote_command_requested_event(
             "expires_at": command.expires_at.isoformat(),
         },
     )
+
+    RequestedPayload.model_validate(event.payload)
+    return event

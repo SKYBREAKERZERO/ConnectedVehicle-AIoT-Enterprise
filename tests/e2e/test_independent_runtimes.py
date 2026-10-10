@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
 from uuid import uuid4
@@ -18,9 +19,12 @@ from uuid import uuid4
 import aiomqtt
 import boto3
 import httpx2 as httpx
+import jwt
 import pytest
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -95,6 +99,9 @@ async def exercise(tmp_path: Path) -> None:
                 "REDIS_",
                 "MQTT_",
                 "API_SERVICE_",
+                "OIDC_",
+                "METRICS_",
+                "OTLP_",
                 "APP_",
                 "WORKER_",
                 "OUTBOX_",
@@ -134,6 +141,38 @@ async def exercise(tmp_path: Path) -> None:
             "OUTBOX_LEASE_SECONDS": "15",
         }
     )
+
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key = tmp_path / "identity-public.pem"
+    public_key.write_bytes(
+        private.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    env.update(
+        {
+            "OIDC_ISSUER": "https://e2e.identity.example",
+            "OIDC_AUDIENCE": "vehicle-api",
+            "OIDC_PUBLIC_KEY_FILE": str(public_key),
+            "METRICS_TOKEN": uuid4().hex * 2,
+        }
+    )
+
+    def bearer(*, tenant: str = "e2e-tenant", vehicle: str | None = None) -> dict[str, str]:
+        now = datetime.now(UTC)
+        claims: dict[str, object] = {
+            "iss": env["OIDC_ISSUER"],
+            "aud": "vehicle-api",
+            "sub": "e2e-identity",
+            "iat": now,
+            "exp": now + timedelta(minutes=10),
+            "tenant_id": tenant,
+            "scope": "vehicle:command vehicle:read telemetry:read command:report telemetry:publish",
+            "principal_type": "device" if vehicle else "user",
+        }
+        if vehicle:
+            claims["vehicle_id"] = vehicle
+        return {"Authorization": "Bearer " + jwt.encode(claims, private, algorithm="RS256")}
 
     def start_container(service: str, port: int, image: str, *args: str) -> int:
         name = f"{prefix}-{service}"
@@ -330,6 +369,17 @@ async def exercise(tmp_path: Path) -> None:
             response = await http.post(path, headers=headers, json={"command_type": "lock"})
             assert response.status_code == 202, response.text
             command_id = response.json()["command_id"]
+            accepted_at = time.monotonic()
+            concurrent = await asyncio.gather(
+                *[
+                    http.post(path, headers=headers, json={"command_type": "lock"})
+                    for _ in range(20)
+                ]
+            )
+            acceptance_elapsed = time.monotonic() - accepted_at
+            assert all(result.status_code == 202 for result in concurrent)
+            assert all(result.json()["command_id"] == command_id for result in concurrent)
+            assert all(result.json()["created"] is False for result in concurrent)
 
             async def state_is(value: str, command: str = command_id) -> bool:
                 async with admin.connect() as connection:
@@ -417,6 +467,98 @@ async def exercise(tmp_path: Path) -> None:
                 with pytest.raises(TimeoutError):
                     async with asyncio.timeout(2):
                         await anext(subscriber.messages)
+                # A broker PUBACK is SENT; only a signed vehicle result completes execution.
+                result_path = f"/vehicles/{vehicle.id}/commands/{command_id}/reports"
+                device_headers = bearer(vehicle=str(vehicle.id))
+                ack = {
+                    "event_id": str(uuid4()),
+                    "status": "acknowledged",
+                    "occurred_at": datetime.now(UTC).isoformat(),
+                }
+                assert (await http.post(result_path, headers=bearer(), json=ack)).status_code == 403
+                assert (
+                    await http.post(
+                        result_path, headers=bearer(vehicle=str(foreign_vehicle.id)), json=ack
+                    )
+                ).status_code == 403
+                assert (
+                    await http.post(result_path, headers=device_headers, json=ack)
+                ).status_code == 200
+                await eventually(lambda: state_is("acknowledged"))
+                succeeded = ack | {"event_id": str(uuid4()), "status": "succeeded"}
+                results = await asyncio.gather(
+                    *[
+                        http.post(result_path, headers=device_headers, json=succeeded)
+                        for _ in range(10)
+                    ]
+                )
+                assert all(result.status_code == 200 for result in results)
+                await eventually(lambda: state_is("succeeded"))
+                assert (
+                    await http.post(
+                        result_path, headers=device_headers, json=ack | {"event_id": str(uuid4())}
+                    )
+                ).status_code == 200
+                status_path = f"/vehicles/{vehicle.id}/commands/{command_id}"
+                status_response = await http.get(status_path, headers=bearer())
+                assert status_response.json()["status"] == "succeeded"
+                assert (
+                    await http.get(status_path, headers=bearer(tenant="other-tenant"))
+                ).status_code == 404
+                telemetry_path = f"/vehicles/{vehicle.id}/telemetry"
+                sample = {
+                    "event_id": str(uuid4()),
+                    "measured_at": datetime.now(UTC).isoformat(),
+                    "speed_kph": 42,
+                    "battery_percent": 80,
+                    "temperature_c": 25,
+                }
+                uploads = await asyncio.gather(
+                    *[
+                        http.post(telemetry_path, headers=device_headers, json=sample)
+                        for _ in range(10)
+                    ]
+                )
+                assert all(result.status_code == 202 for result in uploads)
+                assert sum(result.json()["created"] for result in uploads) == 1
+                assert (
+                    await http.post(
+                        telemetry_path, headers=device_headers, json=sample | {"speed_kph": 43}
+                    )
+                ).status_code == 409
+                assert len((await http.get(telemetry_path, headers=bearer())).json()) == 1
+                assert (
+                    await http.get(telemetry_path, headers=bearer(tenant="other-tenant"))
+                ).json() == []
+                assert (
+                    await http.post(
+                        telemetry_path,
+                        headers=device_headers,
+                        json=sample | {"event_id": str(uuid4()), "battery_percent": 101},
+                    )
+                ).status_code == 422
+                assert (
+                    await http.post(
+                        telemetry_path,
+                        headers=device_headers,
+                        json=sample | {"event_id": str(uuid4())},
+                    )
+                ).status_code == 202
+                page = (
+                    await http.get(telemetry_path, headers=bearer(), params={"limit": 1})
+                ).json()
+                next_page = (
+                    await http.get(
+                        telemetry_path,
+                        headers=bearer(),
+                        params={
+                            "limit": 1,
+                            "before": page[0]["measured_at"],
+                            "before_event_id": page[0]["event_id"],
+                        },
+                    )
+                ).json()
+                assert len(next_page) == 1 and next_page[0]["event_id"] != page[0]["event_id"]
                 # Poison SQS event must eventually redrive; valid subsequent work still flows.
                 sqs.send_message(QueueUrl=queue_url, MessageBody="not-json")
                 response = await http.post(
@@ -490,6 +632,56 @@ async def exercise(tmp_path: Path) -> None:
                         )
 
                 await eventually(outbox_failed)
+        # A local restore drill verifies a usable backup, rather than file creation alone.
+        backup = subprocess.check_output(
+            ["docker", "exec", f"{prefix}-pg", "pg_dump", "-U", "postgres", "-Fc", "postgres"]
+        )
+        restore_started = time.monotonic()
+        docker("exec", f"{prefix}-pg", "createdb", "-U", "postgres", "restore_drill")
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-i",
+                f"{prefix}-pg",
+                "pg_restore",
+                "-U",
+                "postgres",
+                "--exit-on-error",
+                "-d",
+                "restore_drill",
+            ],
+            input=backup,
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        restored = create_database_engine(
+            settings.model_copy(update={"database_name": "restore_drill"})
+        )
+        try:
+            async with restored.connect() as connection:
+                assert await connection.scalar(text("SELECT count(*) FROM remote_commands")) == 3
+                assert await connection.scalar(text("SELECT count(*) FROM telemetry_samples")) == 2
+                assert await connection.scalar(text("SELECT count(*) FROM command_reports")) == 3
+                assert (
+                    await connection.scalar(
+                        text("SELECT status FROM remote_commands WHERE id=:id"), {"id": command_id}
+                    )
+                    == "succeeded"
+                )
+        finally:
+            await restored.dispose()
+        evidence = {
+            "scope": "isolated-local-docker",
+            "concurrent_idempotent_requests": 20,
+            "acceptance_elapsed_seconds": round(acceptance_elapsed, 3),
+            "restore_elapsed_seconds": round(time.monotonic() - restore_started, 3),
+            "restore_verified_commands": 3,
+            "restore_verified_telemetry_samples": 2,
+            "production_ha_proven": False,
+        }
+        (tmp_path / "resilience-evidence.json").write_text(json.dumps(evidence, indent=2))
         # Real process termination signal, no forced terminate in the success path.
         for role in ["outbox", "remote_command", "api"]:
             process = processes[role]

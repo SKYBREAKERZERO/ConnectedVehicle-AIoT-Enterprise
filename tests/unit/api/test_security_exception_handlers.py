@@ -9,7 +9,7 @@ from enterprise_platform.observability.middleware import (
     REQUEST_ID_HEADER,
     http_observability_middleware,
 )
-from enterprise_platform.security.authorization import (
+from enterprise_platform.security.exceptions import (
     AuthenticationRequiredError,
     AuthorizationDeniedError,
 )
