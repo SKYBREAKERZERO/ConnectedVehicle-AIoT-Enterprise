@@ -50,7 +50,7 @@ Cognito 设 `OIDC_TOKEN_PROFILE=cognito`，audience 是 app client ID，校验 a
 # 审阅过期命令后追加 --apply；每批最多 100，终态不再重复更新
 ```
 
-Outbox 重放仅允许 FAILED、预期尝试次数、有效契约和原始 command／tenant／vehicle／类型／时间匹配、未发送且未过期的命令。重放不修改事件 ID／payload，不清除 Redis 去重，不重置已成功命令。审计写入与恢复 pending 在同一事务中完成。过期或已执行命令需要业务授权后发新命令。
+Outbox 重放仅允许 FAILED、预期尝试次数、有效契约和原始 command／tenant／vehicle／类型／时间匹配、未发送且未过期的命令。重放不修改事件 ID／payload，不清除 Redis 去重，不重置已成功命令。整个链路为至少一次投递：发布成功但落库前崩溃仍可能重复 MQTT 下发，车辆固件必须按 command_id 持久化去重。审计写入与恢复 pending 在同一事务中完成。过期或已执行命令需要业务授权后发新命令。
 
 ```powershell
 .\.venv\Scripts\python.exe -m database.operations dlq-redrive --source-url <dlq-url> --destination-url <original-queue-url> --operation-id <new-uuid> --actor <operator-id> --reason <incident-reference> --rate 1
@@ -86,3 +86,15 @@ Runtime Gate 运行全仓库 ruff／mypy 与真实依赖测试；契约快照与
 `python -m scripts.aws_acceptance --target <owned-target.json> --report <report.json>` 只读检查显式账号及资源，不创建／修改 AWS，不读取 Secret value；输出仅验收结果。target 字段为 account、region、database_id、cache_id、cluster、services（api/outbox/remote-command）、queue_url、dlq_url、secrets（三种 runtime Secret ID）、roles（三种 IAM role ARN）、alarm_names。成功仅证明所列配置检查通过，不能证明车辆链路、负载能力或故障转移；这些需另外运行真实 AWS 演练。
 
 E2E 生成临时 `resilience-evidence.json`，记录 20 次并发同幂等键请求耗时和新数据库恢复核对耗时；不会当作生产 p95／吞吐量／RPO／RTO。CI 的 Docker 本地恢复也不能证明多 AZ 切换或跨区域灾备。真实验收应记录部署 SHA／镜像 digest、故障时间、恢复时间、丢失／重复命令与遥测数、备份时间、恢复点及目标阈值。
+
+## 2026-10-10 验收记录
+
+已验证 GitHub PR #1 的同一提交 `3022b859c2858846a6f9715fa8fa1052657ff01c`：
+
+- [IaC quality gate：Success](https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/actions/runs/38021682691)
+- [Runtime quality gate：Success](https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/actions/runs/38021682746)
+- main 分支保护已由仓库管理员身份配置，独立 --verify 读回成功，两条检查绑定 GitHub Actions app 15368。
+
+新增工作区修改的本地验证：484 项 unit／contract／独立进程 E2E／真实 PostgreSQL 权限测试通过；ruff check、ruff format --check、全仓库 mypy 通过。运维审计最后调整后，真实 PostgreSQL 相关测试再次通过。完整 IaC Gate 为 19 次契约测试、两次安全扫描、变更与解析后策略检查通过，第二次 plan exit code 0。Local／Dev Terraform validate 与递归 fmt 检查成功。
+
+Prometheus promtool 验证三条告警规则成功；OpenTelemetry Collector 0.160.0 validate 成功。新增工作区代码尚需提交后在同一 SHA 重新取得两条 GitHub Success；以上远端绿色结果不覆盖未提交修改。AWS 当前 User_test 对 DescribeVpcs、ListClusters、DescribeDBInstances、ListSecrets 收到 IAM AccessDenied，未进行真实 AWS apply 或 HA 故障注入。

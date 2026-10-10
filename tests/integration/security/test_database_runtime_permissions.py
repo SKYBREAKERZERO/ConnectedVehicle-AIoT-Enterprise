@@ -22,7 +22,7 @@ from connected_vehicle.remote_command.persistence.models import RemoteCommandMod
 from connected_vehicle.remote_command.service import IssueRemoteCommandService
 from connected_vehicle.vehicle import VIN, Vehicle, VehicleId, VehicleStatus
 from connected_vehicle.vehicle.persistence.repository import SQLAlchemyVehicleRepository
-from database.dlq_operations import redrive
+from database.dlq_operations import redrive, redrive_status
 from database.operations import reconcile, replay_outbox, timeout_commands
 from database.provision_runtime_credentials import SQLDriver, provision
 from enterprise_platform.config.settings import Settings
@@ -271,6 +271,33 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
         with pytest.raises(ValueError, match="Ambiguous"):
             await redrive(owner_sessions, client, **dlq_options, apply=True, allow_bulk=True)
         client.start_message_move_task.assert_called_once()
+        confirmed_id = str(uuid4())
+        client.start_message_move_task.side_effect = None
+        client.start_message_move_task.return_value = {"TaskHandle": "confirmed-task"}
+        started = await redrive(
+            owner_sessions,
+            client,
+            **(dlq_options | {"operation_id": confirmed_id}),
+            apply=True,
+            allow_bulk=True,
+        )
+        assert started["state"] == "started"
+        client.list_message_move_tasks.return_value = {
+            "Results": [
+                {
+                    "TaskHandle": "confirmed-task",
+                    "Status": "COMPLETED",
+                    "ApproximateNumberOfMessagesMoved": 2,
+                }
+            ]
+        }
+        assert (await redrive_status(owner_sessions, client, operation_id=confirmed_id))[
+            "Status"
+        ] == "COMPLETED"
+        async with owner_sessions() as session:
+            action = await session.get(OperatorActionModel, confirmed_id)
+            assert action and action.state == "complete"
+
         denied = {
             "app_user": [
                 "UPDATE remote_commands SET tenant_id = tenant_id",

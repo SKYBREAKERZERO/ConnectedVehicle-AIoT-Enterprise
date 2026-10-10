@@ -169,7 +169,11 @@ async def replay_outbox(
         payload = RequestedPayload.model_validate(event.payload)
         if event.event_id != f"remote-command:{payload.command_id}:requested":
             raise ValueError("Invalid deterministic event identity.")
-        command = await session.get(RemoteCommandModel, str(payload.command_id))
+        command = await session.scalar(
+            select(RemoteCommandModel)
+            .where(RemoteCommandModel.id == str(payload.command_id))
+            .with_for_update()
+        )
         if (
             command is None
             or command.tenant_id != payload.tenant_id
