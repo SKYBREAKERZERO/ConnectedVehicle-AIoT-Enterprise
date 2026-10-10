@@ -115,8 +115,13 @@ class DeviceDataService:
             return True
 
     async def query(
-        self, *, tenant: str, vehicle: str, limit: int, before: datetime | None = None,
-        before_event_id: str | None = None
+        self,
+        *,
+        tenant: str,
+        vehicle: str,
+        limit: int,
+        before: datetime | None = None,
+        before_event_id: str | None = None,
     ) -> list[dict[str, object]]:
         async with self.sessions() as session:
             statement = select(TelemetrySampleModel).where(
