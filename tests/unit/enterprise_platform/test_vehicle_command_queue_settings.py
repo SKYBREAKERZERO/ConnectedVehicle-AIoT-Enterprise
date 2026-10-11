@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from tests.settings_helpers import isolated_settings
+from tests.settings_helpers import environment_settings, isolated_settings
 
 
 def test_vehicle_command_queue_has_stable_default() -> None:
@@ -20,7 +20,7 @@ def test_vehicle_command_queue_can_be_configured(
         "connected-vehicle-command-dev",
     )
 
-    settings = isolated_settings(_env_file=None)
+    settings = environment_settings()
 
     assert settings.vehicle_command_queue_name == "connected-vehicle-command-dev"
 
