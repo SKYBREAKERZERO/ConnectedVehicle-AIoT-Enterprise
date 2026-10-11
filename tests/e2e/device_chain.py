@@ -48,6 +48,7 @@ async def exercise_device_chain(
     processes: dict[str, subprocess.Popen[bytes]],
     log: Callable[[str], str],
     restart_broker: Callable[[], object],
+    hard_restart_broker: Callable[[], object],
 ) -> None:
     tbox_db, body_db = tmp_path / "tbox.sqlite", tmp_path / "body.sqlite"
     token_file = tmp_path / "device.jwt"
@@ -180,10 +181,6 @@ async def exercise_device_chain(
                 ).fetchone()[0]
             )
 
-    async def pressure_observed(previous: int) -> bool:
-        assert processes["tbox"].poll() is None, log("tbox")
-        return log("tbox").count("CapacityError") > previous
-
     async def durable_result(command: str) -> bool:
         with sqlite3.connect(tbox_db) as db:
             row = db.execute("SELECT state FROM commands WHERE id=?", (command,)).fetchone()
@@ -233,8 +230,8 @@ async def exercise_device_chain(
                 == 2
             )
         unsupported = await issue("day11-unsupported", "honk")
-        previous_pressure = log("tbox").count("CapacityError")
-        await eventually(lambda: pressure_observed(previous_pressure))
+        # The cloud must withhold subsequent vehicle commands while the result is undelivered.
+        await asyncio.sleep(0.5)
         with sqlite3.connect(tbox_db) as db:
             assert (
                 db.execute("SELECT 1 FROM commands WHERE id=?", (unsupported,)).fetchone() is None
@@ -273,6 +270,11 @@ async def exercise_device_chain(
         await start_tbox()
         await eventually(lambda: state(fifth, "succeeded"))
         assert count_executions(fifth) == 1
+        # Abrupt broker process death, without graceful shutdown, must reconnect.
+        await asyncio.to_thread(hard_restart_broker)
+        sixth = await issue("day11-broker-power-cut")
+        await eventually(lambda: state(sixth, "succeeded"))
+        assert count_executions(sixth) == 1
         # Exercise the same operator inspection commands documented for recovery.
         snapshots = {}
         for role, module, arguments in (
@@ -289,21 +291,22 @@ async def exercise_device_chain(
                 timeout=8,
             )
             snapshots[role] = json.loads(output)
-        assert len(snapshots["tbox"]["commands"]) == 5
-        assert len(snapshots["tbox"]["reports"]) == 10
+        assert len(snapshots["tbox"]["commands"]) == 6
+        assert len(snapshots["tbox"]["reports"]) == 12
         assert all(row["state"] == "delivered" for row in snapshots["tbox"]["reports"])
-        assert len(snapshots["gateway"]["routes"]) == 4
+        assert len(snapshots["gateway"]["routes"]) == 5
         assert all(row["state"] == "completed" for row in snapshots["gateway"]["routes"])
-        assert len(snapshots["body"]["executions"]) == 4
+        assert len(snapshots["body"]["executions"]) == 5
         assert snapshots["body"]["locked"] is True
         evidence = {
             "scope": "local-virtual-can",
             "independent_processes": 6,
-            "commands": [first, second, third, unsupported, fifth],
+            "commands": [first, second, third, unsupported, fifth, sixth],
             "crash_recovery": ["command_commit", "route_commit", "ecu_commit", "result_commit"],
             "http_outage_recovered": True,
             "broker_restart_recovered": True,
-            "capacity_backpressure_recovered": True,
+            "broker_sigkill_recovered": True,
+            "vehicle_order_backpressure_recovered": True,
             "duplicate_execution_count": 1,
             "physical_can_proven": False,
         }

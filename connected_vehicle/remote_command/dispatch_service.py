@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from connected_vehicle.remote_command.dispatching import (
@@ -31,6 +32,10 @@ from enterprise_platform.messaging.exceptions import InvalidMessageError
 
 class RemoteCommandDispatchError(RuntimeError):
     """Base error for remote-command dispatch processing."""
+
+
+class RemoteCommandOrderPendingError(RemoteCommandDispatchError):
+    """Retry through SQS while an earlier issued vehicle command is unfinished."""
 
 
 class RemoteCommandDispatchCommandNotFoundError(RemoteCommandDispatchError):
@@ -146,6 +151,23 @@ class RemoteCommandDispatchService:
                     or command.expires_at != expected.expires_at
                 ):
                     raise InvalidMessageError()
+
+                predecessor = await uow.session.scalar(
+                    text("""SELECT EXISTS (
+                        SELECT 1 FROM remote_commands earlier
+                        JOIN remote_commands current ON current.id=:id
+                        WHERE earlier.tenant_id=current.tenant_id
+                          AND earlier.vehicle_id=current.vehicle_id
+                          AND earlier.dispatch_order<current.dispatch_order
+                          AND earlier.status IN
+                            ('requested','queued','dispatching','sent','acknowledged')
+                    )"""),
+                    {"id": command_id.value},
+                )
+                if predecessor and not command.is_terminal:
+                    raise RemoteCommandOrderPendingError(
+                        "Earlier vehicle command requires terminal reconciliation"
+                    )
 
                 action = decide_remote_command_dispatch_action(
                     command,

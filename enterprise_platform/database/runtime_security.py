@@ -57,6 +57,13 @@ async def verify_runtime_database_security(engine: AsyncEngine, runtime: Databas
               AND a.attname='tenant_id' AND a.attgenerated='s' AND NOT a.attisdropped
         """)
         )
+        dispatch_order = await connection.scalar(
+            text("""SELECT count(*) FROM pg_attribute a
+                JOIN pg_class c ON c.oid=a.attrelid
+                JOIN pg_namespace n ON n.oid=c.relnamespace
+                WHERE n.nspname='public' AND c.relname='remote_commands'
+                  AND a.attname='dispatch_order' AND a.attidentity='a' AND NOT a.attisdropped""")
+        )
         # Catalogs reveal structure without granting workers access to other runtimes' tables.
-        if protected != 5 or generated_tenant != 1:
+        if protected != 5 or generated_tenant != 1 or dispatch_order != 1:
             raise RuntimeError("Unsafe runtime database schema; apply tenant RLS migrations")

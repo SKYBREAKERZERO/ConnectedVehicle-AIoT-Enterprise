@@ -27,6 +27,7 @@ class DeviceSettings(BaseSettings):
     allow_insecure_local: bool = False
     can_port: int = Field(default=19000, ge=1, le=65535)
     gateway_port: int = Field(default=19002, ge=1, le=65535)
+    max_ledger_records: int = Field(default=100000, ge=1)
     max_pending_commands: int = Field(default=1000, ge=1)
     max_quarantine_records: int = Field(default=1000, ge=1)
     min_free_bytes: int = Field(default=33554432, ge=0)

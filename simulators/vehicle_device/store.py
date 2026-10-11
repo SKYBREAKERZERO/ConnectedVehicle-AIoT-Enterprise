@@ -36,13 +36,20 @@ class Store:
         max_pending_commands: int = 1000,
         max_quarantine_records: int = 1000,
         min_free_bytes: int = 33554432,
+        max_ledger_records: int = 100000,
     ) -> None:
-        if max_pending_commands < 1 or max_quarantine_records < 1 or min_free_bytes < 0:
+        if (
+            max_pending_commands < 1
+            or max_quarantine_records < 1
+            or min_free_bytes < 0
+            or max_ledger_records < 1
+        ):
             raise ValueError("invalid_device_capacity_limits")
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self.max_pending_commands = max_pending_commands
         self.max_quarantine_records = max_quarantine_records
+        self.max_ledger_records = max_ledger_records
         self.min_free_bytes = min_free_bytes
         self.db = sqlite3.connect(path)
         try:
@@ -68,6 +75,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS device_identity (
                     id INTEGER PRIMARY KEY CHECK(id=1), tenant_id TEXT NOT NULL,
                     vehicle_id TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS archived_commands (
+                    id TEXT PRIMARY KEY, payload_sha256 TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS faults (name TEXT PRIMARY KEY);
                 CREATE TABLE IF NOT EXISTS report_replays (
@@ -161,6 +171,22 @@ class Store:
                 if previous["payload"] != payload:
                     raise ValueError("command_id_payload_conflict")
                 return False
+            archived = self.db.execute(
+                "SELECT payload_sha256 FROM archived_commands WHERE id=?", (command_id,)
+            ).fetchone()
+            if archived:
+                if archived[0] != hashlib.sha256(payload.encode()).hexdigest():
+                    raise ValueError("command_id_payload_conflict")
+                return False
+            if (
+                self.db.execute(
+                    "SELECT (SELECT count(*) FROM commands)"
+                    "+(SELECT count(*) FROM archived_commands)"
+                    "+(SELECT count(*) FROM report_replays)"
+                ).fetchone()[0]
+                >= self.max_ledger_records
+            ):
+                raise CapacityError("device_ledger_capacity_reached_archive_or_expand")
             self._check_space()
             outstanding = self.db.execute(
                 "SELECT count(*) FROM (SELECT id FROM commands WHERE state='pending' "
@@ -235,8 +261,11 @@ class Store:
         if retry_after is not None and retry_after > 86400:
             error_code = "HTTP_RETRY_AFTER_TOO_LONG"
         delivered = error_code is None and status is not None and 200 <= status < 300
-        blocked = error_code is not None or (
-            status is not None and 300 <= status < 500 and status not in (401, 403, 408, 429)
+        auth_exhausted = status in (401, 403) and attempts >= 7
+        blocked = (
+            auth_exhausted
+            or error_code is not None
+            or (status is not None and 300 <= status < 500 and status not in (401, 403, 408, 429))
         )
         with self.db:
             self.db.execute(
@@ -245,7 +274,11 @@ class Store:
                 (
                     "delivered" if delivered else "blocked" if blocked else "pending",
                     time.time() + max(backoff(attempts, 30), min(86400, max(0, retry_after or 0))),
-                    None if delivered else error_code or str(status or "transport_error"),
+                    None
+                    if delivered
+                    else "AUTH_RETRY_EXHAUSTED"
+                    if auth_exhausted
+                    else error_code or str(status or "transport_error"),
                     sequence,
                 ),
             )
@@ -294,6 +327,13 @@ class Store:
                 if tuple(existing) != (event_id, actor, reason):
                     raise ValueError("replay_operation_id_conflict")
                 return False
+            records = self.db.execute(
+                "SELECT (SELECT count(*) FROM commands)"
+                "+(SELECT count(*) FROM archived_commands)"
+                "+(SELECT count(*) FROM report_replays)"
+            ).fetchone()[0]
+            if records >= self.max_ledger_records:
+                raise CapacityError("device_ledger_capacity_reached_archive_or_expand")
             report = self.db.execute(
                 "SELECT sequence,state,error FROM reports "
                 "WHERE json_extract(payload,'$.event_id')=?",
@@ -367,6 +407,19 @@ class Store:
                     "sqlite_bytes": self.db.execute("PRAGMA page_count").fetchone()[0]
                     * self.db.execute("PRAGMA page_size").fetchone()[0],
                     "disk_free_bytes": shutil.disk_usage(self.path.parent).free,
+                    "archived_command_count": self.db.execute(
+                        "SELECT count(*) FROM archived_commands"
+                    ).fetchone()[0],
+                    "ledger_capacity": self.max_ledger_records,
+                    "ledger_records": self.db.execute(
+                        "SELECT (SELECT count(*) FROM commands)"
+                        "+(SELECT count(*) FROM archived_commands)"
+                        "+(SELECT count(*) FROM report_replays)"
+                    ).fetchone()[0],
+                    "auth_blocked_reports": self.db.execute(
+                        "SELECT count(*) FROM reports WHERE state='blocked' "
+                        "AND error='AUTH_RETRY_EXHAUSTED'"
+                    ).fetchone()[0],
                 },
                 "page": {"limit": limit, "offset": offset},
                 "commands": [

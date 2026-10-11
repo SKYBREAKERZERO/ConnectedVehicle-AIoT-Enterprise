@@ -92,8 +92,9 @@ The Runtime quality gate now provisions PostgreSQL, Redis and LocalStack integra
 services, applies Alembic with migration-only credentials, and runs real Redis and
 SQS deduplication regression tests. These verify cached completion and a second SQS
 delivery publishing nothing, in addition to the isolated least-privilege role tests
-and independent runtime E2E. GitHub execution and branch protection are still external
-acceptance items.
+and independent runtime E2E. PR #3 commit 1461085 passed Runtime run 38126478420
+and IaC run 38126478433. Main requires both gates with strict branch protection
+and administrator enforcement. Later changes require new runs for their own SHA.
 
 Local acceptance does not isolate administrator files from other programs running as the same operating-system user. Production runtime task environments and filesystem access must exclude migration credentials; the startup guard verifies database connection privileges.
 
@@ -123,3 +124,21 @@ Additional evidence: .runtime-reports/local-runtime-iam-security.json,
 .runtime-reports/local-security-terraform-apply.txt and
 .runtime-reports/local-security-terraform-second-plan.txt. These files and local
 backups are ignored by Git; no credential values were included in the reports.
+
+## Fail-closed role coverage and authoritative vehicle order
+
+Migration a37e610c952d removes the three-runtime-name exemption: every non-owner,
+non-BYPASSRLS role must bind tenant scope. The sole explicit cross-tenant exception
+is the Outbox dispatcher on outbox_events, whose grants remain limited to dispatch
+columns. A newly named role with direct SELECT grants sees zero rows without scope;
+the real PostgreSQL integration test proves this. New roles do not inherit blanket
+access. Migration/backup owners remain privileged and must never be runtime identities.
+
+Remote commands gain an always-generated database dispatch_order. Existing rows are
+ordered by created_at and ID at cutover. API issuance takes a transaction-local
+vehicle advisory lock before inserting, so concurrent instances commit in order.
+Publishers refuse a command while a lower-order command for the same tenant/vehicle
+is requested, queued, dispatching, sent or acknowledged. Terminal reconciliation
+releases the next command; a PUBACK alone does not release it. Transport retries of
+the same command remain safe through persistent device deduplication. See the new
+operational contract in DAY11_HARDENING.md, including stalled-vehicle recovery.

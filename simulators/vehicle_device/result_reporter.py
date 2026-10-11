@@ -8,6 +8,7 @@ and JSON body. The transport is injected (normally httpx2.AsyncClient).
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -52,6 +53,8 @@ def _transport_exceptions() -> tuple[type[Exception], ...]:
         return (TimeoutError, OSError)
     return (TimeoutError, OSError, httpx2.TransportError)
 
+
+logger = logging.getLogger(__name__)
 
 MAX_RETRY_AFTER_SECONDS = 86_400
 
@@ -188,6 +191,8 @@ class DeviceResultReporter:
                 return "blocked"
             await self._retry(report, "HTTP_RETRYABLE", now=now, retry_after=retry_after)
             return "deferred"
+        if status in (401, 403):
+            logger.error("device_report_auth_blocked requires_credential_repair_and_audited_replay")
         # Do not log response bodies or blindly retry authentication/business conflicts.
         await asyncio.to_thread(self._store.block, report, error_code=f"HTTP_{status}")
         return "blocked"

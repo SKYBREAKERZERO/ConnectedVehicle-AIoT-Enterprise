@@ -1,3 +1,5 @@
+> 当前安全与运维契约见 [DAY11_HARDENING.md](DAY11_HARDENING.md)。下方各轮验收数字和“未验证”描述为历史记录；最新交付以 PR #3 与匹配提交的 GitHub Actions 证据为准。
+
 # Day11：持久化设备链路与三个独立设备进程
 
 本阶段实现的是本地设备仿真。保留现有 API、Outbox、Remote Command 三个进程，
@@ -250,7 +252,7 @@ Body ECU 绑定失败会关闭 SQLite；Gateway 第二个总线绑定失败也�
 - 修复上限处 jitter 消失：先限定指数基数再随机化，T-Box 与 Gateway 到达上限后仍使用不同等待时间。
 - 终态 succeeded / failed 上报必须收到相同终态回执，否则保留原事件并阻断。ACK 上报仍允许云端已经进入终态。HTTP_REDIRECT_BLOCKED / HTTP_INVALID_RECEIPT 使用明确错误码，不伪装成服务端 422。
 - result_commit 故障注入也覆盖设备本地判断的未支持命令与首次过期命令，不仅覆盖 CAN 响应。
-- --reconcile 新增 health：全部账本的 command_states、report_states、report_attempts、最早未送达事件时间、SQLite 分配页字节数及磁盘可用空间。这些统计与分页无关；页字节数不是含 WAL 的文件总量，也不是自动告警部署。输出不包含 Token 或原始 HTTP 响应。归档、告警阈值和部署仍待实现。
+- --reconcile 新增 health：全部账本的 command_states、report_states、report_attempts、最早未送达事件时间、SQLite 分配页字节数及磁盘可用空间。这些统计与分页无关；页字节数不是含 WAL 的文件总量，也不是自动告警部署。输出不包含 Token 或原始 HTTP 响应。当前归档和告警契约见 DAY11_HARDENING.md。
 
 工作区另外存在 DeviceExecutionStore / DeviceResultReporter 独立组件；该组件的响应 Protocol 改为只读属性，并消除指数计算的 Any 类型，使不可变响应测试对象也满足类型契约。它尚未接入当前六进程主链路，不能把它的额外能力当作主链路已部署能力。
 

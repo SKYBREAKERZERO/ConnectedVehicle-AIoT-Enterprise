@@ -46,7 +46,9 @@ END $$;
 GRANT USAGE ON SCHEMA public TO app_user, outbox_worker, remote_command_worker;
 -- Current API reads vehicles and commands, inserts commands and outbox events.
 GRANT SELECT ON public.vehicles, public.remote_commands TO app_user;
-GRANT INSERT ON public.remote_commands, public.outbox_events TO app_user;
+GRANT INSERT (id,vehicle_id,tenant_id,command_type,status,idempotency_key,
+              created_at,updated_at,expires_at) ON public.remote_commands TO app_user;
+GRANT INSERT ON public.outbox_events TO app_user;
 GRANT SELECT ON public.outbox_events TO outbox_worker;
 GRANT UPDATE (status, attempts, available_at, claim_token, lease_expires_at, published_at, failed_at, failure_code, failure_reason)
   ON public.outbox_events TO outbox_worker;

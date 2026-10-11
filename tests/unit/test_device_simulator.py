@@ -742,3 +742,45 @@ def test_health_totals_cover_all_pages(tmp_path: Path) -> None:
         assert health["oldest_unfinished_report_at"] is not None
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_auth_retry_exhaustion_survives_restart_and_blocks_result(
+    tmp_path: Path, status: int
+) -> None:
+    config = settings(tmp_path)
+    store = Store(config.database)
+    store.bind_identity(config.tenant_id, str(config.vehicle_id))
+    command = payload(config)
+    store.accept(command)
+    store.finish(str(command.command_id))
+    ack = store.pending_report()
+    assert ack is not None
+    for attempt in range(8):
+        store.report_result(ack["sequence"], status, attempt)
+    store.close()
+    recovered = Store(config.database)
+    try:
+        assert recovered.pending_report() is None
+        row = recovered.db.execute(
+            "SELECT state,error,attempts FROM reports WHERE sequence=?", (ack["sequence"],)
+        ).fetchone()
+        assert tuple(row) == ("blocked", "AUTH_RETRY_EXHAUSTED", 8)
+        health = recovered.reconcile()["health"]
+        assert isinstance(health, dict) and health["auth_blocked_reports"] == 1
+    finally:
+        recovered.close()
+
+
+def test_ledger_limit_preserves_duplicate_ack_and_rejects_new_work(tmp_path: Path) -> None:
+    config = settings(tmp_path)
+    store = Store(config.database, max_ledger_records=1)
+    command = payload(config)
+    try:
+        assert store.accept(command)
+        assert not store.accept(command)
+        with pytest.raises(CapacityError, match="ledger_capacity"):
+            store.accept(payload(config))
+        assert store.db.execute("SELECT count(*) FROM commands").fetchone()[0] == 1
+    finally:
+        store.close()

@@ -586,6 +586,17 @@ async def exercise(tmp_path: Path, *, device_chain: bool = False) -> None:
                     message = await anext(subscriber.messages)
                 assert json.loads(bytes(message.payload))["command_id"] == second
                 await eventually(lambda: state_is("sent", second))
+                assert (
+                    await http.post(
+                        f"/vehicles/{vehicle.id}/commands/{second}/reports",
+                        headers=device_headers,
+                        json={
+                            "event_id": str(uuid4()),
+                            "status": "succeeded",
+                            "occurred_at": datetime.now(UTC).isoformat(),
+                        },
+                    )
+                ).status_code == 200
 
                 async def poison_redriven() -> bool:
                     result = await asyncio.to_thread(
@@ -621,6 +632,17 @@ async def exercise(tmp_path: Path, *, device_chain: bool = False) -> None:
                     message = await anext(subscriber.messages)
                 assert json.loads(bytes(message.payload))["command_id"] == third
                 await eventually(lambda: state_is("sent", third))
+                assert (
+                    await http.post(
+                        f"/vehicles/{vehicle.id}/commands/{third}/reports",
+                        headers=device_headers,
+                        json={
+                            "event_id": str(uuid4()),
+                            "status": "succeeded",
+                            "occurred_at": datetime.now(UTC).isoformat(),
+                        },
+                    )
+                ).status_code == 200
                 # Malformed Outbox item is isolated and persisted FAILED, not retried forever.
                 async with admin.begin() as connection:
                     await connection.execute(
@@ -664,6 +686,10 @@ async def exercise(tmp_path: Path, *, device_chain: bool = False) -> None:
                     processes,
                     log,
                     lambda: docker("restart", f"{prefix}-mqtt"),
+                    lambda: (
+                        docker("kill", "--signal=KILL", f"{prefix}-mqtt"),
+                        docker("start", f"{prefix}-mqtt"),
+                    ),
                 )
         # A local restore drill verifies a usable backup, rather than file creation alone.
         backup = subprocess.check_output(
@@ -695,11 +721,11 @@ async def exercise(tmp_path: Path, *, device_chain: bool = False) -> None:
         try:
             async with restored.connect() as connection:
                 assert await connection.scalar(text("SELECT count(*) FROM remote_commands")) == (
-                    8 if device_chain else 3
+                    9 if device_chain else 3
                 )
                 assert await connection.scalar(text("SELECT count(*) FROM telemetry_samples")) == 2
                 assert await connection.scalar(text("SELECT count(*) FROM command_reports")) == (
-                    13 if device_chain else 3
+                    17 if device_chain else 5
                 )
                 assert (
                     await connection.scalar(
@@ -714,7 +740,7 @@ async def exercise(tmp_path: Path, *, device_chain: bool = False) -> None:
             "concurrent_idempotent_requests": 20,
             "acceptance_elapsed_seconds": round(acceptance_elapsed, 3),
             "restore_elapsed_seconds": round(time.monotonic() - restore_started, 3),
-            "restore_verified_commands": 8 if device_chain else 3,
+            "restore_verified_commands": 9 if device_chain else 3,
             "restore_verified_telemetry_samples": 2,
             "production_ha_proven": False,
         }

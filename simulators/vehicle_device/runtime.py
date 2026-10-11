@@ -247,6 +247,12 @@ async def report_once(store: Store, settings: DeviceSettings, client: httpx.Asyn
     store.report_result(
         row["sequence"], status, row["attempts"], retry_after, error_code=error_code
     )
+    if status in (401, 403) and row["attempts"] >= 7:
+        logger.error(
+            "device_report_auth_exhausted event_sequence=%s "
+            "requires_credential_repair_and_audited_replay",
+            row["sequence"],
+        )
     if status is not None and not 200 <= status < 300:
         logger.warning("device_report_http_status=%s", status)
     return True
@@ -263,6 +269,7 @@ async def _serve(settings: DeviceSettings) -> None:
     store = Store(
         settings.database,
         max_pending_commands=settings.max_pending_commands,
+        max_ledger_records=settings.max_ledger_records,
         max_quarantine_records=settings.max_quarantine_records,
         min_free_bytes=settings.min_free_bytes,
     )

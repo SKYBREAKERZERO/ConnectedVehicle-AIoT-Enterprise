@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import Mock
@@ -7,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from connected_vehicle.remote_command.domain import RemoteCommandType
 from simulators.body_ecu.service import BodyStore
 from simulators.gateway.service import GatewayStore
 from simulators.vehicle_device.can import command_frame
@@ -155,5 +157,91 @@ def test_bound_ledger_rejects_foreign_commands_without_explicit_rebind(tmp_path:
             recovered.accept(payload(config).model_copy(update={"vehicle_id": uuid4()}))
         assert recovered.db.execute("SELECT count(*) FROM commands").fetchone()[0] == 0
         assert recovered.db.execute("SELECT count(*) FROM reports").fetchone()[0] == 0
+    finally:
+        recovered.close()
+
+
+def test_corrupt_disk_is_rejected_and_verified_backup_recovers(tmp_path: Path) -> None:
+    config = settings(tmp_path)
+    store = Store(config.database)
+    command = payload(config)
+    store.bind_identity(config.tenant_id, str(config.vehicle_id))
+    store.accept(command)
+    store.close()
+    backup = tmp_path / "backup.sqlite"
+    snapshot(config.database, backup)
+    config.database.write_bytes(b"corrupted disk header" * 100)
+    with pytest.raises(sqlite3.DatabaseError):
+        Store(config.database)
+    with pytest.raises(sqlite3.DatabaseError):
+        snapshot(config.database, tmp_path / "invalid.sqlite")
+    assert not (tmp_path / "invalid.sqlite").exists()
+    snapshot(backup, tmp_path / "recovered.sqlite")
+    recovered = Store(tmp_path / "recovered.sqlite")
+    try:
+        recovered.bind_identity(config.tenant_id, str(config.vehicle_id))
+        assert not recovered.accept(command)
+        report = recovered.pending_report()
+        assert report is not None and report["command_id"] == str(command.command_id)
+    finally:
+        recovered.close()
+
+
+def test_archive_keeps_dedup_and_unfinished_reports(tmp_path: Path) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from simulators.vehicle_device.maintenance import archive
+
+    config = settings(tmp_path)
+    command = payload(config).model_copy(
+        update={
+            "created_at": datetime.now(UTC) - timedelta(days=3),
+            "expires_at": datetime.now(UTC) - timedelta(days=2),
+        }
+    )
+    store = Store(config.database)
+    store.bind_identity(config.tenant_id, str(config.vehicle_id))
+    store.accept(command)
+    store.finish(str(command.command_id))
+    assert (
+        archive(
+            config.database,
+            tmp_path / "unfinished.sqlite",
+            before=datetime.now(UTC) - timedelta(days=1),
+        )["archived_commands"]
+        == 0
+    )
+    ack = store.pending_report()
+    assert ack is not None
+    store.report_result(ack["sequence"], 401, 7)
+    replay = dict(
+        event_id=json.loads(ack["payload"])["event_id"],
+        operation_id=str(uuid4()),
+        actor="operator",
+        reason="repaired credentials",
+        tenant_id=config.tenant_id,
+        vehicle_id=str(config.vehicle_id),
+    )
+    assert store.requeue_report(**replay)
+    audit = [tuple(row) for row in store.db.execute("SELECT * FROM report_replays")]
+    for row in store.db.execute("SELECT sequence FROM reports").fetchall():
+        store.report_result(row[0], 200, 0)
+    store.close()
+    assert (
+        archive(
+            config.database,
+            tmp_path / "completed.sqlite",
+            before=datetime.now(UTC) - timedelta(days=1),
+        )["archived_commands"]
+        == 1
+    )
+    recovered = Store(config.database)
+    try:
+        assert not recovered.accept(command)
+        assert [tuple(row) for row in recovered.db.execute("SELECT * FROM report_replays")] == audit
+        assert not recovered.requeue_report(**replay)
+        assert recovered.db.execute("SELECT count(*) FROM reports").fetchone()[0] == 0
+        with pytest.raises(ValueError, match="conflict"):
+            recovered.accept(command.model_copy(update={"command_type": RemoteCommandType.UNLOCK}))
     finally:
         recovered.close()

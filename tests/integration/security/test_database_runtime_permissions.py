@@ -19,6 +19,7 @@ from connected_vehicle.device_service import DeviceDataService
 from connected_vehicle.remote_command.dispatch_service import (
     RemoteCommandDispatchCommandNotFoundError,
     RemoteCommandDispatchService,
+    RemoteCommandOrderPendingError,
 )
 from connected_vehicle.remote_command.domain import RemoteCommandType
 from connected_vehicle.remote_command.events import create_remote_command_requested_event
@@ -333,6 +334,77 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
             action = await session.get(OperatorActionModel, confirmed_id)
             assert action and action.state == "complete"
 
+        # A second publisher cannot overtake an earlier unfinished command.
+        earlier_ordered = await IssueRemoteCommandService(sessions["app_user"]).issue(
+            vehicle_id=vehicle.id,
+            tenant_id=vehicle.tenant_id,
+            command_type=RemoteCommandType.LOCK,
+            idempotency_key="ordered-first",
+        )
+        await RemoteCommandDispatchService(sessions["remote_command_worker"], AsyncMock()).dispatch(
+            earlier_ordered.command.id,
+            expected=RequestedPayload.model_validate(
+                create_remote_command_requested_event(earlier_ordered.command).payload
+            ),
+        )
+        second_ordered = await IssueRemoteCommandService(sessions["app_user"]).issue(
+            vehicle_id=vehicle.id,
+            tenant_id=vehicle.tenant_id,
+            command_type=RemoteCommandType.UNLOCK,
+            idempotency_key="ordered-next",
+        )
+        ordered_publisher = AsyncMock()
+        ordered_service = RemoteCommandDispatchService(
+            sessions["remote_command_worker"], ordered_publisher
+        )
+        with pytest.raises(RemoteCommandOrderPendingError):
+            await ordered_service.dispatch(
+                second_ordered.command.id,
+                expected=RequestedPayload.model_validate(
+                    create_remote_command_requested_event(second_ordered.command).payload
+                ),
+            )
+        ordered_publisher.publish.assert_not_awaited()
+        await device_service.report(
+            tenant=vehicle.tenant_id,
+            vehicle=str(vehicle.id),
+            command_id=earlier_ordered.command.id.value,
+            report=CommandReport(
+                event_id=uuid4(), status="succeeded", occurred_at=datetime.now(UTC)
+            ),
+        )
+        await ordered_service.dispatch(
+            second_ordered.command.id,
+            expected=RequestedPayload.model_validate(
+                create_remote_command_requested_event(second_ordered.command).payload
+            ),
+        )
+        ordered_publisher.publish.assert_awaited_once()
+        # New role names do not bypass RLS even with direct SELECT grants.
+        async with admin.begin() as connection:
+            await connection.execute(
+                text("CREATE ROLE future_runtime LOGIN PASSWORD 'ci-probe' NOSUPERUSER NOBYPASSRLS")
+            )
+            await connection.execute(text("GRANT CONNECT ON DATABASE postgres TO future_runtime"))
+            await connection.execute(text("GRANT USAGE ON SCHEMA public TO future_runtime"))
+            await connection.execute(
+                text("GRANT SELECT ON vehicles,remote_commands,outbox_events TO future_runtime")
+            )
+        future_engine = create_database_engine(
+            settings.model_copy(
+                update={
+                    "database_username": "future_runtime",
+                    "database_password": SecretStr("ci-probe"),
+                }
+            )
+        )
+        engines.append(future_engine)
+        async with future_engine.connect() as connection:
+            for table in ("vehicles", "remote_commands", "outbox_events"):
+                assert await connection.scalar(text(f"SELECT count(*) FROM {table}")) == 0
+            await connection.execute(text("SELECT set_config('app.tenant_id','grants-test',true)"))
+            assert await connection.scalar(text("SELECT count(*) FROM vehicles")) == 1
+
         # Real PostgreSQL RLS: two tenants, missing context, pooled reuse, raw SQL.
         foreign_vehicle = Vehicle.create(
             vehicle_id=VehicleId.new(), vin=VIN("XYZ12345678901234"), tenant_id="tenant-b"
@@ -452,6 +524,13 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
             )
             assert policies == 5
 
+        async with sessions["app_user"]() as session:
+            assert not await session.scalar(
+                text(
+                    "SELECT has_column_privilege(current_user,"
+                    "'remote_commands','dispatch_order','INSERT')"
+                )
+            )
         denied = {
             "app_user": [
                 "UPDATE remote_commands SET tenant_id = tenant_id",
