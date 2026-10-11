@@ -90,7 +90,10 @@ async def exercise_device_chain(
     async def stop(role: str) -> None:
         process = processes[role]
         if process.poll() is None:
-            number = signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGTERM
+            if sys.platform == "win32":
+                number = signal.CTRL_BREAK_EVENT
+            else:
+                number = signal.SIGTERM
             process.send_signal(number)
             await asyncio.to_thread(process.wait, timeout=8)
             assert process.returncode == 0, log(role)
