@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 
@@ -14,6 +16,7 @@ from connected_vehicle.remote_command.events import (
     REMOTE_COMMAND_EVENT_SOURCE,
     REMOTE_COMMAND_REQUESTED_EVENT_TYPE,
 )
+from connected_vehicle.remote_command.wire_contracts import RequestedPayload
 from enterprise_platform.messaging.envelope import (
     EventEnvelope,
     create_event_envelope,
@@ -30,6 +33,8 @@ class FakeDispatcher:
     async def dispatch(
         self,
         command_id: RemoteCommandId,
+        *,
+        expected: RequestedPayload,
     ) -> object:
         self.dispatched.append(command_id)
 
@@ -58,6 +63,12 @@ def create_requested_event(
         if payload is not None
         else {
             "command_id": resolved_command_id.value,
+            "tenant_id": "tenant-a",
+            "vehicle_id": str(uuid4()),
+            "command_type": "lock",
+            "status": "requested",
+            "created_at": datetime.now(UTC).isoformat(),
+            "expires_at": (datetime.now(UTC) + timedelta(seconds=60)).isoformat(),
         }
     )
 

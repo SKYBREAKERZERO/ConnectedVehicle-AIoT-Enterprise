@@ -82,8 +82,9 @@ Windows runtime entry points select aiomqtt's required SelectorEventLoop.
 - A crash between PUBACK and the SENT commit can republish. Delivery is at least
   once, not exactly-once vehicle execution. Retries after command expiry use the
   existing EXPIRED transition. DLQ arrival does not automatically mark a command
-  FAILED; operator reconciliation is still necessary. Device acknowledgement and
-  execution are future stages beyond the broker-delivery E2E scope.
+  FAILED; operator reconciliation is still necessary. The isolated E2E now exercises signed, emulated device ACK and execution
+reports, including duplicate submissions and tenant/vehicle isolation.
+This does not validate real ECU firmware or AWS IoT Core identity lifecycle.
 - SIGTERM/SIGINT (Ctrl+Break on Windows) stops polling, drains the current batch,
   then cancels at WORKER_SHUTDOWN_TIMEOUT_SECONDS without ACKing unfinished work.
   WORKER_OPERATION_TIMEOUT_SECONDS bounds batches, exceeds polling plus MQTT
@@ -118,8 +119,16 @@ The separate Runtime quality gate workflow runs these checks on PRs/main/merge q
 
 This validates real transports against LocalStack, not a deployment to actual AWS.
 Account IAM enforcement, IoT policies, certificate paths and AWS network deployment
-require an account-backed staging run. Whole-repository `mypy .` still reports
-pre-existing errors in older test fixtures; production and new runtime tests use the
-strict explicit scope above without weakening repository typing rules.
+require an account-backed staging run. The GitHub Runtime Gate runs whole-repository `mypy .`, which succeeded
+on the Day10 main merge commit. Previous local Windows mypy internal errors
+are a separate tooling diagnostic and not proof of application type errors.
 
 Vehicle reports, telemetry, OIDC identity, audited replay and configuration/deployment evidence are documented in [PLATFORM_ACCEPTANCE.md](PLATFORM_ACCEPTANCE.md). Production rejects local static service tokens.
+
+
+## Day11 设备仿真链路
+
+新增独立 T-Box、Gateway ECU 与 Body ECU 三个进程、SQLite ACK/result outbox、MQTT subscriber、
+HTTP reporter 和跨进程 virtual CAN。启动、身份配置、崩溃注入和对账流程见
+[Day11 设备链路](DAY11_DEVICE_CHAIN.md)。Runtime Gate 包含
+`tests/e2e/test_device_full_chain.py`，验收范围为本地 Docker/LocalStack 与虚拟 ECU。

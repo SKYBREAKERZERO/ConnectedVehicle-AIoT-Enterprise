@@ -16,6 +16,46 @@ jobs:
     name: Runtime quality gate
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      CLOUD_RUNTIME: localstack
+      APP_ENV: local
+      AWS_ENDPOINT_URL: http://127.0.0.1:14566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      DATABASE_HOST: 127.0.0.1
+      DATABASE_PORT: '25432'
+      DATABASE_NAME: connected_vehicle
+      DATABASE_USERNAME: connected_vehicle
+      DATABASE_PASSWORD: ci-migration-only
+      MIGRATION_DATABASE_USERNAME: connected_vehicle
+      MIGRATION_DATABASE_PASSWORD: ci-migration-only
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '16379'
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: connected_vehicle
+          POSTGRES_PASSWORD: ci-migration-only
+          POSTGRES_DB: connected_vehicle
+        ports: ['25432:5432']
+        options: >-
+          --health-cmd "pg_isready -U connected_vehicle -d connected_vehicle"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ['16379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      localstack:
+        image: localstack/localstack:3.8.1@sha256:b279c01f4cfb8f985a482e4014cabc1e2697b9d7a6c8c8db2e40f4d9f93687c7
+        env:
+          SERVICES: sqs,secretsmanager
+        ports: ['14566:4566']
+        options: >-
+          --health-cmd "curl -fsS http://localhost:4566/_localstack/health"
+          --health-interval 5s --health-timeout 3s --health-retries 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -44,5 +84,16 @@ jobs:
           baseline=$(mktemp -d)
           git archive "$base" | tar -x -C "$baseline"
           python -m scripts.contracts --baseline "$baseline"
+      - name: Apply integration schema with migration credentials
+        run: python -m alembic upgrade head
       - name: Unit, contract, real permissions and independent-process E2E tests
-        run: pytest tests/unit tests/contract tests/e2e/test_independent_runtimes.py tests/integration/security/test_database_runtime_permissions.py -q
+        env:
+          RUNTIME_EVIDENCE_DIR: .runtime-reports
+        run: pytest tests/unit tests/contract tests/e2e/test_independent_runtimes.py tests/e2e/test_device_full_chain.py tests/integration/security/test_database_runtime_permissions.py tests/integration/reliability/test_redis_idempotency.py tests/integration/remote_command/test_remote_command_sqs_worker_integration.py -q
+      - name: Upload Day11 simulation evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day11-device-chain-evidence
+          path: .runtime-reports/day11-evidence.json
+          if-no-files-found: error
+          retention-days: 7

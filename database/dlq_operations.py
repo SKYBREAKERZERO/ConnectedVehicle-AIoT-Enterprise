@@ -111,7 +111,8 @@ async def redrive(
             .where(OperatorActionModel.operation_id == operation_id)
             .with_for_update()
         )
-        assert action is not None
+        if action is None or action.action != "dlq_redrive":
+            raise RuntimeError("Redrive audit intent disappeared after task initiation.")
         action.state = "started"
         action.evidence = evidence | {"task_handle": handle}
     return evidence | {"operation_id": operation_id, "task_handle": handle, "state": "started"}
@@ -149,7 +150,8 @@ async def redrive_status(
                     .where(OperatorActionModel.operation_id == str(UUID(operation_id)))
                     .with_for_update()
                 )
-                assert action
+                if action is None or action.action != "dlq_redrive":
+                    raise RuntimeError("Redrive audit action disappeared during reconciliation.")
                 status = str(task.get("Status", "UNKNOWN"))
                 action.state = {
                     "COMPLETED": "complete",

@@ -5,7 +5,7 @@
 | 优先级 | 项目 | 当前交付 | 仍需验收 |
 |---|---|---|---|
 | P0 | IaC Gate | 本地完整 Gate：19 次 Terraform 契约测试、安全扫描、禁止删除／替换、隔离 LocalStack apply、第二次 plan 无变更 | 修改提交后两条 GitHub Gate 必须在同一 SHA 成功 |
-| P0 | main 强制保护 | protect_main 同时要求 IaC quality gate 和 Runtime quality gate，限定 GitHub Actions app 15368；已实际配置 main 并通过只读 --verify 读回验证 | 后续每次合并必须两条 Gate 同时成功并取得合格 review |
+| P0 | main 强制保护 | protect_main 同时要求 IaC quality gate 和 Runtime quality gate，限定 GitHub Actions app 15368；已实际配置 main 并通过只读 --verify 读回验证 | 后续每次合并要求两条 Gate 成功；当前审查规则为 0 个必须批准的 Review |
 | P1 | 车辆 ACK／执行结果 | 签名设备身份、车辆 ID 绑定、状态推进、幂等回报账本、失败码；管理员超时对账 | 真实设备身份发放和车辆固件回报集成 |
 | P1 | 真实 AWS | 新增只读配置验收脚本，检查数据库／缓存加密与 HA、三个 ECS 服务、Secret IAM 隔离、队列／DLQ、告警 | Dev Terraform 仍是 scaffold；当前 AWS User_test 可读取账号，但 EC2／ECS／RDS／Secrets Manager 查询均被 IAM 拒绝。需部署／验收身份、VPC／子网、域名／证书、镜像与 IdP，完成实际部署和状态驱动 plan Gate |
 | P1 | Contract Gate | AST 模块边界、HTTP／事件／MQTT／设备 Schema 快照、基线兼容检查，纳入 Runtime Gate；全仓库 mypy | 首次引入快照没有历史快照可比较；后续 PR 自动对比基线 |
@@ -77,7 +77,7 @@ Outbox 重放仅允许 FAILED、预期尝试次数、有效契约和原始 comma
 
 Runtime Gate 运行全仓库 ruff／mypy 与真实依赖测试；契约快照与运行时模型必须一致，既有版本不能移除／改变类型、枚举、约束或增加必填字段。新增可选字段允许；破坏性协议需新版本并保留旧消费者。Pydantic 与质量工具固定为已验证版本，升级需审阅 Schema 差异。
 
-保护验证要求两条 check 同时绑定 Actions app 15368、分支 up-to-date、admin enforcement、Code Owner／stale review／最后一次 push 审批、至少一个 review、会话解决以及禁止 force push／delete。管理员和具备资格的 reviewer 是平台外部前提。
+当前 main Ruleset（ID 24828733）强制 PR 和两条 GitHub Actions 质量检查（Actions app 15368），并启用严格的状态检查、审查对话解决及禁止 force push／删除。实际 required_approving_review_count=0，require_code_owner_review=false，require_last_push_approval=false；因此不能将至少一次人工 Review 写为现行强制要求。如需多人审批，应单独评审并升级治理策略。
 
 ## 观测、AWS 与灾备证据
 
@@ -87,7 +87,7 @@ Runtime Gate 运行全仓库 ruff／mypy 与真实依赖测试；契约快照与
 
 E2E 生成临时 `resilience-evidence.json`，记录 20 次并发同幂等键请求耗时和新数据库恢复核对耗时；不会当作生产 p95／吞吐量／RPO／RTO。CI 的 Docker 本地恢复也不能证明多 AZ 切换或跨区域灾备。真实验收应记录部署 SHA／镜像 digest、故障时间、恢复时间、丢失／重复命令与遥测数、备份时间、恢复点及目标阈值。
 
-## 2026-10-10 验收记录
+## 2026-10-10 阶段性验收记录（历史快照）
 
 已验证 GitHub PR #1 的同一提交 `3022b859c2858846a6f9715fa8fa1052657ff01c`：
 
@@ -97,4 +97,64 @@ E2E 生成临时 `resilience-evidence.json`，记录 20 次并发同幂等键请
 
 新增工作区修改的本地验证：484 项 unit／contract／独立进程 E2E／真实 PostgreSQL 权限测试通过；ruff check、ruff format --check、全仓库 mypy 通过。运维审计最后调整后，真实 PostgreSQL 相关测试再次通过。完整 IaC Gate 为 19 次契约测试、两次安全扫描、变更与解析后策略检查通过，第二次 plan exit code 0。Local／Dev Terraform validate 与递归 fmt 检查成功。
 
-Prometheus promtool 验证三条告警规则成功；OpenTelemetry Collector 0.160.0 validate 成功。新增工作区代码尚需提交后在同一 SHA 重新取得两条 GitHub Success；以上远端绿色结果不覆盖未提交修改。AWS 当前 User_test 对 DescribeVpcs、ListClusters、DescribeDBInstances、ListSecrets 收到 IAM AccessDenied，未进行真实 AWS apply 或 HA 故障注入。
+Prometheus promtool 验证三条告警规则成功；OpenTelemetry Collector 0.160.0 validate 成功。该段记录反映当时的工作区状态；后续变更已通过 PR #1、PR #2 合并。最终 main 验收证据见下节。AWS 当前 User_test 对 DescribeVpcs、ListClusters、DescribeDBInstances、ListSecrets 收到 IAM AccessDenied，未进行真实 AWS apply 或 HA 故障注入。
+
+
+## Day10 最终 main 验收（2026-10-10）
+
+本节为当前已合并代码的独立证据记录，覆盖此前阶段性快照，不将真实 AWS 部署或实车测试计为已通过。
+
+| 证据 | 已验证结果 |
+|---|---|
+| PR #1 | [合并完成](https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/pull/1)，merge commit `bbea7b00b625ec905fba70a83ce8e16ad2efd0d1` |
+| PR #2 | [合并完成](https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/pull/2)，merge commit `836c40a57b33a32e3c29bd96033d7466dba98dfd` |
+| main 基线 | `836c40a57b33a32e3c29bd96033d7466dba98dfd`，受 Ruleset `24828733` 保护 |
+| Runtime Gate | [main push CI：Success](https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/actions/runs/38041819612)；同一 SHA `836c40a` |
+| IaC Gate | [main push CI：Success](https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/actions/runs/38041819606)；同一 SHA `836c40a` |
+| 本地工作区 | Day10 收尾后 `main...origin/main` 无修改；Ruff check 成功、Ruff format 261 files already formatted |
+| 验收边界 | 已验证隔离 Docker/LocalStack 的集成运行；真实 AWS、IoT Core 设备证书、生产 HA/DR 和实车固件链路未在本阶段证明 |
+
+此表证明的是 Day10 代码基线。后续文档维护 PR 要求针对自己的新 SHA 再取得两条 CI 绿色结果。
+
+
+## Day11 设备仿真链路
+
+新增独立 T-Box、Gateway ECU 与 Body ECU 三个进程、SQLite ACK/result outbox、MQTT subscriber、
+HTTP reporter 和跨进程 virtual CAN。启动、身份配置、崩溃注入和对账流程见
+[Day11 设备链路](DAY11_DEVICE_CHAIN.md)。Runtime Gate 包含
+`tests/e2e/test_device_full_chain.py`，验收范围为本地 Docker/LocalStack 与虚拟 ECU。
+
+
+### Day11 本地验收记录（2026-10-11）
+
+- 506 项 unit、contract、原有独立运行时 E2E、Day11 全链路 E2E、真实数据库角色权限测试通过。
+- 全仓库 ruff check、ruff format --check、mypy 与模块/协议契约检查通过。
+- Terraform 递归 fmt 检查、Local 与 Dev validate 通过；本阶段未更改 Terraform 资源。
+- 六个独立 OS 进程完成 LOCK/UNLOCK 与云端最终状态核对；T-Box、Gateway、Body ECU
+  的 SQLite 账本可通过 CLI 对账。四处持久化后的崩溃、HTTP 中断、去重和离线补投通过。
+- `.runtime-reports/day11-evidence.json` 已在本地生成；CI 配置已纳入测试和摘要上传。
+  本记录不代表当前工作区提交已获得远端 GitHub CI Success。
+
+
+### Day11 复查验收（2026-10-11）
+
+修复两项 P0（账本车辆/租户绑定、退避执行顺序）和五项 P1（UDP 发送恢复、HTTP 3xx
+阻塞对账、ECU 最小环境、broker 重启补投验收、SQLite 查询索引）。增加 12 项回归用例。
+最终 518 项 unit/contract/独立运行时 E2E/Day11 E2E/数据库权限测试通过；ruff check、
+ruff format --check、mypy、协议契约、Terraform fmt 和 Local/Dev validate 通过。
+broker 重启时的观察订阅连接已正常关闭，最终测试无未收取的 MQTT Future 异常。
+验收摘要包含 broker_restart_recovered=true；覆盖有序重启，不覆盖突然断电或磁盘损坏。
+更完整的待办边界见 DAY11_DEVICE_CHAIN.md 的复查与修复表。
+
+
+### Day11 第二轮复查验收（2026-10-11）
+
+加入待执行/待回报命令与隔离消息的容量背压、32 MiB 磁盘空间预留、三份账本的
+分页一致读快照、retry jitter 与 HTTP Retry-After、配置密码脱敏和 token 文件读取上限。
+新增 17 项针对性测试；最终 535 项完整运行时回归通过。ruff、格式、mypy、协议契约、
+Terraform fmt 与 Local/Dev validate 通过。真实 MQTT E2E 在容量为 1、HTTP 不可达时
+确认新命令未入账；恢复后重投并完成回报，capacity_backpressure_recovered=true。
+此轮提供容量保护，未引入自动删除历史账本或生产身份提供方 token 刷新。
+
+
+租户隔离专项：JWT/API、Repository 更新归属、Worker 完整消息与数据库核对、dispatch:v2 缓存键、五张 PostgreSQL 表的 RLS、SQLite 持久归属与精确审计重放，参见 [TENANT_ISOLATION.md](TENANT_ISOLATION.md)。RLS 变更包含 Alembic migration e15c849a320b；未修改用户现有数据库或真实 AWS。

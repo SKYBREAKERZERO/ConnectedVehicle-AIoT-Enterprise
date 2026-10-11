@@ -17,6 +17,7 @@ from enterprise_platform.database.credentials import load_runtime_database_setti
 from enterprise_platform.database.engine import (
     create_database_engine,
 )
+from enterprise_platform.database.runtime_security import verify_runtime_database_security
 from enterprise_platform.database.session import (
     create_session_factory,
 )
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
         app.state.session_factory = session_factory
 
         try:
+            await verify_runtime_database_security(engine, "application")
             yield
         finally:
             await engine.dispose()

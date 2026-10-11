@@ -1,3 +1,5 @@
+import pytest
+
 from enterprise_platform.config.environment import AppEnvironment, CloudRuntime
 from tests.settings_helpers import isolated_settings
 
@@ -24,7 +26,22 @@ def test_default_aws_sdk_resilience_settings() -> None:
     assert settings.aws_max_attempts == 3
 
 
-def test_default_database_settings() -> None:
+def test_default_database_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "DATABASE_HOST",
+        "DATABASE_PORT",
+        "DATABASE_NAME",
+        "DATABASE_USERNAME",
+        "DATABASE_PASSWORD",
+        "DATABASE_POOL_SIZE",
+        "DATABASE_MAX_OVERFLOW",
+        "DATABASE_POOL_TIMEOUT_SECONDS",
+        "DATABASE_CONNECT_TIMEOUT_SECONDS",
+        "DATABASE_HEALTH_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
     settings = isolated_settings(_env_file=None)
 
     assert settings.database_host == "localhost"
@@ -40,7 +57,20 @@ def test_default_database_settings() -> None:
     assert settings.database_health_timeout_seconds == 3.0
 
 
-def test_default_redis_settings() -> None:
+def test_default_redis_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "REDIS_DB",
+        "REDIS_CONNECT_TIMEOUT_SECONDS",
+        "REDIS_SOCKET_TIMEOUT_SECONDS",
+        "REDIS_HEALTH_TIMEOUT_SECONDS",
+        "REDIS_MAX_CONNECTIONS",
+        "REDIS_KEY_PREFIX",
+    ):
+        monkeypatch.delenv(name, raising=False)
     settings = isolated_settings()
 
     assert settings.redis_host == "localhost"
@@ -51,3 +81,18 @@ def test_default_redis_settings() -> None:
     assert settings.redis_health_timeout_seconds == 5.0
     assert settings.redis_max_connections == 50
     assert settings.redis_key_prefix == "connected-vehicle"
+
+
+def test_isolated_settings_ignore_ci_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_HOST", "ci-database.example")
+    monkeypatch.setenv("DATABASE_PORT", "25432")
+    monkeypatch.setenv("DATABASE_PASSWORD", "ci-only-credential")
+    monkeypatch.setenv("REDIS_HOST", "ci-cache.example")
+    monkeypatch.setenv("CLOUD_RUNTIME", "aws")
+    settings = isolated_settings()
+    assert settings.database_host == "localhost"
+    assert settings.database_port == 5432
+    assert settings.database_password.get_secret_value() == "connected_vehicle"
+    assert settings.redis_host == "localhost"
+    assert settings.cloud_runtime is CloudRuntime.LOCALSTACK
+    assert isolated_settings(database_host="explicit.example").database_host == "explicit.example"

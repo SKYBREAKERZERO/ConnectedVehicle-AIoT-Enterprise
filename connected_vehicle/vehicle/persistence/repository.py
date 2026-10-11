@@ -87,7 +87,10 @@ class SQLAlchemyVehicleRepository:
         self,
         vehicle: Vehicle,
     ) -> bool:
-        statement = select(VehicleModel).where(VehicleModel.id == vehicle.id.value)
+        statement = select(VehicleModel).where(
+            VehicleModel.id == vehicle.id.value,
+            VehicleModel.tenant_id == vehicle.tenant_id,
+        )
 
         result = await self._session.execute(statement)
         model = result.scalar_one_or_none()

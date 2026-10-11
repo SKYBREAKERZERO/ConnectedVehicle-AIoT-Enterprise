@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -29,6 +30,7 @@ from connected_vehicle.vehicle.persistence.repository import (
 from enterprise_platform.database.repositories.outbox import (
     SQLAlchemyOutboxRepository,
 )
+from enterprise_platform.database.tenant import set_tenant_scope
 from enterprise_platform.database.unit_of_work import (
     SQLAlchemyUnitOfWork,
 )
@@ -105,6 +107,12 @@ class IssueRemoteCommandService:
         ttl_seconds: int,
     ) -> IssueRemoteCommandResult:
         async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            await set_tenant_scope(uow.session, tenant_id)
+            # Serialize issuance and commit order across API instances for this vehicle.
+            await uow.session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:vehicle, 0))"),
+                {"vehicle": tenant_id + ":" + vehicle_id.value},
+            )
             vehicle_repository = SQLAlchemyVehicleRepository(uow.session)
             command_repository = SQLAlchemyRemoteCommandRepository(uow.session)
             outbox_repository = SQLAlchemyOutboxRepository(uow.session)
@@ -175,6 +183,7 @@ class IssueRemoteCommandService:
         idempotency_key: str,
     ) -> RemoteCommand | None:
         async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            await set_tenant_scope(uow.session, tenant_id)
             repository = SQLAlchemyRemoteCommandRepository(uow.session)
 
             return await repository.get_by_idempotency_key(

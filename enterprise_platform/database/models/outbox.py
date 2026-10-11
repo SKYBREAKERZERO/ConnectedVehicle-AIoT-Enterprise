@@ -4,11 +4,15 @@ from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import (
+    DDL,
+    CheckConstraint,
+    Computed,
     DateTime,
     Index,
     Integer,
     String,
     Text,
+    event,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,6 +22,8 @@ from enterprise_platform.reliability.outbox import OutboxStatus
 
 class OutboxEventModel(Base):
     __tablename__ = "outbox_events"
+    # API has INSERT-only access; do not fetch the generated column with RETURNING.
+    __mapper_args__ = {"eager_defaults": False}
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -44,6 +50,13 @@ class OutboxEventModel(Base):
     event_body: Mapped[str] = mapped_column(
         Text,
         nullable=False,
+    )
+
+    # Database-derived ownership cannot diverge from the immutable event payload.
+    tenant_id: Mapped[str | None] = mapped_column(
+        String(255),
+        Computed("public.outbox_event_tenant(event_body)", persisted=True),
+        nullable=True,
     )
 
     status: Mapped[str] = mapped_column(
@@ -99,6 +112,11 @@ class OutboxEventModel(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "tenant_id IS NULL OR (length(tenant_id) > 0 AND tenant_id = trim(tenant_id))",
+            name="ck_outbox_tenant_nonblank",
+        ),
+        Index("ix_outbox_events_tenant_status", "tenant_id", "status"),
         Index(
             "ix_outbox_events_pending_available",
             "status",
@@ -110,3 +128,21 @@ class OutboxEventModel(Base):
             "lease_expires_at",
         ),
     )
+
+
+# Preserve quarantinable malformed legacy events without granting runtime DDL.
+event.listen(
+    OutboxEventModel.__table__,
+    "before_create",
+    DDL(  # type: ignore[no-untyped-call]  # SQLAlchemy DDL constructor lacks typed stubs.
+        """CREATE OR REPLACE FUNCTION public.outbox_event_tenant(body text)
+RETURNS text LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+BEGIN
+    RETURN body::jsonb -> 'payload' ->> 'tenant_id';
+EXCEPTION WHEN invalid_text_representation THEN
+    RETURN NULL;
+END;
+$$;
+"""
+    ).execute_if(dialect="postgresql"),
+)

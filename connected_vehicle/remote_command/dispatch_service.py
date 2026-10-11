@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from connected_vehicle.remote_command.dispatching import (
@@ -21,13 +22,20 @@ from connected_vehicle.remote_command.persistence.repository import (
 from connected_vehicle.remote_command.publisher import (
     RemoteCommandPublisher,
 )
+from connected_vehicle.remote_command.wire_contracts import RequestedPayload
+from enterprise_platform.database.tenant import set_tenant_scope
 from enterprise_platform.database.unit_of_work import (
     SQLAlchemyUnitOfWork,
 )
+from enterprise_platform.messaging.exceptions import InvalidMessageError
 
 
 class RemoteCommandDispatchError(RuntimeError):
     """Base error for remote-command dispatch processing."""
+
+
+class RemoteCommandOrderPendingError(RemoteCommandDispatchError):
+    """Retry through SQS while an earlier issued vehicle command is unfinished."""
 
 
 class RemoteCommandDispatchCommandNotFoundError(RemoteCommandDispatchError):
@@ -68,12 +76,14 @@ class RemoteCommandDispatchService:
         command_id: RemoteCommandId,
         *,
         now: datetime | None = None,
+        expected: RequestedPayload | None = None,
     ) -> RemoteCommandDispatchResult:
         timestamp = self._resolve_timestamp(now)
 
         prepared = await self._prepare_for_publish(
             command_id,
             now=timestamp,
+            expected=expected,
         )
 
         if prepared.outcome is not None:
@@ -92,6 +102,7 @@ class RemoteCommandDispatchService:
         sent = await self._mark_sent(
             command_id,
             now=timestamp,
+            expected=expected,
         )
 
         return RemoteCommandDispatchResult(
@@ -104,6 +115,7 @@ class RemoteCommandDispatchService:
         command_id: RemoteCommandId,
         *,
         now: datetime,
+        expected: RequestedPayload | None = None,
     ) -> _PreparedDispatch:
         # At most two persisted forward transitions are required:
         #
@@ -114,15 +126,47 @@ class RemoteCommandDispatchService:
         # for publication.
         for _ in range(3):
             async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+                if expected is not None:
+                    await set_tenant_scope(uow.session, expected.tenant_id)
                 repository = SQLAlchemyRemoteCommandRepository(uow.session)
 
-                command = await repository.get_for_update(command_id)
+                command = await repository.get_for_update(
+                    command_id,
+                    tenant_id=expected.tenant_id if expected else None,
+                    vehicle_id=str(expected.vehicle_id) if expected else None,
+                )
 
                 if command is None:
                     raise (
                         RemoteCommandDispatchCommandNotFoundError(
                             "Remote command referenced by the dispatch event was not found."
                         )
+                    )
+
+                if expected is not None and (
+                    command.tenant_id != expected.tenant_id
+                    or command.vehicle_id.value != str(expected.vehicle_id)
+                    or command.command_type != expected.command_type
+                    or command.created_at != expected.created_at
+                    or command.expires_at != expected.expires_at
+                ):
+                    raise InvalidMessageError()
+
+                predecessor = await uow.session.scalar(
+                    text("""SELECT EXISTS (
+                        SELECT 1 FROM remote_commands earlier
+                        JOIN remote_commands current ON current.id=:id
+                        WHERE earlier.tenant_id=current.tenant_id
+                          AND earlier.vehicle_id=current.vehicle_id
+                          AND earlier.dispatch_order<current.dispatch_order
+                          AND earlier.status IN
+                            ('requested','queued','dispatching','sent','acknowledged')
+                    )"""),
+                    {"id": command_id.value},
+                )
+                if predecessor and not command.is_terminal:
+                    raise RemoteCommandOrderPendingError(
+                        "Earlier vehicle command requires terminal reconciliation"
                     )
 
                 action = decide_remote_command_dispatch_action(
@@ -204,11 +248,18 @@ class RemoteCommandDispatchService:
         command_id: RemoteCommandId,
         *,
         now: datetime,
+        expected: RequestedPayload | None = None,
     ) -> RemoteCommand:
         async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            if expected is not None:
+                await set_tenant_scope(uow.session, expected.tenant_id)
             repository = SQLAlchemyRemoteCommandRepository(uow.session)
 
-            command = await repository.get_for_update(command_id)
+            command = await repository.get_for_update(
+                command_id,
+                tenant_id=expected.tenant_id if expected else None,
+                vehicle_id=str(expected.vehicle_id) if expected else None,
+            )
 
             if command is None:
                 raise (

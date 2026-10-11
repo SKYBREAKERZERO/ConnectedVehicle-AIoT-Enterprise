@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     String,
     UniqueConstraint,
@@ -22,6 +24,8 @@ class RemoteCommandModel(Base):
         String(36),
         primary_key=True,
     )
+
+    dispatch_order: Mapped[int] = mapped_column(BigInteger, Identity(always=True), nullable=False)
 
     vehicle_id: Mapped[str] = mapped_column(
         String(36),
@@ -68,6 +72,7 @@ class RemoteCommandModel(Base):
     )
 
     __table_args__ = (
+        Index("ix_command_vehicle_order", "tenant_id", "vehicle_id", "dispatch_order"),
         CheckConstraint(
             "command_type IN ('lock', 'unlock', 'start', 'stop', 'honk', 'flash_lights')",
             name="ck_remote_commands_command_type_valid",

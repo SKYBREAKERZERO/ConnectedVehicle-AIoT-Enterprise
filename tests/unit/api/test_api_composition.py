@@ -20,10 +20,12 @@ def test_api_lifespan_initializes_database_runtime() -> None:
             "apps.api.main.load_runtime_database_settings",
             new=AsyncMock(return_value=Settings.model_construct(database_username="app_user")),
         ),
+        patch("apps.api.main.verify_runtime_database_security", new=AsyncMock()) as guard,
         TestClient(app) as client,
     ):
         response = client.get("/health/live")
 
+        guard.assert_awaited_once_with(app.state.database_engine, "application")
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 

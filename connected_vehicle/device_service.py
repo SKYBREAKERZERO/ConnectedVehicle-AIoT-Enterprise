@@ -16,6 +16,7 @@ from connected_vehicle.remote_command.persistence.repository import (
     SQLAlchemyRemoteCommandRepository,
 )
 from connected_vehicle.vehicle.persistence.models import VehicleModel
+from enterprise_platform.database.tenant import set_tenant_scope
 from enterprise_platform.errors.base import ConflictError, ResourceNotFoundError
 
 
@@ -27,12 +28,15 @@ class DeviceDataService:
         self, *, tenant: str, vehicle: str, command_id: str, report: CommandReport
     ) -> str:
         async with self.sessions() as session, session.begin():
+            await set_tenant_scope(session, tenant)
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                 {"key": str(report.event_id)},
             )
             repository = SQLAlchemyRemoteCommandRepository(session)
-            command = await repository.get_for_update(RemoteCommandId(command_id))
+            command = await repository.get_for_update(
+                RemoteCommandId(command_id), tenant_id=tenant, vehicle_id=vehicle
+            )
             if command is None or command.tenant_id != tenant or str(command.vehicle_id) != vehicle:
                 raise ResourceNotFoundError()
             previous = await session.get(CommandReportModel, str(report.event_id))
@@ -79,6 +83,7 @@ class DeviceDataService:
 
     async def ingest(self, *, tenant: str, vehicle: str, sample: TelemetrySample) -> bool:
         async with self.sessions() as session, session.begin():
+            await set_tenant_scope(session, tenant)
             # Serialize device ingestion on a transaction-scoped advisory lock:
             # no UPDATE privilege on vehicles and no duplicate insert race.
             await session.execute(
@@ -124,6 +129,14 @@ class DeviceDataService:
         before_event_id: str | None = None,
     ) -> list[dict[str, object]]:
         async with self.sessions() as session:
+            await set_tenant_scope(session, tenant)
+            owned = await session.scalar(
+                select(VehicleModel.id).where(
+                    VehicleModel.id == vehicle, VehicleModel.tenant_id == tenant
+                )
+            )
+            if owned is None:
+                raise ResourceNotFoundError()
             statement = select(TelemetrySampleModel).where(
                 TelemetrySampleModel.tenant_id == tenant, TelemetrySampleModel.vehicle_id == vehicle
             )
@@ -147,6 +160,7 @@ class DeviceDataService:
 
     async def command_status(self, *, tenant: str, vehicle: str, command_id: str) -> str:
         async with self.sessions() as session:
+            await set_tenant_scope(session, tenant)
             command = await SQLAlchemyRemoteCommandRepository(session).get_by_id_for_tenant(
                 RemoteCommandId(command_id), tenant
             )
