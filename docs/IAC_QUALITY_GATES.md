@@ -91,11 +91,13 @@ python -m scripts.iac.protect_main --repo SKYBREAKERZERO/ConnectedVehicle-AIoT-E
 python -m scripts.iac.protect_main --repo SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise --apply
 ```
 
-The first command previews the exact update. The second applies it: existing required
-checks/reviewer counts/restrictions are preserved; the IaC check is bound to the
-GitHub Actions app, up-to-date branches and owner review are required, stale reviews
-are dismissed, the last push needs approval, administrators are enforced, and force
-pushes/deleting main are disabled. GitHub credentials and admin access are required.
+The first command previews the desired ruleset; the second changes live GitHub
+settings and must not be run merely to verify them. Read back the effective
+settings with `gh api repos/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/rules/branches/main`.
+On 2026-10-10, active ruleset 24828733 requires PRs, strict Runtime and IaC
+checks bound to GitHub Actions, thread resolution, and prevents force pushes
+and deletion. It currently requires zero approving reviews, no code-owner
+review, and no last-push approval. Stricter review is a future governance decision. GitHub credentials and admin access are required.
 The script does not publish code, create a PR or grant itself privileges. Repository
 plan restrictions may affect availability of protected branches for private repos.
 Until the workflow is pushed and that remote rule enabled, these are local checks,

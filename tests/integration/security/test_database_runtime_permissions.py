@@ -14,12 +14,17 @@ from pydantic import SecretStr
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 
-from connected_vehicle.device_data import CommandReport, TelemetrySample
+from connected_vehicle.device_data import CommandReport, TelemetrySample, TelemetrySampleModel
 from connected_vehicle.device_service import DeviceDataService
-from connected_vehicle.remote_command.dispatch_service import RemoteCommandDispatchService
+from connected_vehicle.remote_command.dispatch_service import (
+    RemoteCommandDispatchCommandNotFoundError,
+    RemoteCommandDispatchService,
+)
 from connected_vehicle.remote_command.domain import RemoteCommandType
+from connected_vehicle.remote_command.events import create_remote_command_requested_event
 from connected_vehicle.remote_command.persistence.models import RemoteCommandModel
 from connected_vehicle.remote_command.service import IssueRemoteCommandService
+from connected_vehicle.remote_command.wire_contracts import RequestedPayload
 from connected_vehicle.vehicle import VIN, Vehicle, VehicleId, VehicleStatus
 from connected_vehicle.vehicle.persistence.repository import SQLAlchemyVehicleRepository
 from database.dlq_operations import redrive, redrive_status
@@ -27,11 +32,16 @@ from database.operations import reconcile, replay_outbox, timeout_commands
 from database.provision_runtime_credentials import SQLDriver, provision
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.base import Base
+from enterprise_platform.database.credentials import DATABASE_USERS
 from enterprise_platform.database.engine import create_database_engine
 from enterprise_platform.database.models.operations import OperatorActionModel
 from enterprise_platform.database.models.outbox import OutboxEventModel
 from enterprise_platform.database.outbox_store import SQLAlchemyOutboxStore
+from enterprise_platform.database.runtime_security import verify_runtime_database_security
 from enterprise_platform.database.session import create_session_factory
+from enterprise_platform.database.tenant import set_tenant_scope
+from enterprise_platform.errors.base import ResourceNotFoundError
+from enterprise_platform.messaging.exceptions import InvalidMessageError
 
 
 @pytest.mark.integration
@@ -117,7 +127,29 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
                 )
             )
             engines.append(engine)
+            runtime = next(runtime for runtime, name in DATABASE_USERS.items() if name == user)
+            await verify_runtime_database_security(engine, runtime)
             sessions[user] = create_session_factory(engine)
+        with pytest.raises(RuntimeError, match="Unsafe runtime database role"):
+            await verify_runtime_database_security(admin, "application")
+        # Startup contracts detect privilege drift and missing RLS on real PostgreSQL.
+        for attribute in ("SUPERUSER", "BYPASSRLS"):
+            async with admin.begin() as connection:
+                await connection.execute(text(f"ALTER ROLE app_user {attribute}"))
+            try:
+                with pytest.raises(RuntimeError, match="Unsafe runtime database role"):
+                    await verify_runtime_database_security(engines[1], "application")
+            finally:
+                async with admin.begin() as connection:
+                    await connection.execute(text(f"ALTER ROLE app_user NO{attribute}"))
+        async with admin.begin() as connection:
+            await connection.execute(text("ALTER TABLE vehicles DISABLE ROW LEVEL SECURITY"))
+        try:
+            with pytest.raises(RuntimeError, match="Unsafe runtime database schema"):
+                await verify_runtime_database_security(engines[1], "application")
+        finally:
+            async with admin.begin() as connection:
+                await connection.execute(text("ALTER TABLE vehicles ENABLE ROW LEVEL SECURITY"))
         vehicle = Vehicle.create(
             vehicle_id=VehicleId.new(), vin=VIN("ABC12345678901234"), tenant_id="grants-test"
         ).transition_to(VehicleStatus.ACTIVE)
@@ -144,7 +176,10 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
         )
         publisher = AsyncMock()
         await RemoteCommandDispatchService(sessions["remote_command_worker"], publisher).dispatch(
-            issued.command.id
+            issued.command.id,
+            expected=RequestedPayload.model_validate(
+                create_remote_command_requested_event(issued.command).payload
+            ),
         )
         publisher.publish.assert_awaited_once()
         device_service = DeviceDataService(sessions["app_user"])
@@ -297,6 +332,125 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
         async with owner_sessions() as session:
             action = await session.get(OperatorActionModel, confirmed_id)
             assert action and action.state == "complete"
+
+        # Real PostgreSQL RLS: two tenants, missing context, pooled reuse, raw SQL.
+        foreign_vehicle = Vehicle.create(
+            vehicle_id=VehicleId.new(), vin=VIN("XYZ12345678901234"), tenant_id="tenant-b"
+        ).transition_to(VehicleStatus.ACTIVE)
+        async with owner_sessions() as session:
+            SQLAlchemyVehicleRepository(session).add(foreign_vehicle)
+            await session.commit()
+        foreign = await IssueRemoteCommandService(sessions["app_user"]).issue(
+            vehicle_id=foreign_vehicle.id,
+            tenant_id="tenant-b",
+            command_type=RemoteCommandType.LOCK,
+            idempotency_key="cross-tenant-test",
+        )
+        expected = RequestedPayload.model_validate(
+            create_remote_command_requested_event(foreign.command).payload
+        )
+        rejecting_publisher = AsyncMock()
+        dispatcher = RemoteCommandDispatchService(
+            sessions["remote_command_worker"], rejecting_publisher
+        )
+        for change in (
+            {"tenant_id": "grants-test"},
+            {"vehicle_id": vehicle.id.value},
+            {"command_type": "unlock"},
+            {"created_at": expected.created_at + timedelta(seconds=1)},
+            {"expires_at": expected.expires_at + timedelta(seconds=1)},
+        ):
+            forged = RequestedPayload.model_validate(expected.model_dump() | change)
+            with pytest.raises((RemoteCommandDispatchCommandNotFoundError, InvalidMessageError)):
+                await dispatcher.dispatch(foreign.command.id, expected=forged)
+        rejecting_publisher.publish.assert_not_awaited()
+        with pytest.raises(ResourceNotFoundError):
+            await device_service.query(
+                tenant="grants-test", vehicle=foreign_vehicle.id.value, limit=10
+            )
+        async with owner_sessions() as session:
+            outbox_tenants = (
+                await session.execute(
+                    select(OutboxEventModel.tenant_id, OutboxEventModel.event_body)
+                )
+            ).all()
+            assert {row.tenant_id for row in outbox_tenants} == {"grants-test", "tenant-b"}
+            for row in outbox_tenants:
+                assert row.tenant_id == json.loads(row.event_body)["payload"]["tenant_id"]
+        async with sessions["app_user"]() as session:
+            await set_tenant_scope(session, "grants-test")
+            with pytest.raises(DBAPIError):
+                await session.execute(
+                    text("INSERT INTO outbox_events (tenant_id) VALUES ('tenant-b')")
+                )
+            await session.rollback()
+        insert_event = text(
+            "INSERT INTO outbox_events "
+            "(id,event_id,event_type,destination,event_body,status,attempts,"
+            "created_at,available_at) "
+            "VALUES (:id,:id,'bad','vehicle-command',:body,'pending',0,now(),now())"
+        )
+        # Legacy poison payload remains inspectable without authorizing tenant API writes.
+        poison_id = str(uuid4())
+        async with owner_sessions() as session, session.begin():
+            await session.execute(insert_event, {"id": poison_id, "body": "bad-json"})
+            poison = await session.get(OutboxEventModel, poison_id)
+            assert poison is not None and poison.tenant_id is None
+            assert poison.event_body == "bad-json"
+        for body in ("bad-json", json.dumps({"payload": {"tenant_id": "tenant-b"}})):
+            async with sessions["app_user"]() as session:
+                await set_tenant_scope(session, "grants-test")
+                with pytest.raises(DBAPIError):
+                    await session.execute(insert_event, {"id": str(uuid4()), "body": body})
+                await session.rollback()
+        for user in ("app_user", "remote_command_worker"):
+            async with sessions[user]() as session:
+                assert await session.scalar(text("SELECT count(*) FROM remote_commands")) == 0
+                await set_tenant_scope(session, "grants-test")
+                assert (
+                    await session.scalar(
+                        text("SELECT count(*) FROM remote_commands WHERE tenant_id='tenant-b'")
+                    )
+                    == 0
+                )
+                update_result = await session.execute(
+                    text(
+                        "UPDATE remote_commands SET status='failed' "
+                        "WHERE tenant_id='tenant-b' RETURNING id"
+                    )
+                )
+                assert update_result.all() == []
+                backend = await session.scalar(text("SELECT pg_backend_pid()"))
+                await session.commit()
+                assert await session.scalar(text("SELECT pg_backend_pid()")) == backend
+                assert await session.scalar(text("SELECT count(*) FROM remote_commands")) == 0
+                await session.rollback()
+                await set_tenant_scope(session, "tenant-b")
+                assert await session.scalar(text("SELECT count(*) FROM remote_commands")) == 1
+                await session.rollback()
+                assert await session.scalar(text("SELECT count(*) FROM remote_commands")) == 0
+        async with sessions["app_user"]() as session:
+            await set_tenant_scope(session, "grants-test")
+            session.add(
+                TelemetrySampleModel(
+                    event_id=str(uuid4()),
+                    tenant_id="tenant-b",
+                    vehicle_id=foreign_vehicle.id.value,
+                    measured_at=datetime.now(UTC),
+                    received_at=datetime.now(UTC),
+                    sample={},
+                )
+            )
+            with pytest.raises(DBAPIError):
+                await session.commit()
+            await session.rollback()
+        async with owner_sessions() as session:
+            command = await session.get(RemoteCommandModel, foreign.command.id.value)
+            assert command is not None and command.status == "requested"
+            policies = await session.scalar(
+                text("SELECT count(*) FROM pg_policies WHERE policyname='tenant_guard'")
+            )
+            assert policies == 5
 
         denied = {
             "app_user": [

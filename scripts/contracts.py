@@ -38,7 +38,7 @@ def schemas() -> dict[str, Any]:
 
 def boundaries(root: Path) -> list[str]:
     errors: list[str] = []
-    for package in ("enterprise_platform", "connected_vehicle", "apps"):
+    for package in ("enterprise_platform", "connected_vehicle", "apps", "simulators"):
         for path in (root / package).rglob("*.py"):
             module = ".".join(path.relative_to(root).with_suffix("").parts)
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -60,6 +60,8 @@ def boundaries(root: Path) -> list[str]:
                             and dependency in {"apps", "connected_vehicle"}
                         )
                         or (package == "connected_vehicle" and dependency == "apps")
+                        or (package != "simulators" and dependency == "simulators")
+                        or (package == "simulators" and dependency == "apps")
                     )
                     if forbidden:
                         location = f"{path.relative_to(root)}:{getattr(node, 'lineno', 0)}"

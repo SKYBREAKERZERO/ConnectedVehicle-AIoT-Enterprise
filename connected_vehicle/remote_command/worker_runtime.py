@@ -15,6 +15,7 @@ from connected_vehicle.remote_command.dispatch_service import (
 )
 from connected_vehicle.remote_command.event_handler import (
     RemoteCommandRequestedEventHandler,
+    dispatch_idempotency_key,
 )
 from connected_vehicle.remote_command.publisher import (
     RemoteCommandPublisher,
@@ -102,6 +103,7 @@ def create_remote_command_worker_runtime(
     processor = ReliableSQSEventProcessor(
         acknowledger=queue,
         idempotency=idempotency,
+        key_for_event=dispatch_idempotency_key,
     )
 
     dispatch_service = RemoteCommandDispatchService(

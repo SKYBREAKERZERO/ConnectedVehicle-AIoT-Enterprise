@@ -40,7 +40,15 @@ async def provision(settings: Settings) -> None:
         async with engine.begin() as connection:
             raw = await connection.get_raw_connection()
             driver = cast(SQLDriver, raw.driver_connection)
-            await driver.execute(Path(__file__).with_name("runtime-grants.sql").read_text())
+            await driver.execute(
+                Path(__file__).with_name("runtime-grants.sql").read_text(encoding="utf-8")
+            )
+            await driver.execute(
+                Path(__file__).with_name("tenant-rls.sql").read_text(encoding="utf-8")
+            )
+            await driver.execute(
+                Path(__file__).with_name("outbox-tenant-policy.sql").read_text(encoding="utf-8")
+            )
             for runtime, user in DATABASE_USERS.items():
                 # PostgreSQL utility statements cannot bind passwords. Server-side
                 # quote_literal safely handles every password character.

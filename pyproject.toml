@@ -1,3 +1,4 @@
+
 [build-system]
 requires = ["setuptools>=75", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -37,6 +38,10 @@ dependencies = [
 vehicle-api = "apps.api.__main__:main"
 vehicle-outbox = "apps.outbox.__main__:main"
 vehicle-remote-command = "apps.remote_command.__main__:main"
+vehicle-device-simulator = "simulators.vehicle_device.__main__:main"
+vehicle-body-ecu = "simulators.body_ecu.__main__:main"
+vehicle-gateway = "simulators.gateway.__main__:main"
+
 
 [project.optional-dependencies]
 dev = [
@@ -58,6 +63,7 @@ include = [
     "apps*",
     "connected_vehicle*",
     "enterprise_platform*",
+    "simulators*",
 ]
 exclude = [
     "tests*",
@@ -67,7 +73,6 @@ exclude = [
     "domains*",
     "services*",
     "workers*",
-    "simulators*",
     "scripts*",
     "docs*",
 ]

@@ -55,9 +55,11 @@ class ReliableSQSEventProcessor:
         *,
         acknowledger: SQSMessageAcknowledger,
         idempotency: IdempotencyCoordinator,
+        key_for_event: Callable[[EventEnvelope], str] | None = None,
     ) -> None:
         self._acknowledger = acknowledger
         self._idempotency = idempotency
+        self._key_for_event = key_for_event or (lambda event: event.event_id)
 
     async def process(
         self,
@@ -65,7 +67,7 @@ class ReliableSQSEventProcessor:
         *,
         handler: EventHandler,
     ) -> MessageProcessingResult:
-        idempotency_key = message.event.event_id
+        idempotency_key = self._key_for_event(message.event)
 
         decision = await self._idempotency.begin(idempotency_key)
 

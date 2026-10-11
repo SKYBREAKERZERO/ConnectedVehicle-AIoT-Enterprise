@@ -104,13 +104,22 @@ class SQLAlchemyRemoteCommandRepository:
     async def get_for_update(
         self,
         command_id: RemoteCommandId,
+        *,
+        tenant_id: str | None = None,
+        vehicle_id: str | None = None,
     ) -> RemoteCommand | None:
+        if tenant_id is not None and (not tenant_id.strip() or tenant_id != tenant_id.strip()):
+            raise ValueError("Invalid tenant scope")
         statement = (
             select(RemoteCommandModel)
             .where(RemoteCommandModel.id == command_id.value)
             .with_for_update()
         )
 
+        if tenant_id is not None:
+            statement = statement.where(RemoteCommandModel.tenant_id == tenant_id)
+        if vehicle_id is not None:
+            statement = statement.where(RemoteCommandModel.vehicle_id == vehicle_id)
         result = await self._session.execute(statement)
         model = result.scalar_one_or_none()
 
@@ -123,7 +132,11 @@ class SQLAlchemyRemoteCommandRepository:
         self,
         command: RemoteCommand,
     ) -> bool:
-        statement = select(RemoteCommandModel).where(RemoteCommandModel.id == command.id.value)
+        statement = select(RemoteCommandModel).where(
+            RemoteCommandModel.id == command.id.value,
+            RemoteCommandModel.tenant_id == command.tenant_id,
+            RemoteCommandModel.vehicle_id == command.vehicle_id.value,
+        )
 
         result = await self._session.execute(statement)
         model = result.scalar_one_or_none()

@@ -73,7 +73,7 @@ def test_three_process_api_outbox_sqs_mqtt(tmp_path: Path) -> None:
         runner.run(exercise(tmp_path))
 
 
-async def exercise(tmp_path: Path) -> None:
+async def exercise(tmp_path: Path, *, device_chain: bool = False) -> None:
     prefix = f"vehicle-e2e-{uuid4().hex[:10]}"
     containers: list[str] = []
     processes: dict[str, subprocess.Popen[bytes]] = {}
@@ -82,7 +82,12 @@ async def exercise(tmp_path: Path) -> None:
     config_dir = tmp_path / "mqtt"
     config_dir.mkdir()
     (config_dir / "mosquitto.conf").write_text(
-        "listener 1883\nallow_anonymous true\npersistence false\nlog_dest stdout\n"
+        "listener 1883\nallow_anonymous true\nlog_dest stdout\n"
+        + (
+            "persistence true\npersistence_location /mosquitto/data/\n"
+            if device_chain
+            else "persistence false\n"
+        )
     )
     # Remove inherited infrastructure credentials/config, including developer .env.
     env = {
@@ -90,6 +95,7 @@ async def exercise(tmp_path: Path) -> None:
         for key, value in os.environ.items()
         if not key.upper().startswith(
             (
+                "DEVICE_",
                 "AWS_",
                 "DATABASE_",
                 "MIGRATION_",
@@ -181,16 +187,24 @@ async def exercise(tmp_path: Path) -> None:
         containers.append(name)
         return int(docker("port", name, str(port)).split(":")[-1])
 
-    def launch(role: str) -> None:
-        logs[role] = (tmp_path / f"{role}.log").open("wb")
+    def launch(
+        role: str,
+        *,
+        module: str | None = None,
+        arguments: list[str] | None = None,
+        process_env: dict[str, str] | None = None,
+    ) -> None:
+        if role in logs:
+            logs[role].close()
+        logs[role] = (tmp_path / f"{role}.log").open("ab")
         if sys.platform == "win32":
             flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP")  # noqa: B009
         else:
             flags = 0
         processes[role] = subprocess.Popen(
-            [sys.executable, "-m", f"apps.{role}"],
+            [sys.executable, "-m", module or f"apps.{role}", *(arguments or [])],
             cwd=tmp_path,
-            env=env,
+            env=process_env if process_env is not None else env,
             stdout=logs[role],
             stderr=subprocess.STDOUT,
             creationflags=flags,
@@ -529,7 +543,7 @@ async def exercise(tmp_path: Path) -> None:
                 assert len((await http.get(telemetry_path, headers=bearer())).json()) == 1
                 assert (
                     await http.get(telemetry_path, headers=bearer(tenant="other-tenant"))
-                ).json() == []
+                ).status_code == 404
                 assert (
                     await http.post(
                         telemetry_path,
@@ -632,6 +646,25 @@ async def exercise(tmp_path: Path) -> None:
                         )
 
                 await eventually(outbox_failed)
+
+            if device_chain:
+                # Six genuine OS processes, real MQTT/HTTP, durable CAN simulation.
+                from tests.e2e.device_chain import exercise_device_chain
+
+                await exercise_device_chain(
+                    tmp_path,
+                    http,
+                    path,
+                    headers,
+                    str(vehicle.id),
+                    mqtt_port,
+                    bearer(vehicle=str(vehicle.id))["Authorization"].removeprefix("Bearer "),
+                    bearer(),
+                    launch,
+                    processes,
+                    log,
+                    lambda: docker("restart", f"{prefix}-mqtt"),
+                )
         # A local restore drill verifies a usable backup, rather than file creation alone.
         backup = subprocess.check_output(
             ["docker", "exec", f"{prefix}-pg", "pg_dump", "-U", "postgres", "-Fc", "postgres"]
@@ -661,9 +694,13 @@ async def exercise(tmp_path: Path) -> None:
         )
         try:
             async with restored.connect() as connection:
-                assert await connection.scalar(text("SELECT count(*) FROM remote_commands")) == 3
+                assert await connection.scalar(text("SELECT count(*) FROM remote_commands")) == (
+                    8 if device_chain else 3
+                )
                 assert await connection.scalar(text("SELECT count(*) FROM telemetry_samples")) == 2
-                assert await connection.scalar(text("SELECT count(*) FROM command_reports")) == 3
+                assert await connection.scalar(text("SELECT count(*) FROM command_reports")) == (
+                    13 if device_chain else 3
+                )
                 assert (
                     await connection.scalar(
                         text("SELECT status FROM remote_commands WHERE id=:id"), {"id": command_id}
@@ -677,7 +714,7 @@ async def exercise(tmp_path: Path) -> None:
             "concurrent_idempotent_requests": 20,
             "acceptance_elapsed_seconds": round(acceptance_elapsed, 3),
             "restore_elapsed_seconds": round(time.monotonic() - restore_started, 3),
-            "restore_verified_commands": 3,
+            "restore_verified_commands": 8 if device_chain else 3,
             "restore_verified_telemetry_samples": 2,
             "production_ha_proven": False,
         }
@@ -715,7 +752,7 @@ async def exercise(tmp_path: Path) -> None:
         for name in reversed(containers):
             if docker("inspect", "-f", "{{.State.Paused}}", name) == "true":
                 docker("unpause", name)
-            docker("rm", "-f", name)
+            docker("rm", "-f", "-v", name)
 
 
 async def async_bool(value: bool) -> bool:

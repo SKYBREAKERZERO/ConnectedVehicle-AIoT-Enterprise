@@ -375,3 +375,27 @@ def test_post_remote_command_validation_uses_standard_422_contract(
     assert response.status_code == 422
 
     assert response.json()["error"]["code"] == "INVALID_REQUEST"
+
+
+def test_tenant_header_cannot_override_authenticated_context() -> None:
+    service = StubIssueRemoteCommandService(result=create_result(created=True))
+    client = create_test_client(service)
+    response = client.post(
+        f"/vehicles/{VEHICLE_ID}/commands",
+        headers={"Idempotency-Key": "test", "X-Tenant-ID": "attacker"},
+        json={"command_type": "lock"},
+    )
+    assert response.status_code == 202
+    assert service.calls[0][1] == "tenant-001"
+
+
+def test_tenant_body_injection_is_rejected() -> None:
+    service = StubIssueRemoteCommandService(result=create_result(created=True))
+    client = create_test_client(service)
+    response = client.post(
+        f"/vehicles/{VEHICLE_ID}/commands",
+        headers={"Idempotency-Key": "test"},
+        json={"command_type": "lock", "tenant_id": "attacker"},
+    )
+    assert response.status_code == 422
+    assert not service.calls

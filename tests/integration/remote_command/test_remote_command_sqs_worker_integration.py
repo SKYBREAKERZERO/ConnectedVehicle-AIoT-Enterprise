@@ -12,6 +12,7 @@ from connected_vehicle.remote_command.domain import (
     RemoteCommandStatus,
     RemoteCommandType,
 )
+from connected_vehicle.remote_command.event_handler import dispatch_idempotency_key
 from connected_vehicle.remote_command.events import (
     create_remote_command_requested_event,
 )
@@ -173,7 +174,7 @@ async def test_remote_command_worker_processes_and_deduplicates_real_sqs_event()
 
     redis_key = key_builder.build(
         "idempotency",
-        sha256(event.event_id.encode("utf-8")).hexdigest(),
+        sha256(dispatch_idempotency_key(event).encode("utf-8")).hexdigest(),
     )
 
     try:

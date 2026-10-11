@@ -29,6 +29,7 @@ from connected_vehicle.vehicle.persistence.repository import (
 from enterprise_platform.database.repositories.outbox import (
     SQLAlchemyOutboxRepository,
 )
+from enterprise_platform.database.tenant import set_tenant_scope
 from enterprise_platform.database.unit_of_work import (
     SQLAlchemyUnitOfWork,
 )
@@ -105,6 +106,7 @@ class IssueRemoteCommandService:
         ttl_seconds: int,
     ) -> IssueRemoteCommandResult:
         async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            await set_tenant_scope(uow.session, tenant_id)
             vehicle_repository = SQLAlchemyVehicleRepository(uow.session)
             command_repository = SQLAlchemyRemoteCommandRepository(uow.session)
             outbox_repository = SQLAlchemyOutboxRepository(uow.session)
@@ -175,6 +177,7 @@ class IssueRemoteCommandService:
         idempotency_key: str,
     ) -> RemoteCommand | None:
         async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            await set_tenant_scope(uow.session, tenant_id)
             repository = SQLAlchemyRemoteCommandRepository(uow.session)
 
             return await repository.get_by_idempotency_key(

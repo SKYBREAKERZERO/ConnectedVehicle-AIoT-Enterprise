@@ -21,9 +21,12 @@ from connected_vehicle.remote_command.persistence.repository import (
 from connected_vehicle.remote_command.publisher import (
     RemoteCommandPublisher,
 )
+from connected_vehicle.remote_command.wire_contracts import RequestedPayload
+from enterprise_platform.database.tenant import set_tenant_scope
 from enterprise_platform.database.unit_of_work import (
     SQLAlchemyUnitOfWork,
 )
+from enterprise_platform.messaging.exceptions import InvalidMessageError
 
 
 class RemoteCommandDispatchError(RuntimeError):
@@ -68,12 +71,14 @@ class RemoteCommandDispatchService:
         command_id: RemoteCommandId,
         *,
         now: datetime | None = None,
+        expected: RequestedPayload | None = None,
     ) -> RemoteCommandDispatchResult:
         timestamp = self._resolve_timestamp(now)
 
         prepared = await self._prepare_for_publish(
             command_id,
             now=timestamp,
+            expected=expected,
         )
 
         if prepared.outcome is not None:
@@ -92,6 +97,7 @@ class RemoteCommandDispatchService:
         sent = await self._mark_sent(
             command_id,
             now=timestamp,
+            expected=expected,
         )
 
         return RemoteCommandDispatchResult(
@@ -104,6 +110,7 @@ class RemoteCommandDispatchService:
         command_id: RemoteCommandId,
         *,
         now: datetime,
+        expected: RequestedPayload | None = None,
     ) -> _PreparedDispatch:
         # At most two persisted forward transitions are required:
         #
@@ -114,9 +121,15 @@ class RemoteCommandDispatchService:
         # for publication.
         for _ in range(3):
             async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+                if expected is not None:
+                    await set_tenant_scope(uow.session, expected.tenant_id)
                 repository = SQLAlchemyRemoteCommandRepository(uow.session)
 
-                command = await repository.get_for_update(command_id)
+                command = await repository.get_for_update(
+                    command_id,
+                    tenant_id=expected.tenant_id if expected else None,
+                    vehicle_id=str(expected.vehicle_id) if expected else None,
+                )
 
                 if command is None:
                     raise (
@@ -124,6 +137,15 @@ class RemoteCommandDispatchService:
                             "Remote command referenced by the dispatch event was not found."
                         )
                     )
+
+                if expected is not None and (
+                    command.tenant_id != expected.tenant_id
+                    or command.vehicle_id.value != str(expected.vehicle_id)
+                    or command.command_type != expected.command_type
+                    or command.created_at != expected.created_at
+                    or command.expires_at != expected.expires_at
+                ):
+                    raise InvalidMessageError()
 
                 action = decide_remote_command_dispatch_action(
                     command,
@@ -204,11 +226,18 @@ class RemoteCommandDispatchService:
         command_id: RemoteCommandId,
         *,
         now: datetime,
+        expected: RequestedPayload | None = None,
     ) -> RemoteCommand:
         async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            if expected is not None:
+                await set_tenant_scope(uow.session, expected.tenant_id)
             repository = SQLAlchemyRemoteCommandRepository(uow.session)
 
-            command = await repository.get_for_update(command_id)
+            command = await repository.get_for_update(
+                command_id,
+                tenant_id=expected.tenant_id if expected else None,
+                vehicle_id=str(expected.vehicle_id) if expected else None,
+            )
 
             if command is None:
                 raise (

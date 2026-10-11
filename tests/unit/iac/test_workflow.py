@@ -52,7 +52,11 @@ def test_runtime_gate_cannot_skip_contracts_or_quality_checks() -> None:
         "mypy .",
         "scripts.contracts --baseline",
         "tests/e2e/test_independent_runtimes.py",
+        "tests/e2e/test_device_full_chain.py",
         "tests/integration/security/test_database_runtime_permissions.py",
+        "tests/integration/reliability/test_redis_idempotency.py",
+        "tests/integration/remote_command/test_remote_command_sqs_worker_integration.py",
+        "alembic upgrade head",
     ):
         assert command in commands
     assert not any("if" in step for step in job["steps"])

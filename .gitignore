@@ -56,3 +56,21 @@ node_modules/
 .venv-iac/
 .iac-reports/
 .iac-scan-*.json
+
+# Local device state and signed device credentials
+.device/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.jwt
+.runtime-reports/
+runtime/day11/
+
+# OS ownership sidecars are local runtime state.
+*.runtime.lock
+
+# Database backups are private artifacts; migration SQL remains tracked.
+backups/
+*.dump
+*.backup
+database-before-*.sql
