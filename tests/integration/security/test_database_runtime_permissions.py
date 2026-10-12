@@ -28,6 +28,7 @@ from connected_vehicle.remote_command.service import IssueRemoteCommandService
 from connected_vehicle.remote_command.wire_contracts import RequestedPayload
 from connected_vehicle.vehicle import VIN, Vehicle, VehicleId, VehicleStatus
 from connected_vehicle.vehicle.persistence.repository import SQLAlchemyVehicleRepository
+from database.bootstrap_cluster import bootstrap
 from database.dlq_operations import redrive, redrive_status
 from database.operations import reconcile, replay_outbox, timeout_commands
 from database.provision_runtime_credentials import SQLDriver, provision
@@ -44,6 +45,7 @@ from enterprise_platform.database.tenant import set_tenant_scope
 from enterprise_platform.errors.base import ResourceNotFoundError
 from enterprise_platform.messaging.exceptions import InvalidMessageError
 from tests.integration.day12.conftest import evidence
+from tests.support.secret_versions import MemorySecrets
 
 
 @pytest.mark.integration
@@ -79,6 +81,10 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
             database_name="postgres",
             database_username="postgres",
             database_password=SecretStr("test-admin"),
+            bootstrap_database_username="postgres",
+            bootstrap_database_password=SecretStr("test-admin"),
+            migration_database_username="migration_owner",
+            migration_database_password=SecretStr("test-migration"),
         )
         admin = create_database_engine(settings)
         engines.append(admin)
@@ -91,32 +97,37 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
                 if attempt == 99:
                     raise
                 await asyncio.sleep(0.2)
-        async with admin.begin() as connection:
+        await bootstrap(settings)
+        schema = create_database_engine(
+            settings.model_copy(
+                update={
+                    "database_username": "migration_owner",
+                    "database_password": SecretStr("test-migration"),
+                }
+            )
+        )
+        async with schema.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
             raw = await connection.get_raw_connection()
             driver = cast(SQLDriver, raw.driver_connection)
+            for source in ("tenant-bindings.sql", "tenant-rls.sql", "outbox-tenant-policy.sql"):
+                await driver.execute(Path("database", source).read_text())
             sql = Path("database/runtime-grants.sql").read_text()
             await driver.execute(sql)
             await driver.execute(sql)  # Idempotent grants, including column privilege reset.
+        await schema.dispose()
         users = ["app_user", "outbox_worker", "remote_command_worker"]
         passwords = {user: f"test-{user}'special:chars" for user in users}
         for user, password in passwords.items():
             monkeypatch.setenv(f"{user.upper()}_PASSWORD", password)
-        writer = Mock()
+        writer = MemorySecrets()
         with patch("database.provision_runtime_credentials.AWSClientFactory") as factory:
             factory.return_value.secrets_manager.return_value = writer
-            await provision(
-                settings.model_copy(
-                    update={
-                        "migration_database_username": "postgres",
-                        "migration_database_password": SecretStr("test-admin"),
-                    }
-                )
-            )
-        assert writer.put_secret_value.call_count == 3
-        for call in writer.put_secret_value.call_args_list:
-            payload = json.loads(call.kwargs["SecretString"])
-            assert payload["password"] == passwords[payload["username"]]
+            await provision(settings)
+        assert writer.calls["put_secret_value"] == 3
+        for runtime, user in DATABASE_USERS.items():
+            value = writer.current(f"/connected-vehicle/local/database/{runtime}")
+            assert value is not None and value["password"] == passwords[user]
 
         sessions = {}
         for user in ["app_user", "outbox_worker", "remote_command_worker"]:
@@ -590,10 +601,13 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
         # All six real login roles: changing tenant GUC never changes ownership.
         for tenant, foreign_tenant in (("grants-test", "tenant-b"), ("tenant-b", "grants-test")):
             grants = Path("database/runtime-grants.sql").read_text(encoding="utf-8")
+            role_sql = Path("database/runtime-roles.sql").read_text(encoding="utf-8")
             for runtime, original in DATABASE_USERS.items():
                 grants = grants.replace(original, runtime_database_user(runtime, tenant))
+                role_sql = role_sql.replace(original, runtime_database_user(runtime, tenant))
             async with admin.begin() as connection:
                 driver = cast(SQLDriver, (await connection.get_raw_connection()).driver_connection)
+                await driver.execute(role_sql)
                 await driver.execute(grants)
                 for runtime in DATABASE_USERS:
                     username = runtime_database_user(runtime, tenant)

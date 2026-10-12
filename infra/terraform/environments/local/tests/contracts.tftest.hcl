@@ -38,4 +38,12 @@ run "runtime_secret_isolation" {
     condition     = jsondecode(module.application_secret_read_policy.policy_json).Statement[0].Resource == module.platform_secret["database_application"].secret_arn
     error_message = "Application must read only its own secret."
   }
+  assert {
+    condition     = toset(jsondecode(module.secret_bootstrap_policy.policy_json).Statement[0].Action) == toset(["secretsmanager:PutSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:UpdateSecretVersionStage"])
+    error_message = "Credential publication must support validation and explicit rollback without arbitrary Secret administration."
+  }
+  assert {
+    condition     = toset(jsondecode(module.secret_bootstrap_policy.policy_json).Statement[0].Resource) == toset([module.platform_secret["database_application"].secret_arn, module.platform_secret["database_outbox"].secret_arn, module.platform_secret["database_remote_command"].secret_arn]) && toset(jsondecode(module.secret_bootstrap_policy.policy_json).Statement[1].Condition.StringEquals["kms:EncryptionContext:SecretARN"]) == toset(jsondecode(module.secret_bootstrap_policy.policy_json).Statement[0].Resource)
+    error_message = "Bootstrap Secret and KMS permissions must be scoped to exactly the three runtime Secrets."
+  }
 }

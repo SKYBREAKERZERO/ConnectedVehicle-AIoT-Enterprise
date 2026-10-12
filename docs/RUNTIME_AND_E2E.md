@@ -16,9 +16,10 @@ Use Terraform's `database_runtime_configuration` output to inject each process's
 own Secret ID and task role. Default names are
 `/connected-vehicle/{APP_ENV}/database/{runtime}`. AWS mode uses the AWS credential
 chain and ignores the LocalStack endpoint. LocalStack mode uses AWS_ENDPOINT_URL.
-Never inject migration credentials into these runtimes. Run Alembic and the separate
-provisioning tool with the migration owner as documented in
-[credential isolation](../database/CREDENTIAL_ISOLATION.md).
+Never inject migration or bootstrap credentials into these runtimes. Alembic uses
+the non-superuser migration owner. Provisioning uses independent cluster-management
+and Schema-owner connections as documented in
+[database management](DATABASE_MANAGEMENT.md).
 
 Rerun runtime-grants.sql through the migration owner when deploying this change:
 Outbox additionally needs UPDATE on the existing failed_at, failure_code and

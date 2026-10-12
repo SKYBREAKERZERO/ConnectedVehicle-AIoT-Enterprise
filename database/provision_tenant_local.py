@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import json
 from collections.abc import Mapping
-from pathlib import Path
+from contextlib import suppress
 from secrets import token_urlsafe
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -14,15 +14,19 @@ from urllib.parse import urlparse
 import boto3
 from sqlalchemy import text
 
-from database.provision_runtime_credentials import SQLDriver
+from database.bootstrap_cluster import SQLDriver, check_bootstrap
+from database.credential_rotation import Target, password_manager, rotate
+from database.schema_permissions import grant_runtimes, prepare_roles
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.credentials import (
     DATABASE_USERS,
     DatabaseRuntime,
+    bootstrap_database_settings,
     migration_database_settings,
     runtime_database_user,
 )
 from enterprise_platform.database.engine import create_database_engine
+from enterprise_platform.database.management_identity import verify_migration_identity
 
 
 def provision_local_cloud_identity(
@@ -114,36 +118,8 @@ async def provision_tenant(settings: Settings, tenant: str) -> dict[str, object]
         raise ValueError("Tenant example requires loopback endpoints")
     roles = {runtime: runtime_database_user(runtime, tenant) for runtime in DATABASE_USERS}
     passwords = {runtime: token_urlsafe(32) for runtime in DATABASE_USERS}
-    sql = Path(__file__).with_name("runtime-grants.sql").read_text(encoding="utf-8")
-    for runtime, original in DATABASE_USERS.items():
-        sql = sql.replace(original, roles[runtime])
-    engine = create_database_engine(migration_database_settings(settings))
-    try:
-        async with engine.begin() as connection:
-            driver = cast(SQLDriver, (await connection.get_raw_connection()).driver_connection)
-            await driver.execute(sql)
-            for runtime, role in roles.items():
-                previous = await connection.scalar(
-                    text(
-                        "SELECT tenant_id FROM public.runtime_tenant_bindings WHERE role_name=:role"
-                    ),
-                    {"role": role},
-                )
-                if previous is not None and previous != tenant:
-                    raise ValueError("Existing role tenant binding conflicts")
-                await connection.execute(
-                    text(
-                        "INSERT INTO public.runtime_tenant_bindings VALUES (:role,:tenant) "
-                        "ON CONFLICT DO NOTHING"
-                    ),
-                    {"role": role, "tenant": tenant},
-                )
-                quoted = await connection.scalar(
-                    text("SELECT quote_literal(:password)"), {"password": passwords[runtime]}
-                )
-                await driver.execute(f"ALTER ROLE {role} PASSWORD {quoted}")
-    finally:
-        await engine.dispose()
+    await prepare_roles(settings, roles)
+    await grant_runtimes(settings, roles, tenant)
     client = boto3.client(
         "secretsmanager",
         endpoint_url=endpoint,
@@ -151,29 +127,26 @@ async def provision_tenant(settings: Settings, tenant: str) -> dict[str, object]
         aws_access_key_id="test",
         aws_secret_access_key="test",
     )
-    secrets = {}
-    for runtime, role in roles.items():
-        name = (
+    secrets = {
+        runtime: (
             f"{settings.database_secret_prefix}/local/tenants/"
             f"{role.rsplit('__', 1)[1]}/database/{runtime}"
         )
-        payload = json.dumps(
-            dict(
-                engine="postgres",
-                host=settings.database_host,
-                port=settings.database_port,
-                dbname=settings.database_name,
-                username=role,
-                password=passwords[runtime],
-                tenant_id=tenant,
-            )
-        )
-        try:
-            await asyncio.to_thread(client.create_secret, Name=name, SecretString=payload)
-        except client.exceptions.ResourceExistsException:
-            await asyncio.to_thread(client.put_secret_value, SecretId=name, SecretString=payload)
-        secrets[runtime] = name
+        for runtime, role in roles.items()
+    }
+    for name in secrets.values():
+        with suppress(client.exceptions.ResourceExistsException):
+            await asyncio.to_thread(client.create_secret, Name=name)
     cloud = await asyncio.to_thread(provision_local_cloud_identity, settings, secrets, roles)
+    targets = [Target(runtime, role, secrets[runtime], tenant) for runtime, role in roles.items()]
+    async with password_manager(settings, targets) as backend:
+        await rotate(
+            settings,
+            targets,
+            {roles[runtime]: value for runtime, value in passwords.items()},
+            client,
+            backend,
+        )
     return {
         "tenant_id": tenant,
         "roles": roles,
@@ -193,9 +166,10 @@ async def provision_monitor(settings: Settings) -> dict[str, object]:
     ):
         raise ValueError("Monitor example is loopback LocalStack-only")
     password = token_urlsafe(32)
-    engine = create_database_engine(migration_database_settings(settings))
+    engine = create_database_engine(bootstrap_database_settings(settings))
     try:
         async with engine.begin() as connection:
+            await check_bootstrap(connection, settings)
             driver = cast(SQLDriver, (await connection.get_raw_connection()).driver_connection)
             await driver.execute("""DO $$ BEGIN
                 IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='observability_reader') THEN
@@ -215,14 +189,27 @@ async def provision_monitor(settings: Settings) -> dict[str, object]:
                     WHERE child.rolname='observability_reader' LOOP
                     EXECUTE format('REVOKE %I FROM observability_reader',r.parent);
                 END LOOP;
+            END $$;
+            ALTER ROLE observability_reader NOSUPERUSER NOBYPASSRLS
+                NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+            """)
+    finally:
+        await engine.dispose()
+    migration = migration_database_settings(settings)
+    engine = create_database_engine(migration)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(
+                lambda sync: verify_migration_identity(sync, migration.database_username)
+            )
+            driver = cast(SQLDriver, (await connection.get_raw_connection()).driver_connection)
+            await driver.execute("""DO $$ DECLARE r record; BEGIN
                 FOR r IN SELECT table_name,column_name FROM information_schema.columns
                     WHERE table_schema='public' LOOP
                     EXECUTE format('REVOKE ALL (%I) ON public.%I FROM observability_reader',
                                    r.column_name,r.table_name);
                 END LOOP;
             END $$;
-            ALTER ROLE observability_reader NOSUPERUSER NOBYPASSRLS
-                NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
             REVOKE ALL ON ALL TABLES IN SCHEMA public FROM observability_reader;
             REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM observability_reader;
             REVOKE ALL ON SCHEMA public FROM observability_reader;
@@ -234,10 +221,6 @@ async def provision_monitor(settings: Settings) -> dict[str, object]:
                 f"REVOKE ALL ON DATABASE {database} FROM observability_reader; "
                 f"GRANT CONNECT ON DATABASE {database} TO observability_reader"
             )
-            quoted = await connection.scalar(
-                text("SELECT quote_literal(:password)"), {"password": password}
-            )
-            await driver.execute(f"ALTER ROLE observability_reader PASSWORD {quoted}")
     finally:
         await engine.dispose()
     client = boto3.client(
@@ -248,19 +231,9 @@ async def provision_monitor(settings: Settings) -> dict[str, object]:
         aws_secret_access_key="test",
     )
     name = f"{settings.database_secret_prefix}/local/database/observability"
-    payload = json.dumps(
-        dict(
-            host=settings.database_host,
-            port=settings.database_port,
-            dbname=settings.database_name,
-            username="observability_reader",
-            password=password,
-        )
-    )
-    try:
-        await asyncio.to_thread(client.create_secret, Name=name, SecretString=payload)
-    except client.exceptions.ResourceExistsException:
-        await asyncio.to_thread(client.put_secret_value, SecretId=name, SecretString=payload)
+    target = Target("observability", "observability_reader", name)
+    async with password_manager(settings, [target]) as backend:
+        await rotate(settings, [target], {target.role: password}, client, backend)
     return {"secret_id": name, "scope": "localstack-only"}
 
 

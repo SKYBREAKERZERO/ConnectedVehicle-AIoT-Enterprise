@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     remote_command_database_secret_id: str | None = None
     migration_database_username: str | None = None
     migration_database_password: SecretStr | None = None
+    bootstrap_database_username: str | None = None
+    bootstrap_database_password: SecretStr | None = None
+    credential_rotation_maintenance_mode: bool = False
     migration_lock_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
     migration_statement_timeout_seconds: float = Field(default=60.0, gt=0, le=3600)
 

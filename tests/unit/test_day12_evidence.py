@@ -184,6 +184,18 @@ def reports() -> dict[str, Any]:
             "runtime_ddl": "denied",
             "cross_tenant_update": "zero rows",
         },
+        "credential-rotation": {
+            "scope": "localstack-and-postgresql",
+            "roles": 3,
+            "iam_enforcement_verified": False,
+            "failure_cases": [
+                {"failure": method, "passwords_and_current_restored": True}
+                for method in ("put_secret_value", "update_secret_version_stage")
+            ],
+            "explicit_recovery": True,
+            "retry_succeeded": True,
+            "journals_secret_free": True,
+        },
         "12b-identity-matrix": {
             "configuration_matrix": matrix,
             "runtime_and_kms": summaries,

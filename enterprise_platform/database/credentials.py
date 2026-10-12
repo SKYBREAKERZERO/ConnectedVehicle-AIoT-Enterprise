@@ -81,10 +81,11 @@ async def load_runtime_database_settings(
 
 
 def migration_database_settings(settings: Settings) -> Settings:
-    """Require explicit, independent administrator credentials for Alembic."""
+    """Require explicit schema-owner credentials, separate from cluster management."""
     if (
         not settings.migration_database_username
         or not settings.migration_database_password
+        or settings.migration_database_username == settings.bootstrap_database_username
         or any(
             settings.migration_database_username == user
             or settings.migration_database_username.startswith(user + "__")
@@ -96,5 +97,28 @@ def migration_database_settings(settings: Settings) -> Settings:
         update={
             "database_username": settings.migration_database_username,
             "database_password": settings.migration_database_password,
+        }
+    )
+
+
+def bootstrap_database_settings(settings: Settings) -> Settings:
+    if (
+        not settings.bootstrap_database_username
+        or not settings.bootstrap_database_password
+        or settings.bootstrap_database_username == settings.migration_database_username
+        or settings.bootstrap_database_username == "observability_reader"
+        or any(
+            settings.bootstrap_database_username == user
+            or settings.bootstrap_database_username.startswith(user + "__")
+            for user in DATABASE_USERS.values()
+        )
+    ):
+        raise ValueError(
+            "Role management requires independent BOOTSTRAP_DATABASE_USERNAME/PASSWORD"
+        )
+    return settings.model_copy(
+        update={
+            "database_username": settings.bootstrap_database_username,
+            "database_password": settings.bootstrap_database_password,
         }
     )

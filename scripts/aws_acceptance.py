@@ -113,7 +113,7 @@ def evaluate(evidence: dict[str, Any]) -> list[str]:
         if values.get("CLOUD_RUNTIME") != "aws":
             errors.append(f"{runtime}: AWS runtime configuration is missing")
         injected = set(values) | {item["name"] for item in container.get("secrets", [])}
-        if any(name.startswith("MIGRATION_") for name in injected) or (
+        if any(name.startswith(("MIGRATION_", "BOOTSTRAP_")) for name in injected) or (
             "DATABASE_PASSWORD" in injected or "API_SERVICE_TOKEN" in injected
         ):
             errors.append(f"{runtime}: admin/database password or local service token was injected")
@@ -223,6 +223,8 @@ def main() -> int:
         "errors": problems,
         "checks": ["database", "cache", "ecs", "queue", "dlq", "secrets", "iam", "alarms"],
         "scope": "configuration-readiness",
+        "iam_enforcement_verified": False,
+        "runtime_probe": "Run the separate opt-in aws_runtime_probe for actual AssumeRole evidence",
         "fault_injection_proven": False,
     }
     args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

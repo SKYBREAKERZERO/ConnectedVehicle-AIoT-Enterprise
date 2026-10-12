@@ -7,7 +7,7 @@ Runtime/IaC 检查和 `day12-local-acceptance` 产物为准。
 | 阶段 | 实现与验收 | 证据文件 |
 | --- | --- | --- |
 | 12A | Day11 发布提交备份、五表多租户历史数据、非超级用户迁移、Schema/权限一致性、失败回滚重试、大表并发、两个迁移进程互斥及共享连接超时。固定租户身份和跨租户拒绝继续验证。 | day12-12a-migrations.json、day12-12a-rls.json、day12-migration-failure-retry.json、day12-migration-scale-locks.json、day12-migration-guards.json |
-| 12B | 六角色 × 六 Secret 配置矩阵，仅允许各自 Secret；每角色验证正确及错误的 KMS 上下文、服务、Region 和 Key。读取实际 LocalStack 策略及 Secret KMS 绑定；正确/错误加密上下文执行真实本地 KMS 加解密检查。 | day12-12b-identity-matrix.json |
+| 12B | 六角色 × 六 Secret 配置矩阵；实际 PostgreSQL 与 LocalStack 凭据发布、部分发布失败补偿、补偿失败后显式恢复和安全重试。KMS 上下文与绑定验证。 | day12-12b-identity-matrix.json、day12-credential-rotation.json |
 | 12C | 从真实 SQLite/PostgreSQL 收集指标，五类告警分别观察 Prometheus FIRING、Webhook firing、恢复后的 Webhook resolved，并关联同一次告警。 | day12-12c-alert-lifecycle.json |
 | 12D | 备份 SHA256、完整性校验、恢复前摘要比对、设备归属、命令去重、ACK 前置顺序、事件重放审计和恢复操作审计；审计失败时恢复文件不发布。 | day12-12d-restore.json |
 | 12E | Ruff、格式、mypy、pytest、迁移、Terraform 验证、安全扫描、模块测试和计划策略全部通过；两条必需 CI 通过后合并 PR，再核对 main。 | day12-acceptance.json、iac-gate-summary、GitHub 检查 |
@@ -38,9 +38,14 @@ pg_restore 会把 varchar 枚举数组转换成等价的逐元素 text cast；�
 原始 CHECK 定义仍保留。负向测试证明增加 OR true、改变列或枚举值不会被归一化掩盖。
 升级后的完整 Catalog 必须与全新数据库一致，重复升级必须保持全部快照不变。
 
-集群管理员只负责初始建库、建角色及运行权限配置。实际新旧 Schema 升级由数据库所有者
+集群管理员只负责初始建库、建角色与密码管理；表、列、函数和默认权限由 Schema Owner 配置。
+实际新旧 Schema 升级由数据库所有者
 `migration_owner` 执行，角色明确 NOSUPERUSER、NOBYPASSRLS、NOCREATEDB、NOCREATEROLE、
-NOREPLICATION，且无角色成员关系。生产部署仍需独立的受控角色 bootstrap 流程。
+NOREPLICATION、NOINHERIT，且无角色成员关系。CI 的容器管理员为 `cluster_bootstrap`；
+其凭据只注入 bootstrap 步骤，Alembic 使用独立 `migration_owner`。
+共享连接与 CLI 均检查实际 session_user/current_user、数据库 Owner 和角色属性；
+超级用户、SET ROLE 代理、成员关系和危险属性漂移在执行 DDL 前拒绝。
+具体部署与恢复流程见 [DATABASE_MANAGEMENT.md](DATABASE_MANAGEMENT.md)。
 
 SQL 故障注入发生在绑定表/函数创建和车辆策略变更之后；服务端返回 22012，
 事务必须同时回滚 Revision、DDL、Policy、权限与历史数据，随后正常重试。

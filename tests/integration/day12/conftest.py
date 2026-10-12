@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import time
@@ -12,6 +13,7 @@ from uuid import uuid4
 import pytest
 from pydantic import SecretStr
 
+from database.bootstrap_cluster import bootstrap
 from enterprise_platform.config.settings import Settings
 from scripts.day12_evidence import write_evidence
 from tests.e2e.test_independent_runtimes import LOCALSTACK, docker
@@ -61,33 +63,38 @@ def local_environment() -> Iterator[Settings]:
             if time.monotonic() > deadline:
                 raise TimeoutError("Dedicated Day12 dependencies did not start")
             time.sleep(0.2)
-        yield Settings.model_construct(
+        settings = Settings.model_construct(
             database_host="127.0.0.1",
             database_port=db_port,
             database_name="postgres",
             database_username="postgres",
             database_password=SecretStr("test-admin"),
-            migration_database_username="postgres",
-            migration_database_password=SecretStr("test-admin"),
+            migration_database_username="migration_owner",
+            migration_database_password=SecretStr("test-migration"),
+            bootstrap_database_username="postgres",
+            bootstrap_database_password=SecretStr("test-admin"),
             aws_endpoint_url=endpoint,
         )
+        asyncio.run(bootstrap(settings))
+        yield settings
     finally:
         for container in reversed(containers):
             docker("rm", "-f", container)
 
 
 def migration_environment(settings: Settings) -> dict[str, str]:
-    return dict(
+    environment = dict(
         os.environ,
         DATABASE_HOST=settings.database_host,
         DATABASE_PORT=str(settings.database_port),
         DATABASE_NAME=settings.database_name,
-        MIGRATION_DATABASE_USERNAME="postgres",
-        MIGRATION_DATABASE_PASSWORD="test-admin",
-        DATABASE_TENANT_ID="",
+        MIGRATION_DATABASE_USERNAME="migration_owner",
+        MIGRATION_DATABASE_PASSWORD="test-migration",
         AWS_ACCESS_KEY_ID="test",
         AWS_SECRET_ACCESS_KEY="test",
     )
+    environment.pop("DATABASE_TENANT_ID", None)
+    return environment
 
 
 def evidence(stage: str, result: dict[str, object]) -> None:

@@ -32,6 +32,7 @@ STAGES = (
     "migration-failure-retry",
     "migration-scale-locks",
     "migration-guards",
+    "credential-rotation",
 )
 CATALOG_SECTIONS = {
     "tables",
@@ -319,6 +320,27 @@ def validate(
         )
     ):
         raise ValueError("Migration rollback/scale evidence incomplete")
+    rotation = reports["credential-rotation"]
+    if (
+        rotation["scope"] != "localstack-and-postgresql"
+        or rotation["roles"] != 3
+        or rotation["iam_enforcement_verified"] is not False
+        or {row["failure"] for row in rotation["failure_cases"]}
+        != {"put_secret_value", "update_secret_version_stage"}
+        or len(rotation["failure_cases"]) != 2
+        or any(
+            row["passwords_and_current_restored"] is not True for row in rotation["failure_cases"]
+        )
+        or any(
+            rotation[key] is not True
+            for key in (
+                "explicit_recovery",
+                "retry_succeeded",
+                "journals_secret_free",
+            )
+        )
+    ):
+        raise ValueError("Credential rotation recovery evidence incomplete")
     rls = reports["12a-rls"]
     if (
         rls["dedicated_roles"] != 6

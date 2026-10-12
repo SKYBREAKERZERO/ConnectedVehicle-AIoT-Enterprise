@@ -25,7 +25,11 @@ target_metadata = Base.metadata
 def run_migrations_with_connection(
     connection: Connection,
 ) -> None:
-    with migration_transaction(connection, get_settings()):
+    with migration_transaction(
+        connection,
+        get_settings(),
+        expected_user=context.config.attributes.get("migration_database_username"),
+    ):
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
