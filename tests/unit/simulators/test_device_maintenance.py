@@ -245,3 +245,50 @@ def test_archive_keeps_dedup_and_unfinished_reports(tmp_path: Path) -> None:
             recovered.accept(command.model_copy(update={"command_type": RemoteCommandType.UNLOCK}))
     finally:
         recovered.close()
+
+
+def test_online_archive_uses_snapshot_candidates_and_keeps_new_live_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from simulators.vehicle_device.maintenance import archive
+
+    config = settings(tmp_path)
+    store = Store(config.database)
+    store.bind_identity(config.tenant_id, str(config.vehicle_id))
+    old = payload(config).model_copy(
+        update={
+            "created_at": datetime.now(UTC) - timedelta(days=3),
+            "expires_at": datetime.now(UTC) - timedelta(days=2),
+        }
+    )
+    store.accept(old)
+    store.finish(str(old.command_id))
+    for row in store.db.execute("SELECT sequence FROM reports").fetchall():
+        store.report_result(row[0], 200, 0)
+    newer = payload(config)
+    original = snapshot
+
+    def race(source: Path, destination: Path) -> dict[str, object]:
+        result = original(source, destination)
+        store.accept(newer)
+        return result
+
+    monkeypatch.setattr("simulators.vehicle_device.maintenance.snapshot", race)
+    try:
+        with runtime_lock(config.database):
+            result = archive(
+                config.database,
+                tmp_path / "online.sqlite",
+                before=datetime.now(UTC) - timedelta(days=1),
+                online=True,
+            )
+        assert result["archived_commands"] == 1
+        assert not store.accept(old)
+        pending = store.pending_command()
+        assert pending is not None and pending["id"] == str(newer.command_id)
+        report = store.pending_report()
+        assert report is not None and report["command_id"] == str(newer.command_id)
+    finally:
+        store.close()
