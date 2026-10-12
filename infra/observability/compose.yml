@@ -1,0 +1,34 @@
+services:
+  exporter:
+    image: python:3.12-alpine
+    command: [python, /app/monitor.py, exporter, --directory, /state]
+    volumes:
+      - ../../scripts/local_monitor.py:/app/monitor.py:ro
+      - ../../.runtime-reports/observability:/state:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  receiver:
+    image: python:3.12-alpine
+    command: [python, /app/monitor.py, receiver, --directory, /state, --port, "9001"]
+    volumes:
+      - ../../scripts/local_monitor.py:/app/monitor.py:ro
+      - ../../.runtime-reports/observability:/state
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    ports: ["127.0.0.1:19091:9090"]
+    volumes:
+      - ./local-prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    ports: ["127.0.0.1:19093:9093"]
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

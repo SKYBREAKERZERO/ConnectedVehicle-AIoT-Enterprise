@@ -22,3 +22,28 @@ groups:
           severity: warning
         annotations:
           summary: Vehicle API p95 latency exceeds one second
+
+  - name: local-runtime-safety
+    rules:
+      - alert: DeviceAuthenticationBlocked
+        expr: vehicle_auth_blocked_reports > 0
+        labels: {severity: critical}
+        annotations: {summary: Repair credentials and perform audited report replay}
+      - alert: VehicleCommandOrderStalled
+        expr: vehicle_stalled_vehicles > 0
+        for: 10s
+        labels: {severity: critical}
+        annotations: {summary: Reconcile unknown execution before releasing the vehicle queue}
+      - alert: DeviceLedgerCapacityWarning
+        expr: vehicle_ledger_utilization_ratio > 0.8
+        labels: {severity: warning}
+        annotations: {summary: Schedule bounded online ledger archival}
+      - alert: RuntimeReportDeliveryStalled
+        expr: vehicle_report_oldest_age_seconds > 300
+        labels: {severity: warning}
+        annotations: {summary: Device reports exceed delivery SLA}
+      - alert: RuntimeCollectorUnavailable
+        expr: vehicle_monitor_collection_success == 0 or up{job="local-runtime"} == 0
+        for: 10s
+        labels: {severity: critical}
+        annotations: {summary: Operational collection stopped or is stale}
