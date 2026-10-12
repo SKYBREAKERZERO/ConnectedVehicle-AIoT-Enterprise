@@ -33,7 +33,7 @@ from database.operations import reconcile, replay_outbox, timeout_commands
 from database.provision_runtime_credentials import SQLDriver, provision
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.base import Base
-from enterprise_platform.database.credentials import DATABASE_USERS
+from enterprise_platform.database.credentials import DATABASE_USERS, runtime_database_user
 from enterprise_platform.database.engine import create_database_engine
 from enterprise_platform.database.models.operations import OperatorActionModel
 from enterprise_platform.database.models.outbox import OutboxEventModel
@@ -43,6 +43,7 @@ from enterprise_platform.database.session import create_session_factory
 from enterprise_platform.database.tenant import set_tenant_scope
 from enterprise_platform.errors.base import ResourceNotFoundError
 from enterprise_platform.messaging.exceptions import InvalidMessageError
+from tests.integration.day12.conftest import evidence
 
 
 @pytest.mark.integration
@@ -151,6 +152,37 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
         finally:
             async with admin.begin() as connection:
                 await connection.execute(text("ALTER TABLE vehicles ENABLE ROW LEVEL SECURITY"))
+        # Drift of expression, WITH CHECK, role scope, command scope and helper body.
+        drifts = [
+            "ALTER POLICY tenant_guard ON vehicles USING (true)",
+            "ALTER POLICY tenant_guard ON vehicles WITH CHECK (true)",
+            "ALTER POLICY tenant_guard ON vehicles TO app_user",
+            "DROP POLICY runtime_access ON vehicles; "
+            "CREATE POLICY runtime_access ON vehicles FOR SELECT USING (true)",
+            "CREATE POLICY surprise_access ON vehicles USING (true)",
+            "CREATE OR REPLACE FUNCTION public.runtime_tenant_binding() RETURNS text "
+            "LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog "
+            "AS $$ SELECT NULL::text $$",
+        ]
+        for drift in drifts:
+            async with admin.begin() as connection:
+                driver = cast(SQLDriver, (await connection.get_raw_connection()).driver_connection)
+                await driver.execute(drift)
+            try:
+                with pytest.raises(RuntimeError, match="Unsafe runtime policy"):
+                    await verify_runtime_database_security(engines[1], "application")
+            finally:
+                async with admin.begin() as connection:
+                    driver = cast(
+                        SQLDriver, (await connection.get_raw_connection()).driver_connection
+                    )
+                    await driver.execute("DROP POLICY IF EXISTS surprise_access ON vehicles")
+                    for source in (
+                        "tenant-bindings.sql",
+                        "tenant-rls.sql",
+                        "outbox-tenant-policy.sql",
+                    ):
+                        await driver.execute(Path("database", source).read_text(encoding="utf-8"))
         vehicle = Vehicle.create(
             vehicle_id=VehicleId.new(), vin=VIN("ABC12345678901234"), tenant_id="grants-test"
         ).transition_to(VehicleStatus.ACTIVE)
@@ -524,6 +556,30 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
             )
             assert policies == 5
 
+        # Even a stolen pinned login cannot select a foreign tenant by setting the GUC.
+        async with admin.begin() as connection:
+            await connection.execute(
+                text("INSERT INTO runtime_tenant_bindings VALUES ('future_runtime','grants-test')")
+            )
+        async with future_engine.connect() as connection:
+            await connection.execute(text("SELECT set_config('app.tenant_id','tenant-b',true)"))
+            assert (
+                await connection.scalar(
+                    text("SELECT count(*) FROM vehicles WHERE tenant_id='tenant-b'")
+                )
+                == 0
+            )
+            assert (
+                await connection.scalar(
+                    text("SELECT count(*) FROM vehicles WHERE tenant_id='grants-test'")
+                )
+                == 1
+            )
+            with pytest.raises(DBAPIError):
+                await connection.execute(
+                    text("UPDATE runtime_tenant_bindings SET tenant_id='tenant-b'")
+                )
+            await connection.rollback()
         async with sessions["app_user"]() as session:
             assert not await session.scalar(
                 text(
@@ -531,6 +587,87 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
                     "'remote_commands','dispatch_order','INSERT')"
                 )
             )
+        # All six real login roles: changing tenant GUC never changes ownership.
+        for tenant, foreign_tenant in (("grants-test", "tenant-b"), ("tenant-b", "grants-test")):
+            grants = Path("database/runtime-grants.sql").read_text(encoding="utf-8")
+            for runtime, original in DATABASE_USERS.items():
+                grants = grants.replace(original, runtime_database_user(runtime, tenant))
+            async with admin.begin() as connection:
+                driver = cast(SQLDriver, (await connection.get_raw_connection()).driver_connection)
+                await driver.execute(grants)
+                for runtime in DATABASE_USERS:
+                    username = runtime_database_user(runtime, tenant)
+                    await connection.execute(
+                        text("INSERT INTO runtime_tenant_bindings VALUES (:role,:tenant)"),
+                        {"role": username, "tenant": tenant},
+                    )
+                    await driver.execute(f"ALTER ROLE {username} PASSWORD 'test-pinned'")
+            for runtime in DATABASE_USERS:
+                pinned = create_database_engine(
+                    settings.model_copy(
+                        update={
+                            "database_username": runtime_database_user(runtime, tenant),
+                            "database_password": SecretStr("test-pinned"),
+                        }
+                    )
+                )
+                engines.append(pinned)
+                await verify_runtime_database_security(pinned, runtime, tenant_id=tenant)
+                with pytest.raises(RuntimeError, match="Unsafe runtime database role"):
+                    await verify_runtime_database_security(
+                        pinned, runtime, tenant_id=foreign_tenant
+                    )
+                table = "outbox_events" if runtime == "outbox" else "remote_commands"
+                async with pinned.connect() as connection:
+                    await connection.execute(
+                        text("SELECT set_config('app.tenant_id',:tenant,true)"),
+                        {"tenant": foreign_tenant},
+                    )
+                    assert (
+                        await connection.scalar(
+                            text(f"SELECT count(*) FROM {table} WHERE tenant_id=:tenant"),
+                            {"tenant": tenant},
+                        )
+                        > 0
+                    )
+                    assert (
+                        await connection.scalar(
+                            text(f"SELECT count(*) FROM {table} WHERE tenant_id=:tenant"),
+                            {"tenant": foreign_tenant},
+                        )
+                        == 0
+                    )
+                    if runtime != "application":
+                        updated = await connection.execute(
+                            text(
+                                f"UPDATE {table} SET status=status "
+                                "WHERE tenant_id=:tenant RETURNING id"
+                            ),
+                            {"tenant": foreign_tenant},
+                        )
+                        assert updated.all() == []
+                    await connection.rollback()
+                    if runtime == "application":
+                        with pytest.raises(DBAPIError):
+                            await connection.execute(
+                                insert_event,
+                                {
+                                    "id": str(uuid4()),
+                                    "body": json.dumps({"payload": {"tenant_id": foreign_tenant}}),
+                                },
+                            )
+                        await connection.rollback()
+                    with pytest.raises(DBAPIError):
+                        await connection.execute(
+                            text("UPDATE runtime_tenant_bindings SET tenant_id=:tenant"),
+                            {"tenant": foreign_tenant},
+                        )
+                    await connection.rollback()
+                    with pytest.raises(DBAPIError):
+                        await connection.execute(
+                            text("CREATE TABLE public.pinned_forbidden (id int)")
+                        )
+                    await connection.rollback()
         denied = {
             "app_user": [
                 "UPDATE remote_commands SET tenant_id = tenant_id",
@@ -565,6 +702,19 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
                     with pytest.raises(DBAPIError):
                         await session.execute(text(statement))
                     await session.rollback()
+        evidence(
+            "12a-rls",
+            {
+                "dedicated_roles": 6,
+                "cross_tenant_read": "denied",
+                "cross_tenant_update": "zero rows",
+                "foreign_insert": "denied",
+                "binding_modification": "denied",
+                "runtime_ddl": "denied",
+                "policy_semantic_drift": "detected",
+                "pooled_context_cleanup": "passed",
+            },
+        )
     finally:
         for engine in engines:
             await engine.dispose()

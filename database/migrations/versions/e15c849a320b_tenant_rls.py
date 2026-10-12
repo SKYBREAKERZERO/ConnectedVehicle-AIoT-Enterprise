@@ -11,7 +11,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    source = Path(__file__).resolve().parents[2] / "tenant-rls.sql"
+    source = Path(__file__).resolve().parents[1] / "sql/e15c849a320b.sql"
     for statement in source.read_text(encoding="utf-8").split(";"):
         if statement.strip():
             op.execute(statement)

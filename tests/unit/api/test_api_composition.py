@@ -25,7 +25,7 @@ def test_api_lifespan_initializes_database_runtime() -> None:
     ):
         response = client.get("/health/live")
 
-        guard.assert_awaited_once_with(app.state.database_engine, "application")
+        guard.assert_awaited_once_with(app.state.database_engine, "application", tenant_id=None)
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 

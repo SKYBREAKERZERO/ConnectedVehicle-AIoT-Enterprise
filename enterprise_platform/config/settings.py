@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     database_username: str = "connected_vehicle"
     database_password: SecretStr = SecretStr("connected_vehicle")
 
+    database_tenant_id: str | None = Field(default=None, min_length=1, max_length=255)
     database_secret_prefix: str = "/connected-vehicle"
     application_database_secret_id: str | None = None
     outbox_database_secret_id: str | None = None

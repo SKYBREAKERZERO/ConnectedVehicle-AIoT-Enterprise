@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -16,6 +17,15 @@ DATABASE_USERS: dict[DatabaseRuntime, str] = {
 }
 
 
+def runtime_database_user(runtime: DatabaseRuntime, tenant_id: str | None = None) -> str:
+    base = DATABASE_USERS[runtime]
+    if tenant_id is None:
+        return base
+    if not tenant_id or tenant_id != tenant_id.strip():
+        raise ValueError("Invalid pinned tenant")
+    return base + "__" + sha256(tenant_id.encode()).hexdigest()[:12]
+
+
 class DatabaseCredentials(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
@@ -23,6 +33,7 @@ class DatabaseCredentials(BaseModel):
     host: str = Field(min_length=1)
     port: int = Field(ge=1, le=65535)
     dbname: str = Field(min_length=1)
+    tenant_id: str | None = None
     username: str
     password: SecretStr = Field(min_length=1)
 
@@ -39,14 +50,22 @@ async def load_runtime_database_settings(
         "outbox": settings.outbox_database_secret_id,
         "remote-command": settings.remote_command_database_secret_id,
     }
+    tenant_path = (
+        f"/tenants/{runtime_database_user(runtime, settings.database_tenant_id).rsplit('__', 1)[1]}"
+        if settings.database_tenant_id is not None
+        else ""
+    )
     secret_id = secret_ids[runtime] or (
-        f"{settings.database_secret_prefix}/{settings.app_env.value}/database/{runtime}"
+        f"{settings.database_secret_prefix}/{settings.app_env.value}{tenant_path}/database/{runtime}"
     )
     backend = provider or create_aws_secrets_manager_provider(settings)
     payload = await backend.get_secret(secret_id)
     try:
         credentials = DatabaseCredentials.model_validate_json(payload)
-        if credentials.username != DATABASE_USERS[runtime]:
+        if (
+            credentials.username != runtime_database_user(runtime, settings.database_tenant_id)
+            or credentials.tenant_id != settings.database_tenant_id
+        ):
             raise ValueError("Unexpected database user")
     except ValueError:
         raise ValueError(f"Invalid database credentials for {runtime}") from None
@@ -66,7 +85,11 @@ def migration_database_settings(settings: Settings) -> Settings:
     if (
         not settings.migration_database_username
         or not settings.migration_database_password
-        or settings.migration_database_username in DATABASE_USERS.values()
+        or any(
+            settings.migration_database_username == user
+            or settings.migration_database_username.startswith(user + "__")
+            for user in DATABASE_USERS.values()
+        )
     ):
         raise ValueError("Alembic requires independent MIGRATION_DATABASE_USERNAME/PASSWORD")
     return settings.model_copy(

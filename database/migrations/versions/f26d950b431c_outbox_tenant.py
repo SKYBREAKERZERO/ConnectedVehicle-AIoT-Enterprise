@@ -38,14 +38,14 @@ $$;
         "tenant_id IS NULL OR (length(tenant_id) > 0 AND tenant_id = trim(tenant_id))",
     )
     op.create_index("ix_outbox_events_tenant_status", "outbox_events", ["tenant_id", "status"])
-    source = Path(__file__).resolve().parents[2] / "outbox-tenant-policy.sql"
+    source = Path(__file__).resolve().parents[1] / "sql/f26d950b431c.sql"
     for statement in source.read_text(encoding="utf-8").split(";"):
         if statement.strip():
             op.execute(statement)
 
 
 def downgrade() -> None:
-    source = Path(__file__).resolve().parents[2] / "tenant-rls.sql"
+    source = Path(__file__).resolve().parents[1] / "sql/e15c849a320b.sql"
     # Restore the payload-derived guard before removing its replacement column.
     outbox = source.read_text(encoding="utf-8").split("ALTER TABLE outbox_events", 1)[1]
     for statement in ("ALTER TABLE outbox_events" + outbox).split(";"):
