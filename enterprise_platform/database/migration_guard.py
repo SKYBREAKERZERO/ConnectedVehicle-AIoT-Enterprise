@@ -22,6 +22,16 @@ def migration_transaction(connection: Connection, settings: Settings) -> Iterato
         raise ValueError("Migration guard requires a transactional connection")
     transaction = nullcontext() if connection.in_transaction() else connection.begin()
     with transaction:
+        if connection.scalar(text("SHOW transaction_isolation")) != "read committed":
+            raise ValueError("Migration guard requires READ COMMITTED isolation")
+        # Engine-level AUTOCOMMIT need not appear in Connection execution options.
+        # Prove consecutive statements belong to one server transaction before any DDL.
+        transaction_id = connection.scalar(text("SELECT pg_current_xact_id()::text"))
+        if (
+            connection.scalar(text("SELECT pg_current_xact_id_if_assigned()::text"))
+            != transaction_id
+        ):
+            raise ValueError("Migration guard requires a transactional connection")
         for name, value in (
             ("application_name", "connected-vehicle-migration"),
             ("lock_timeout", f"{max(1, int(settings.migration_lock_timeout_seconds * 1000))}ms"),

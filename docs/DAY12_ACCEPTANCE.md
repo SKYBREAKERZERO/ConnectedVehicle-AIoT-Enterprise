@@ -56,7 +56,10 @@ SQL 故障注入发生在绑定表/函数创建和车辆策略变更之后；服
 等待首个事务结束后读取已提交的 Revision，避免重复执行同一 DDL。
 超时和 application_name 使用事务局部配置，同时覆盖 CLI 与调用者提供的共享连接。
 测试观察两个实际 advisory lock 等待者、确认两次升级均成功，再注入 pg_sleep 验证共享连接
-语句超时、完整回滚、配置和锁释放及重试。AUTOCOMMIT 连接被拒绝。
+语句超时、完整回滚、配置和锁释放及重试。
+迁移要求 READ COMMITTED，并通过连续两条 SQL 的服务端事务 ID 证明事务有效；
+连接级和引擎默认 AUTOCOMMIT、REPEATABLE READ、SERIALIZABLE 均有真实数据库拒绝测试。
+这避免锁在语句结束时释放，或等待后继续读取旧事务快照。
 共享连接已有事务时，由调用者负责最终提交/回滚；当前迁移均为事务 DDL，
 包含 autocommit_block 或 CREATE INDEX CONCURRENTLY 的未来迁移需要单独设计维护流程。
 锁语义见 [PostgreSQL advisory lock 文档](https://www.postgresql.org/docs/16/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS)。

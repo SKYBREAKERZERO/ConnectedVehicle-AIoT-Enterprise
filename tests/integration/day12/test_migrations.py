@@ -13,8 +13,9 @@ from alembic.config import Config
 from sqlalchemy import event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import create_async_engine
 
-from enterprise_platform.database.engine import create_database_engine
+from enterprise_platform.database.engine import build_database_url, create_database_engine
 from enterprise_platform.database.migration_guard import MIGRATION_LOCK_KEY
 from tests.e2e.test_independent_runtimes import ROOT, docker
 from tests.integration.day12.conftest import evidence
@@ -486,4 +487,26 @@ async def test_migration_serialization_and_shared_timeout(rehearsal: Harness) ->
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         await timeout_engine.dispose()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("isolation", ["AUTOCOMMIT", "REPEATABLE READ", "SERIALIZABLE"])
+async def test_engine_default_isolation_cannot_bypass_guard(
+    rehearsal: Harness, isolation: str
+) -> None:
+    settings = rehearsal.restore("day12_unsafe_" + isolation.lower().replace(" ", "_"))
+    engine = create_database_engine(settings)
+    unsafe = create_async_engine(build_database_url(settings), isolation_level=isolation)
+    try:
+        before = await snapshot(engine)
+        async with unsafe.connect() as connection:
+            synchronous = connection.sync_connection
+            assert synchronous is not None
+            assert "isolation_level" not in synchronous.get_execution_options()
+            with pytest.raises(ValueError, match="transactional|READ COMMITTED"):
+                await connection.run_sync(shared_upgrade)
+        assert await snapshot(engine) == before
+    finally:
+        await unsafe.dispose()
         await engine.dispose()
