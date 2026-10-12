@@ -26,3 +26,9 @@ def test_restore_cast_representation_normalizes_without_changing_predicate() -> 
 )
 def test_constraint_weakening_never_normalizes_to_original(changed: str) -> None:
     assert normalized_constraint(SOURCE) != normalized_constraint(changed)
+
+
+def test_function_argument_cast_is_not_treated_as_equivalent() -> None:
+    varchar = "CHECK (custom_check('value'::character varying))"
+    text = "CHECK (custom_check('value'::text))"
+    assert normalized_constraint(varchar) != normalized_constraint(text)

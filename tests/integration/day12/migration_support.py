@@ -124,6 +124,19 @@ def normalized_constraint(definition: str) -> str:
     # pg_restore reparses varchar enum arrays as element-wise text casts.
     # Normalize only these equivalent literal casts; all predicates remain intact.
     literal = r"'(?:[^']|'')*'"
+    outer = re.fullmatch(
+        r"CHECK \(\(\((status|command_type)\)::text = ANY \((.+)\)\)\)", definition
+    )
+    element = rf"(?:{literal}::(?:character varying|text)|\({literal}::character varying\)::text)"
+    elements = rf"{element}(?:, {element})*"
+    if (
+        outer is None
+        or re.fullmatch(
+            rf"(?:\(ARRAY\[{elements}\]\)::text\[\]|ARRAY\[{elements}\])", outer.group(2)
+        )
+        is None
+    ):
+        return definition
     definition = re.sub(r"\((" + literal + r")::character varying\)::text", r"\1::text", definition)
     definition = re.sub(r"(" + literal + r")::character varying", r"\1::text", definition)
     return re.sub(r"\(\(ARRAY\[([^\]]+)\]\)::text\[\]\)", r"(ARRAY[\1])", definition)
