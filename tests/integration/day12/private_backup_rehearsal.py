@@ -11,6 +11,7 @@ import re
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from enterprise_platform.database.engine import create_database_engine
 from tests.e2e.test_independent_runtimes import docker
@@ -42,7 +43,10 @@ def publish_report(output: Path, report: dict[str, object]) -> None:
             stream.write(json.dumps(report, indent=2) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.link(temporary, output)
+        try:
+            os.link(temporary, output)
+        except FileExistsError:
+            raise FileExistsError("Report destination already exists; select a new path") from None
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
@@ -94,15 +98,27 @@ async def run(backup: Path, expected_sha256: str, output: Path) -> None:
             docker("rm", "-f", harness.container)
 
 
+def default_report_path() -> Path:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    return Path(".runtime-reports") / f"private-day11-upgrade-{stamp}-{uuid4().hex}.json"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("backup", type=Path)
     parser.add_argument("--sha256", required=True)
     parser.add_argument(
-        "--output", type=Path, default=Path(".runtime-reports/private-day11-upgrade.json")
+        "--output",
+        type=Path,
+        help="Report destination (default: a unique file in .runtime-reports; never overwrite)",
     )
     args = parser.parse_args()
-    asyncio.run(run(args.backup, args.sha256, args.output))
+    output = args.output if args.output is not None else default_report_path()
+    try:
+        asyncio.run(run(args.backup, args.sha256, output))
+    except (OSError, ValueError) as exc:
+        parser.exit(status=2, message=f"error: {exc}\n")
+    print(f"Report saved: {output.resolve()}")
 
 
 if __name__ == "__main__":
