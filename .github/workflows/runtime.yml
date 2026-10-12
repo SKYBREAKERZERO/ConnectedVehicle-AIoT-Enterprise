@@ -103,6 +103,13 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: day12-local-acceptance
-          path: .runtime-reports/day12-*.json
+          path: |
+            .runtime-reports/day12-12a-migrations.json
+            .runtime-reports/day12-12a-rls.json
+            .runtime-reports/day12-12b-identity-matrix.json
+            .runtime-reports/day12-12c-alert-lifecycle.json
+            .runtime-reports/day12-12d-restore.json
+            .runtime-reports/day12-acceptance.json
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
