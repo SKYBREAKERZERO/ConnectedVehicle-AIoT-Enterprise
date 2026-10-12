@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import os
+import re
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +17,39 @@ from tests.e2e.test_independent_runtimes import docker
 from tests.integration.day12.migration_support import HEAD, LEGACY, snapshot, start_harness
 
 
+def validate_paths(backup: Path, expected_sha256: str, output: Path) -> None:
+    if output.resolve() == backup.resolve():
+        raise ValueError("Report destination must differ from the source backup")
+    if os.path.lexists(output):
+        raise FileExistsError("Report destination already exists; select a new path")
+    if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise ValueError("Expected SHA256 must be 64 lowercase hexadecimal characters")
+    with backup.open("rb") as stream:
+        actual = hashlib.file_digest(stream, "sha256").hexdigest()
+    if actual != expected_sha256:
+        raise ValueError("Day11 backup digest mismatch")
+
+
+def publish_report(output: Path, report: dict[str, object]) -> None:
+    """Publish a complete report without overwriting any concurrently created destination."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=output.parent, prefix=".day11-report-", delete=False
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(report, indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, output)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 async def run(backup: Path, expected_sha256: str, output: Path) -> None:
+    validate_paths(backup, expected_sha256, output)
     with tempfile.TemporaryDirectory(prefix="day11-private-rehearsal-") as temporary:
         directory = Path(temporary).resolve()
         if not directory.is_relative_to(Path(tempfile.gettempdir()).resolve()):
@@ -51,8 +86,7 @@ async def run(backup: Path, expected_sha256: str, output: Path) -> None:
                     "data_preserved": True,
                     "repeat_unchanged": True,
                 }
-                output.parent.mkdir(parents=True, exist_ok=True)
-                output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+                publish_report(output, report)
                 print("Private Day11 backup: restored, upgraded and repeated without data changes")
             finally:
                 await engine.dispose()

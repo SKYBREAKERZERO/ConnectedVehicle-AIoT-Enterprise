@@ -6,7 +6,7 @@ Runtime/IaC 检查和 `day12-local-acceptance` 产物为准。
 
 | 阶段 | 实现与验收 | 证据文件 |
 | --- | --- | --- |
-| 12A | Day11 发布提交生成并恢复的备份、五表多租户历史数据、非超级用户迁移、Schema/权限一致性、失败回滚重试及大表并发。固定租户身份和跨租户拒绝继续验证。 | day12-12a-migrations.json、day12-12a-rls.json、day12-migration-failure-retry.json、day12-migration-scale-locks.json |
+| 12A | Day11 发布提交备份、五表多租户历史数据、非超级用户迁移、Schema/权限一致性、失败回滚重试、大表并发、两个迁移进程互斥及共享连接超时。固定租户身份和跨租户拒绝继续验证。 | day12-12a-migrations.json、day12-12a-rls.json、day12-migration-failure-retry.json、day12-migration-scale-locks.json、day12-migration-guards.json |
 | 12B | 六角色 × 六 Secret 配置矩阵，仅允许各自 Secret；每角色验证正确及错误的 KMS 上下文、服务、Region 和 Key。读取实际 LocalStack 策略及 Secret KMS 绑定；正确/错误加密上下文执行真实本地 KMS 加解密检查。 | day12-12b-identity-matrix.json |
 | 12C | 从真实 SQLite/PostgreSQL 收集指标，五类告警分别观察 Prometheus FIRING、Webhook firing、恢复后的 Webhook resolved，并关联同一次告警。 | day12-12c-alert-lifecycle.json |
 | 12D | 备份 SHA256、完整性校验、恢复前摘要比对、设备归属、命令去重、ACK 前置顺序、事件重放审计和恢复操作审计；审计失败时恢复文件不发布。 | day12-12d-restore.json |
@@ -16,6 +16,10 @@ Runtime/IaC 检查和 `day12-local-acceptance` 产物为准。
 CI 上传的 JSON 不包含数据库密码、Token、SecretString 或 Terraform state。
 `scripts.day12_evidence` 要求全部阶段记录存在，验证告警实例和结果，再生成文件摘要清单；
 缺失任何记录会使 Runtime Gate 失败。
+所有阶段记录携带版本、完整 Commit SHA 和本次批次 ID，旧提交或混合批次不能重新标记为通过。
+CI 批次 ID 使用 workflow run ID 与 attempt；本地每次验收设置新的 ID，并使用独立输出目录。
+验收器重新计算 Catalog 摘要及差异、检查 Revision/角色属性/数据关联/租户计数，
+逐项核对 Secret 矩阵坐标和六类 KMS 上下文探针，拒绝重复坐标或仅维持相同允许数量的错配。
 
 ## 12A：迁移与租户隔离
 
@@ -48,6 +52,17 @@ SQL 故障注入发生在绑定表/函数创建和车辆策略变更之后；服
 仅作用于迁移连接，不改变应用连接池。可按已测数据量调整；超时后先确认回滚再重试。
 连接共享和事务测试采用 [Alembic 官方连接共享方案](https://alembic.sqlalchemy.org/en/latest/cookbook.html#sharing-a-connection-across-one-or-more-programmatic-migration-commands)，
 超时参数遵循 [PostgreSQL 16 文档](https://www.postgresql.org/docs/16/runtime-config-client.html)。
+在线迁移在读取 Alembic Revision 之前获取固定数据库级事务 advisory lock；第二个迁移进程
+等待首个事务结束后读取已提交的 Revision，避免重复执行同一 DDL。
+超时和 application_name 使用事务局部配置，同时覆盖 CLI 与调用者提供的共享连接。
+测试观察两个实际 advisory lock 等待者、确认两次升级均成功，再注入 pg_sleep 验证共享连接
+语句超时、完整回滚、配置和锁释放及重试。
+迁移要求 READ COMMITTED，并通过连续两条 SQL 的服务端事务 ID 证明事务有效；
+连接级和引擎默认 AUTOCOMMIT、REPEATABLE READ、SERIALIZABLE 均有真实数据库拒绝测试。
+这避免锁在语句结束时释放，或等待后继续读取旧事务快照。
+共享连接已有事务时，由调用者负责最终提交/回滚；当前迁移均为事务 DDL，
+包含 autocommit_block 或 CREATE INDEX CONCURRENTLY 的未来迁移需要单独设计维护流程。
+锁语义见 [PostgreSQL advisory lock 文档](https://www.postgresql.org/docs/16/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS)。
 
 每一步保存前后 Revision、开始/结束时间、耗时、Schema 摘要、脱敏 Catalog 差异和五表摘要；
 CI 额外强制检查失败回滚与规模/锁等待记录，不再仅接受几个 passed 字段。
@@ -58,11 +73,13 @@ CI 额外强制检查失败回滚与规模/锁等待记录，不再仅接受几�
 需要验收其他实际备份时，使用只读源文件及独立保存的摘要：
 
 ```powershell
-.\.venv\Scripts\python.exe -m tests.integration.day12.private_backup_rehearsal <Day11备份路径> --sha256 <可信摘要>
+.\.venv\Scripts\python.exe -m tests.integration.day12.private_backup_rehearsal <Day11备份路径> --sha256 <可信摘要> --output <新的报告路径>
 ```
 
 该工具在专用容器中显式重建 Owner/ACL，再比较迁移前后数据；它不证明原始部署权限完全相同。
 当前 CLI 支持本仓库 Day11 Schema；实际备份含扩展或自定义对象时需补充相应恢复配置。
+摘要和输出路径在启动容器前验证。报告拒绝覆盖现有文件、源备份及其别名；
+完整报告写入临时文件后，以不可覆盖的原子发布处理并发目标创建，原始备份保持只读。
 
 专用身份及 API 启动方式见 [LOCAL_TENANT_RLS.md](LOCAL_TENANT_RLS.md)。
 旧共享运行角色继续保留兼容模式；需要专用身份才能抵御主动修改租户会话上下文。
@@ -115,9 +132,15 @@ Webhook 为隔离网络中的本地接收器，没有外部消息发送。
 ## 重复运行与发布
 
 ```powershell
+$env:DAY12_EVIDENCE_RUN_ID = [guid]::NewGuid().ToString()
+$env:RUNTIME_EVIDENCE_DIR = ".runtime-reports/day12-$env:DAY12_EVIDENCE_RUN_ID"
 .\.venv\Scripts\python.exe -m pytest tests/integration/day12 tests/integration/security/test_database_runtime_permissions.py tests/unit/simulators/test_verified_restore.py -q
-.\.venv\Scripts\python.exe -m scripts.day12_evidence
+if ($LASTEXITCODE -ne 0) { throw "Day12 tests failed" }
+.\.venv\Scripts\python.exe -m scripts.day12_evidence --directory $env:RUNTIME_EVIDENCE_DIR
 ```
+
+下载 CI 产物后，可向 validate 函数显式传入从 GitHub 核对的 expected_commit 和 expected_run_id；
+CLI 对应 --commit 和 --run-id。旧版无批次记录的历史产物不满足新 Gate，仍可作为历史证据保存。
 
 测试自动创建并清理专用容器和网络，不删除开发环境卷。
 Runtime CI 包含上述验收、原有单元/契约/设备全链路和可靠性测试。
