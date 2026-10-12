@@ -17,7 +17,15 @@ ALERTS = {
     "RuntimeReportDeliveryStalled",
     "RuntimeCollectorUnavailable",
 }
-STAGES = ("12a-migrations", "12a-rls", "12b-identity-matrix", "12c-alert-lifecycle", "12d-restore")
+STAGES = (
+    "12a-migrations",
+    "12a-rls",
+    "12b-identity-matrix",
+    "12c-alert-lifecycle",
+    "12d-restore",
+    "migration-failure-retry",
+    "migration-scale-locks",
+)
 
 
 def validate(directory: Path) -> dict[str, Any]:
@@ -28,14 +36,54 @@ def validate(directory: Path) -> dict[str, Any]:
         data = path.read_bytes()
         reports[stage] = json.loads(data)
         digests[path.name] = hashlib.sha256(data).hexdigest()
-    if reports["12a-migrations"] != {
+    migration = reports["12a-migrations"]
+    expected = {
         "fresh": "passed",
         "existing": "passed",
         "repeat_upgrade": "no changes",
         "existing_rows": "preserved",
         "policies": "identical",
-    }:
+    }
+    if any(migration.get(key) != value for key, value in expected.items()):
         raise ValueError("Migration acceptance incomplete")
+    if (
+        migration["source"]["kind"] != "released-day11-pg-dump"
+        or migration["source"]["release_commit"] != "819061de39eb2adb0ce47b61d465cd0f7891a3c1"
+        or migration["security_and_schema_converged"] is not True
+        or set(migration["historical_data"])
+        != {"vehicles", "remote_commands", "command_reports", "telemetry_samples", "outbox_events"}
+        or any(
+            migration["migration_identity"][key] is not False
+            for key in (
+                "rolsuper",
+                "rolbypassrls",
+                "rolcreatedb",
+                "rolcreaterole",
+                "rolreplication",
+            )
+        )
+        or any(
+            row["rows"] < 1 or len(row["tenant_row_counts"]) != 2
+            for row in migration["historical_data"].values()
+        )
+        or migration["steps"][1]["schema_sha256"] != migration["steps"][2]["schema_sha256"]
+    ):
+        raise ValueError("Released-backup/non-superuser migration evidence incomplete")
+    failure = reports["migration-failure-retry"]
+    scale = reports["migration-scale-locks"]
+    if (
+        failure["rollback_complete"] is not True
+        or failure["retry_succeeded"] is not True
+        or failure["schema_before_sha256"] != failure["schema_after_failure_sha256"]
+        or failure["data_before"] != failure["data_after_failure"]
+        or failure["revision_before"] != failure["revision_after_failure"]
+        or scale["postgres_lock_wait_observed"] is not True
+        or scale["lock_timeout_rolled_back"] is not True
+        or scale["data_preserved"] is not True
+        or scale["runtime_read_write_transactions"] < 10
+        or scale["rows"]["telemetry_samples"]["rows"] < 50000
+    ):
+        raise ValueError("Migration rollback/scale evidence incomplete")
     rls = reports["12a-rls"]
     if (
         rls["dedicated_roles"] != 6

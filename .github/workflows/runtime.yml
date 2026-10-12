@@ -109,6 +109,8 @@ jobs:
             .runtime-reports/day12-12b-identity-matrix.json
             .runtime-reports/day12-12c-alert-lifecycle.json
             .runtime-reports/day12-12d-restore.json
+            .runtime-reports/day12-migration-failure-retry.json
+            .runtime-reports/day12-migration-scale-locks.json
             .runtime-reports/day12-acceptance.json
           include-hidden-files: true
           if-no-files-found: error
