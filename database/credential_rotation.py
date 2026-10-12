@@ -372,5 +372,12 @@ async def recover(settings: Settings, path: Path, client: Any) -> None:
     if record["phase"] in {"complete", "recovered"}:
         return
     targets = [Target(**entry["target"]) for entry in record["entries"]]
-    async with password_manager(settings, targets) as backend:
-        await restore(record, client, backend, path)
+    try:
+        async with password_manager(settings, targets) as backend:
+            await restore(record, client, backend, path)
+    except Exception:
+        record["phase"] = "recovery_required"
+        save_journal(path, record)
+        # SQLAlchemy errors can include bound passwords. Keep the terminal error
+        # as sanitized as the durable journal, including when recovery itself fails.
+        raise RuntimeError(f"Credential recovery required; journal: {path}") from None
