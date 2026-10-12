@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from database.credential_rotation import Target, restore, rotate
+from database.credential_rotation import Target, recover, restore, rotate
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.credentials import DATABASE_USERS
 from tests.support.secret_versions import MemorySecrets
@@ -187,3 +189,28 @@ async def test_initial_partial_publication_restores_null_passwords_and_can_retry
         settings, targets, candidates(targets), secrets, database, directory=tmp_path
     )
     assert json.loads(path.read_text())["phase"] == "complete"
+
+
+async def test_explicit_recovery_failure_redacts_errors_and_retains_retry_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, targets, secrets, database = setup(True)
+    database.fail_verify = database.fail_restore = True
+    with pytest.raises(RuntimeError, match="recovery required"):
+        await rotate(settings, targets, candidates(targets), secrets, database, directory=tmp_path)
+    path = next(tmp_path.glob("*.json"))
+
+    @asynccontextmanager
+    async def manager(settings: Settings, targets: list[Target]) -> AsyncIterator[Passwords]:
+        yield database
+
+    monkeypatch.setattr("database.credential_rotation.password_manager", manager)
+    with pytest.raises(RuntimeError, match="recovery required") as failure:
+        await recover(settings, path, secrets)
+    assert "private" not in str(failure.value)
+    assert failure.value.__suppress_context__ is True
+    assert json.loads(path.read_text())["phase"] == "recovery_required"
+    database.fail_restore = False
+    await recover(settings, path, secrets)
+    assert json.loads(path.read_text())["phase"] == "recovered"
