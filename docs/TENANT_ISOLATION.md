@@ -1,5 +1,9 @@
 # Tenant isolation acceptance
 
+Current local tenant-bound runtime example and verification: [LOCAL_TENANT_RLS.md](LOCAL_TENANT_RLS.md).
+Day12 migration, security, monitoring and recovery evidence: [DAY12_ACCEPTANCE.md](DAY12_ACCEPTANCE.md).
+The older counts and rollout records below are historical shared-role evidence.
+
 | Priority | Control | Implementation and evidence |
 | --- | --- | --- |
 | P0 | JWT tenant context | Existing RS256 issuer/audience/expiry validation; signed tenant only. Forged signature / wrong algorithm tests retained. X-Tenant-ID cannot override identity; body tenant injection rejected. Database binding refuses a tenant differing from authenticated context. |
@@ -33,7 +37,7 @@ immutable parsing function and retains its original bytes for failed-event
 isolation; tenant API inserts of these events are rejected. ORM generated-default fetching is disabled so app_user
 retains INSERT-only outbox privileges.
 
-The application owns one shared database role across tenants. RLS guards against
+The legacy application mode owns one shared database role across tenants. RLS guards against
 omitted query filters, not compromised code or credentials that can deliberately
 set arbitrary PostgreSQL session settings. JWT verification, service ownership
 checks, Worker comparison with authoritative command data and least-privilege

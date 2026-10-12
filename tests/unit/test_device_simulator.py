@@ -556,20 +556,24 @@ def test_retry_after_is_bounded_and_validated(value: str | None, expected: float
     assert parse_retry_after(value) == expected
 
 
-async def test_http_retry_after_is_persisted(tmp_path: Path) -> None:
+async def test_http_retry_after_is_persisted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config = settings(tmp_path)
     store = Store(config.database)
     store.accept(payload(config))
+    clock = datetime.now(UTC).timestamp()
+    monkeypatch.setattr("simulators.vehicle_device.store.time.time", lambda: clock)
     try:
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(
                 lambda _: httpx.Response(429, headers={"Retry-After": "120"})
             )
         ) as client:
-            before = datetime.now(UTC).timestamp()
             await report_once(store, config, client)
         report = store.db.execute("SELECT * FROM reports").fetchone()
-        assert report["state"] == "pending" and report["next_attempt"] >= before + 120
+        assert report["state"] == "pending" and report["next_attempt"] == clock + 120
         assert store.pending_report() is None
     finally:
         store.close()

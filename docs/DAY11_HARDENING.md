@@ -22,6 +22,15 @@ AUTH_RETRY_EXHAUSTED，并发出 ERROR 日志。重启不能清除次数；ACK b
 运行 --reconcile 的 health.auth_blocked_reports 应为 0；非零立即告警。
 log ERROR 由部署的日志采集器接入告警渠道，当前仓库不宣称已部署 AWS 告警服务。
 
+本地提供 Prometheus → Alertmanager → 本地接收器。使用
+`database.provision_tenant_local --monitor` 创建只能调用匿名聚合函数的监控角色；
+按 `scripts/local_monitor.py` 的配置格式列出要监控的设备 SQLite 路径和容量，保存到
+`.runtime-reports/local-monitor-config.json`，再运行 `scripts/local_observability.ps1`。
+配置字段为 endpoint、secret_id、devices（每项包含 path、capacity）。
+仪表盘只绑定 localhost:19091/19093；接收记录位于
+`.runtime-reports/observability/alerts.jsonl`。采集失败或过期会触发告警。
+2026-10-11 本地故障注入收到认证阻断告警及采集器恢复通知；这不是外部通知渠道。
+
 ## 账本容量与归档
 
 DEVICE_MAX_LEDGER_RECORDS 默认 100000，涵盖命令记录、归档去重摘要与操作审计，达到上限拒收
@@ -29,16 +38,18 @@ DEVICE_MAX_LEDGER_RECORDS 默认 100000，涵盖命令记录、归档去重摘�
 每小时采集 reconcile：记录数达到额度 80%、磁盘剩余不足两倍 reserve，或未交付报告
 超过约定 SLA 时预警；达到 95% 时安排维护。保留策略由项目数据合规要求决定。
 
-归档必须停 T-Box。示例：
+默认归档需停 T-Box。使用 `--online --batch 100` 可在运行中归档：
 
 ```powershell
-.\.venv\Scripts\python.exe -m simulators.vehicle_device.maintenance --source .device/tbox.sqlite --destination .device/archive-001.sqlite --archive-before 2026-10-01T00:00:00+00:00
+.\.venv\Scripts\python.exe -m simulators.vehicle_device.maintenance --source .device/tbox.sqlite --destination .device/archive-001.sqlite --archive-before 2026-10-01T00:00:00+00:00 --online --batch 100
 ```
 
 工具取得维护锁，先在线 backup + integrity_check + 原子发布，再于单事务中清理最多
 1000 个过期且已终态、报告全部 delivered 的命令及报告。保留身份、全部操作审计、
 命令 ID 和原始规范化 Payload SHA256 去重摘要；重复命令拒绝再次执行，冲突正文拒绝。
-最后 checkpoint/VACUUM 回收页面。未完成/blocked 记录不清理。重复运行须使用新目标。
+在线模式只删除快照中存在且现场命令与全部报告保持一致的记录，以短事务释放可复用页面，
+不执行 VACUUM 或截断 checkpoint；物理缩小文件仍需离线维护。
+离线模式最后 checkpoint/VACUUM 回收页面。未完成/blocked 记录不清理。重复运行须使用新目标。
 
 归档文件含敏感业务数据，应使用受限主机权限、加密备份和定期离线恢复验证；文件不入 Git。
 摘要和审计不自动删除，容量硬限避免无限增长；达到额度需审核后增加容量或设计新的

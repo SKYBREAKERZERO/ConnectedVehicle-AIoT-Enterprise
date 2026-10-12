@@ -44,6 +44,9 @@ async def provision(settings: Settings) -> None:
                 Path(__file__).with_name("runtime-grants.sql").read_text(encoding="utf-8")
             )
             await driver.execute(
+                Path(__file__).with_name("tenant-bindings.sql").read_text(encoding="utf-8")
+            )
+            await driver.execute(
                 Path(__file__).with_name("tenant-rls.sql").read_text(encoding="utf-8")
             )
             await driver.execute(

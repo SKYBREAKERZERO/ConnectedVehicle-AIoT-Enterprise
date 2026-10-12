@@ -49,7 +49,9 @@ def create_app() -> FastAPI:
         app.state.session_factory = session_factory
 
         try:
-            await verify_runtime_database_security(engine, "application")
+            await verify_runtime_database_security(
+                engine, "application", tenant_id=settings.database_tenant_id
+            )
             yield
         finally:
             await engine.dispose()

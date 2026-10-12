@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from enterprise_platform.database.credentials import DATABASE_USERS, DatabaseRuntime
+from enterprise_platform.database.credentials import DatabaseRuntime, runtime_database_user
 
 
-async def verify_runtime_database_security(engine: AsyncEngine, runtime: DatabaseRuntime) -> None:
+async def verify_runtime_database_security(
+    engine: AsyncEngine, runtime: DatabaseRuntime, *, tenant_id: str | None = None
+) -> None:
     """Refuse serving traffic against privileged roles or an unmigrated database."""
     async with engine.connect() as connection:
         result = await connection.execute(
@@ -21,7 +25,7 @@ async def verify_runtime_database_security(engine: AsyncEngine, runtime: Databas
         """)
         )
         role = result.mappings().one()
-        if role["username"] != DATABASE_USERS[runtime] or any(
+        if role["username"] != runtime_database_user(runtime, tenant_id) or any(
             role[key]
             for key in (
                 "rolsuper",
@@ -36,6 +40,90 @@ async def verify_runtime_database_security(engine: AsyncEngine, runtime: Databas
             )
         ):
             raise RuntimeError("Unsafe runtime database role; provision independent runtime grants")
+        functions = (
+            (
+                await connection.execute(
+                    text("""
+            SELECT p.proname,p.prosrc,p.prosecdef,p.provolatile::text AS provolatile,p.proconfig,
+                   pg_get_userbyid(p.proowner) AS owner
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+            WHERE n.nspname='public' AND p.proname IN
+                ('runtime_tenant_binding')
+        """)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        expected_functions = {
+            "runtime_tenant_binding": (
+                "SELECT tenant_id FROM public.runtime_tenant_bindings WHERE role_name=session_user"
+            ),
+        }
+        if len(functions) != 1 or any(
+            " ".join(row["prosrc"].split()) != expected_functions.get(row["proname"])
+            or not row["prosecdef"]
+            or row["provolatile"] != "s"
+            or row["proconfig"] != ["search_path=pg_catalog"]
+            or row["owner"] == role["username"]
+            for row in functions
+        ):
+            raise RuntimeError("Unsafe runtime policy function contract")
+        outbox_function = (
+            (
+                await connection.execute(
+                    text("""
+                SELECT p.prosrc,p.prosecdef,p.proisstrict,p.provolatile::text AS volatility
+                FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                WHERE n.nspname='public' AND p.proname='outbox_event_tenant'
+            """)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        expected_body = (
+            "BEGIN RETURN body::jsonb -> 'payload' ->> 'tenant_id'; "
+            "EXCEPTION WHEN invalid_text_representation THEN RETURN NULL; END;"
+        )
+        if len(outbox_function) != 1 or any(
+            " ".join(row["prosrc"].split()) != expected_body
+            or row["prosecdef"]
+            or not row["proisstrict"]
+            or row["volatility"] != "i"
+            for row in outbox_function
+        ):
+            raise RuntimeError("Unsafe runtime outbox tenant function contract")
+        writable_bindings = await connection.scalar(
+            text(
+                "SELECT has_table_privilege(current_user,'public.runtime_tenant_bindings',"
+                "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')"
+            )
+        )
+        if writable_bindings:
+            raise RuntimeError("Unsafe runtime tenant binding privileges")
+        binding = await connection.scalar(text("SELECT public.runtime_tenant_binding()"))
+        if binding != tenant_id:
+            raise RuntimeError("Unsafe runtime tenant binding")
+        policies = (
+            (
+                await connection.execute(
+                    text("""
+            SELECT c.relname AS table_name,p.polname,p.polpermissive,
+                   p.polcmd::text AS polcmd,p.polroles,
+                   pg_get_expr(p.polqual,p.polrelid) AS using_expr,
+                   pg_get_expr(p.polwithcheck,p.polrelid) AS check_expr
+            FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname='public' AND c.relname IN
+              ('vehicles','remote_commands','command_reports','telemetry_samples','outbox_events')
+        """)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        validate_policy_contract([dict(row) for row in policies])
         protected = await connection.scalar(
             text("""
             SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -52,9 +140,11 @@ async def verify_runtime_database_security(engine: AsyncEngine, runtime: Databas
         generated_tenant = await connection.scalar(
             text("""
             SELECT count(*) FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
+            JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname='public' AND c.relname='outbox_events'
               AND a.attname='tenant_id' AND a.attgenerated='s' AND NOT a.attisdropped
+              AND pg_get_expr(d.adbin,d.adrelid)='outbox_event_tenant(event_body)'
         """)
         )
         dispatch_order = await connection.scalar(
@@ -67,3 +157,40 @@ async def verify_runtime_database_security(engine: AsyncEngine, runtime: Databas
         # Catalogs reveal structure without granting workers access to other runtimes' tables.
         if protected != 5 or generated_tenant != 1 or dispatch_order != 1:
             raise RuntimeError("Unsafe runtime database schema; apply tenant RLS migrations")
+
+
+def validate_policy_contract(policies: list[dict[str, Any]]) -> None:
+    """Exact PostgreSQL deparse contract: fail closed on any policy semantic drift."""
+    guard = (
+        "((tenant_id)::text = COALESCE(runtime_tenant_binding(), "
+        "NULLIF(current_setting('app.tenant_id'::text, true), ''::text)))"
+    )
+    expected = {
+        table: guard
+        for table in (
+            "vehicles",
+            "remote_commands",
+            "command_reports",
+            "telemetry_samples",
+            "outbox_events",
+        )
+    }
+    expected["outbox_events"] = f"((CURRENT_USER = 'outbox_worker'::name) OR {guard})"
+    if len(policies) != 10:
+        raise RuntimeError("Unsafe runtime policy contract: unexpected policy count")
+    seen: set[tuple[str, str]] = set()
+    for policy in policies:
+        table, name = policy["table_name"], policy["polname"]
+        key = (table, name)
+        if key in seen or table not in expected or name not in {"runtime_access", "tenant_guard"}:
+            raise RuntimeError("Unsafe runtime policy contract: unexpected policy")
+        seen.add(key)
+        expression = expected[table] if name == "tenant_guard" else "true"
+        if (
+            policy["polroles"] != [0]
+            or policy["polcmd"] != "*"
+            or policy["polpermissive"] != (name == "runtime_access")
+            or policy["using_expr"] != expression
+            or policy["check_expr"] != expression
+        ):
+            raise RuntimeError("Unsafe runtime policy contract: semantic drift")

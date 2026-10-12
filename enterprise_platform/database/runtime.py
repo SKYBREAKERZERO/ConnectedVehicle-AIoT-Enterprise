@@ -18,7 +18,9 @@ async def runtime_database_sessions(
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     engine = create_database_engine(await load_runtime_database_settings(settings, runtime))
     try:
-        await verify_runtime_database_security(engine, runtime)
+        await verify_runtime_database_security(
+            engine, runtime, tenant_id=settings.database_tenant_id
+        )
         yield create_session_factory(engine)
     finally:
         await engine.dispose()

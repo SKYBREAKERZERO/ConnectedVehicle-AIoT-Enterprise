@@ -1,0 +1,26 @@
+-- Run as migration owner. Runtime roles remain non-owner and NOBYPASSRLS.
+ALTER TABLE vehicles ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS runtime_access ON vehicles;
+DROP POLICY IF EXISTS tenant_guard ON vehicles;
+CREATE POLICY runtime_access ON vehicles USING (true) WITH CHECK (true);
+CREATE POLICY tenant_guard ON vehicles AS RESTRICTIVE USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')) WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), ''));
+ALTER TABLE remote_commands ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS runtime_access ON remote_commands;
+DROP POLICY IF EXISTS tenant_guard ON remote_commands;
+CREATE POLICY runtime_access ON remote_commands USING (true) WITH CHECK (true);
+CREATE POLICY tenant_guard ON remote_commands AS RESTRICTIVE USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')) WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), ''));
+ALTER TABLE command_reports ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS runtime_access ON command_reports;
+DROP POLICY IF EXISTS tenant_guard ON command_reports;
+CREATE POLICY runtime_access ON command_reports USING (true) WITH CHECK (true);
+CREATE POLICY tenant_guard ON command_reports AS RESTRICTIVE USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')) WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), ''));
+ALTER TABLE telemetry_samples ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS runtime_access ON telemetry_samples;
+DROP POLICY IF EXISTS tenant_guard ON telemetry_samples;
+CREATE POLICY runtime_access ON telemetry_samples USING (true) WITH CHECK (true);
+CREATE POLICY tenant_guard ON telemetry_samples AS RESTRICTIVE USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')) WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), ''));
+ALTER TABLE outbox_events ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS runtime_access ON outbox_events;
+DROP POLICY IF EXISTS tenant_guard ON outbox_events;
+CREATE POLICY runtime_access ON outbox_events USING (true) WITH CHECK (true);
+CREATE POLICY tenant_guard ON outbox_events AS RESTRICTIVE USING (current_user = 'outbox_worker' OR (event_body::jsonb -> 'payload' ->> 'tenant_id') = nullif(current_setting('app.tenant_id', true), '')) WITH CHECK (current_user = 'outbox_worker' OR (event_body::jsonb -> 'payload' ->> 'tenant_id') = nullif(current_setting('app.tenant_id', true), ''));

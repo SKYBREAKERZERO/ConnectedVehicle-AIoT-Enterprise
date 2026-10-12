@@ -12,6 +12,7 @@ from enterprise_platform.database.credentials import (
     DatabaseRuntime,
     load_runtime_database_settings,
     migration_database_settings,
+    runtime_database_user,
 )
 
 
@@ -80,3 +81,34 @@ def test_migrations_require_independent_credentials() -> None:
         )
     )
     assert result.database_username == "migration_admin"
+
+
+@pytest.mark.parametrize("runtime", list(DATABASE_USERS))
+async def test_pinned_credentials_reject_other_tenant(runtime: DatabaseRuntime) -> None:
+    settings = Settings.model_construct(database_tenant_id="tenant-a")
+    provider = AsyncMock()
+    payload = {
+        "host": "localhost",
+        "port": 5432,
+        "dbname": "vehicle",
+        "username": runtime_database_user(runtime, "tenant-a"),
+        "password": "private",
+        "tenant_id": "tenant-a",
+    }
+    provider.get_secret.return_value = json.dumps(payload)
+    result = await load_runtime_database_settings(settings, runtime, provider=provider)
+    suffix = result.database_username.rsplit("__", 1)[1]
+    provider.get_secret.assert_awaited_once_with(
+        f"/connected-vehicle/local/tenants/{suffix}/database/{runtime}"
+    )
+    for change in ({"tenant_id": "tenant-b"}, {"username": DATABASE_USERS[runtime]}):
+        provider.get_secret.return_value = json.dumps(payload | change)
+        with pytest.raises(ValueError, match="Invalid database credentials"):
+            await load_runtime_database_settings(settings, runtime, provider=provider)
+    with pytest.raises(ValueError, match="independent"):
+        migration_database_settings(
+            Settings.model_construct(
+                migration_database_username=result.database_username,
+                migration_database_password=SecretStr("private"),
+            )
+        )
