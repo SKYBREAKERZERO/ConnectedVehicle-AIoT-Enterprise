@@ -62,6 +62,13 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
         connect_args={
             "timeout": settings.database_connect_timeout_seconds,
+            "server_settings": {
+                "application_name": "connected-vehicle-migration",
+                "lock_timeout": f"{max(1, int(settings.migration_lock_timeout_seconds * 1000))}ms",
+                "statement_timeout": (
+                    f"{max(1, int(settings.migration_statement_timeout_seconds * 1000))}ms"
+                ),
+            },
         },
     )
 
@@ -73,7 +80,12 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    # Alembic's connection-sharing recipe supports transaction/failure integration tests.
+    connection = context.config.attributes.get("connection")
+    if connection is None:
+        asyncio.run(run_async_migrations())
+    else:
+        run_migrations_with_connection(connection)
 
 
 if context.is_offline_mode():
