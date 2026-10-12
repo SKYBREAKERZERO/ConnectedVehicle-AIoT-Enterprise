@@ -111,6 +111,9 @@ async def test_five_real_metric_alerts_firing_webhook_resolved(
     rows = []
     try:
         docker("network", "create", prefix)
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NO_WINDOW
         collector = subprocess.Popen(
             [
                 sys.executable,
@@ -124,7 +127,7 @@ async def test_five_real_metric_alerts_firing_webhook_resolved(
             ],
             stdout=log,
             stderr=log,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            creationflags=creationflags,
         )
         for _ in range(100):
             if (state / "health.json").exists() and json.loads((state / "health.json").read_text())[
@@ -160,6 +163,9 @@ async def test_five_real_metric_alerts_firing_webhook_resolved(
             ("prometheus", 9090, "prom/prometheus:v3.5.0", []),
         ):
             name = prefix + "-" + service
+            ownership: list[str] = []
+            if sys.platform != "win32" and service in {"exporter", "receiver"}:
+                ownership = ["--user", f"{os.getuid()}:{os.getgid()}"]
             mounts = [
                 "-v",
                 f"{state}:/state",
@@ -193,6 +199,7 @@ async def test_five_real_metric_alerts_firing_webhook_resolved(
                 "ALL",
                 "--security-opt",
                 "no-new-privileges:true",
+                *ownership,
                 "-p",
                 f"127.0.0.1::{port}",
                 *mounts,
