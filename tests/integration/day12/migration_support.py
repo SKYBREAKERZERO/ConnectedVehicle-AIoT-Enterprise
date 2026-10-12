@@ -375,7 +375,8 @@ def start_harness(directory: Path) -> Harness:
         harness = Harness(name, port, directory / "release", directory / "day11.dump")
         deadline = time.monotonic() + 30
         while subprocess.run(
-            ["docker", "exec", name, "pg_isready", "-U", "postgres"], capture_output=True
+            ["docker", "exec", name, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
+            capture_output=True,
         ).returncode:
             if time.monotonic() > deadline:
                 raise TimeoutError("Migration PostgreSQL did not start")
