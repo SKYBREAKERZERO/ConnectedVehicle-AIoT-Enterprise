@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import time
@@ -14,6 +13,7 @@ import pytest
 from pydantic import SecretStr
 
 from enterprise_platform.config.settings import Settings
+from scripts.day12_evidence import write_evidence
 from tests.e2e.test_independent_runtimes import LOCALSTACK, docker
 
 
@@ -35,7 +35,16 @@ def local_environment() -> Iterator[Settings]:
         while True:
             ready = (
                 subprocess.run(
-                    ["docker", "exec", containers[0], "pg_isready", "-U", "postgres"],
+                    [
+                        "docker",
+                        "exec",
+                        containers[0],
+                        "pg_isready",
+                        "-h",
+                        "127.0.0.1",
+                        "-U",
+                        "postgres",
+                    ],
                     capture_output=True,
                 ).returncode
                 == 0
@@ -81,9 +90,6 @@ def migration_environment(settings: Settings) -> dict[str, str]:
     )
 
 
-def evidence(stage: str, result: object) -> None:
+def evidence(stage: str, result: dict[str, object]) -> None:
     directory = Path(os.environ.get("RUNTIME_EVIDENCE_DIR", ".runtime-reports"))
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / f"day12-{stage}.json").write_text(
-        json.dumps(result, indent=2) + "\n", encoding="utf-8"
-    )
+    write_evidence(stage, result, directory)

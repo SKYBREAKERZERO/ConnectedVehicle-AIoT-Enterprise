@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 25
     env:
       CLOUD_RUNTIME: localstack
+      DAY12_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
       APP_ENV: local
       AWS_ENDPOINT_URL: http://127.0.0.1:14566
       AWS_ACCESS_KEY_ID: test
@@ -111,6 +112,7 @@ jobs:
             .runtime-reports/day12-12d-restore.json
             .runtime-reports/day12-migration-failure-retry.json
             .runtime-reports/day12-migration-scale-locks.json
+            .runtime-reports/day12-migration-guards.json
             .runtime-reports/day12-acceptance.json
           include-hidden-files: true
           if-no-files-found: error

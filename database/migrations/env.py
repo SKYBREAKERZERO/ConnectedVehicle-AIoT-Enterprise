@@ -17,6 +17,7 @@ from enterprise_platform.database import models as _models  # noqa: F401
 from enterprise_platform.database.base import Base
 from enterprise_platform.database.credentials import migration_database_settings
 from enterprise_platform.database.engine import build_database_url
+from enterprise_platform.database.migration_guard import migration_transaction
 
 target_metadata = Base.metadata
 
@@ -24,15 +25,15 @@ target_metadata = Base.metadata
 def run_migrations_with_connection(
     connection: Connection,
 ) -> None:
-    context.configure(
-        connection=connection,
-        target_metadata=target_metadata,
-        compare_type=True,
-        compare_server_default=True,
-    )
-
-    with context.begin_transaction():
-        context.run_migrations()
+    with migration_transaction(connection, get_settings()):
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            compare_server_default=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
 
 
 def run_migrations_offline() -> None:
@@ -60,16 +61,7 @@ async def run_async_migrations() -> None:
     engine = create_async_engine(
         build_database_url(settings),
         poolclass=pool.NullPool,
-        connect_args={
-            "timeout": settings.database_connect_timeout_seconds,
-            "server_settings": {
-                "application_name": "connected-vehicle-migration",
-                "lock_timeout": f"{max(1, int(settings.migration_lock_timeout_seconds * 1000))}ms",
-                "statement_timeout": (
-                    f"{max(1, int(settings.migration_statement_timeout_seconds * 1000))}ms"
-                ),
-            },
-        },
+        connect_args={"timeout": settings.database_connect_timeout_seconds},
     )
 
     try:

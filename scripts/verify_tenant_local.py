@@ -169,7 +169,14 @@ async def verify(document: dict[str, Any], settings: Settings) -> dict[str, Any]
             await verify_runtime_database_security(engine, runtime, tenant_id=document["tenant_id"])
         finally:
             await engine.dispose()
-        rows.append({"runtime": runtime, "login": resolved.database_username, "contract": "passed"})
+        rows.append(
+            {
+                "runtime": runtime,
+                "login": resolved.database_username,
+                "contract": "passed",
+                "secret_arn": identity["secret_arn"],
+            }
+        )
     context = {"SecretARN": document["identities"]["application"]["secret_arn"]}
     encrypted = kms.encrypt(
         KeyId=key_arn, Plaintext=b"local-context-probe", EncryptionContext=context
