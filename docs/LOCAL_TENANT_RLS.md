@@ -23,7 +23,9 @@ Outbox 生成列表达式。数据库角色、Secret 中的用户名和租户、
 
 ## 创建与验收
 
-先启动仓库的本地依赖，并配置 `.env` 中独立的 MIGRATION_DATABASE_USERNAME/PASSWORD。
+先启动仓库的本地依赖，分别配置 BOOTSTRAP_DATABASE_USERNAME/PASSWORD 与
+MIGRATION_DATABASE_USERNAME/PASSWORD。空库先执行 `python -m database.bootstrap_cluster`；
+已有数据库的所有权切换见 [DATABASE_MANAGEMENT.md](DATABASE_MANAGEMENT.md)。
 本地 Secret 端口由 AWS_ENDPOINT_URL 指定，数据库地址必须为 localhost 或 127.0.0.1。
 
 ```powershell
@@ -34,7 +36,9 @@ Outbox 生成列表达式。数据库角色、Secret 中的用户名和租户、
 .\.venv\Scripts\python.exe -m scripts.verify_tenant_local .runtime-reports/tenant-b.json
 ```
 
-重复 provisioning 会轮换密码，维护时执行并重启对应进程。输出只含角色名、Secret 名称和
+重复 provisioning 会轮换密码，先停进程并显式设置
+`CREDENTIAL_ROTATION_MAINTENANCE_MODE=true`，成功后重新启动。
+失败补偿与显式恢复见数据库管理文档。输出只含角色名、Secret 名称和
 ARN，不含密码。密码、数据库备份、Terraform state 和验收文件留在被忽略的本地目录。
 
 每个租户的进程分别配置 `DATABASE_TENANT_ID`；未显式设置 Secret ID 时，加载器自动选择

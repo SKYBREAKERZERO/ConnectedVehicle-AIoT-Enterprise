@@ -99,6 +99,7 @@ async def exercise(tmp_path: Path, *, device_chain: bool = False) -> None:
                 "AWS_",
                 "DATABASE_",
                 "MIGRATION_",
+                "BOOTSTRAP_",
                 "APPLICATION_DATABASE_",
                 "OUTBOX_DATABASE_",
                 "REMOTE_COMMAND_DATABASE_",
@@ -295,9 +296,21 @@ async def exercise(tmp_path: Path, *, device_chain: bool = False) -> None:
 
         await eventually(aws_ready, timeout=90)
         migration_env = env | {
-            "MIGRATION_DATABASE_USERNAME": "postgres",
-            "MIGRATION_DATABASE_PASSWORD": "e2e-admin",
+            "MIGRATION_DATABASE_USERNAME": "migration_owner",
+            "MIGRATION_DATABASE_PASSWORD": "e2e-migration",
         }
+        from database.bootstrap_cluster import bootstrap
+
+        await bootstrap(
+            settings.model_copy(
+                update={
+                    "bootstrap_database_username": "postgres",
+                    "bootstrap_database_password": SecretStr("e2e-admin"),
+                    "migration_database_username": "migration_owner",
+                    "migration_database_password": SecretStr("e2e-migration"),
+                }
+            )
+        )
         subprocess.run(
             [sys.executable, "-m", "alembic", "-c", str(ROOT / "alembic.ini"), "upgrade", "head"],
             cwd=tmp_path,
@@ -309,6 +322,9 @@ async def exercise(tmp_path: Path, *, device_chain: bool = False) -> None:
         for runtime in ["application", "outbox", "remote-command"]:
             secrets.create_secret(Name=f"/connected-vehicle/local/database/{runtime}")
         provision_env = migration_env | {
+            "PYTHONPATH": str(ROOT),
+            "BOOTSTRAP_DATABASE_USERNAME": "postgres",
+            "BOOTSTRAP_DATABASE_PASSWORD": "e2e-admin",
             "APP_USER_PASSWORD": uuid4().hex,
             "OUTBOX_WORKER_PASSWORD": uuid4().hex,
             "REMOTE_COMMAND_WORKER_PASSWORD": uuid4().hex,

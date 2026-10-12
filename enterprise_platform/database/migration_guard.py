@@ -9,19 +9,23 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from enterprise_platform.config.settings import Settings
+from enterprise_platform.database.management_identity import verify_migration_identity
 
 # Stable database-local bigint key: ASCII CVMIGRAT. Do not change across releases.
 MIGRATION_LOCK_KEY = 0x43564D4947524154
 
 
 @contextmanager
-def migration_transaction(connection: Connection, settings: Settings) -> Iterator[None]:
+def migration_transaction(
+    connection: Connection, settings: Settings, *, expected_user: str | None = None
+) -> Iterator[None]:
     if connection.dialect.name != "postgresql":
         raise ValueError("Migration guard requires PostgreSQL")
     if connection.get_execution_options().get("isolation_level") == "AUTOCOMMIT":
         raise ValueError("Migration guard requires a transactional connection")
     transaction = nullcontext() if connection.in_transaction() else connection.begin()
     with transaction:
+        verify_migration_identity(connection, expected_user or settings.migration_database_username)
         if connection.scalar(text("SHOW transaction_isolation")) != "read committed":
             raise ValueError("Migration guard requires READ COMMITTED isolation")
         # Engine-level AUTOCOMMIT need not appear in Connection execution options.

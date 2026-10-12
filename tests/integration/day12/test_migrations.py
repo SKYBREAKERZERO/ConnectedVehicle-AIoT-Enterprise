@@ -37,6 +37,7 @@ from tests.integration.day12.migration_support import (
 def shared_upgrade(connection: Connection) -> None:
     config = Config(str(ROOT / "alembic.ini"))
     config.attributes["connection"] = connection
+    config.attributes["migration_database_username"] = OWNER
     command.upgrade(config, "head")
 
 

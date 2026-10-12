@@ -12,12 +12,16 @@ alembic_version. SELECT FOR UPDATE works with the granted UPDATE columns. Dispat
 uses SQLAlchemy change tracking, so unchanged command attributes do not need UPDATE.
 Application privileges reflect the current API, which reads vehicles but does not create
 or modify them. Future APIs and migrations must add explicitly reviewed grants.
-This isolates services, not tenants; tenant filtering remains an application concern.
+Shared runtime roles use tenant session context; tenant-bound identities additionally
+enforce database ownership through RLS. See [local tenant RLS](../docs/LOCAL_TENANT_RLS.md).
 
 ## Setup and upgrade
 
-1. Retain a separate database owner/admin for PostgreSQL and Alembic. Set
-   MIGRATION_DATABASE_USERNAME and MIGRATION_DATABASE_PASSWORD explicitly. The
+1. Separate the cluster role manager from the non-superuser Schema owner. Set
+   BOOTSTRAP_DATABASE_USERNAME/PASSWORD and MIGRATION_DATABASE_USERNAME/PASSWORD
+   explicitly, using distinct identities. For an empty database run
+   `python -m database.bootstrap_cluster`; existing ownership requires explicit review.
+   The
    database host, port and name remain DATABASE_HOST/PORT/NAME. Alembic refuses a
    runtime role or missing management credentials; it never reads a runtime secret.
 2. Run `alembic upgrade head` with that migration identity.
@@ -25,10 +29,12 @@ This isolates services, not tenants; tenant filtering remains an application con
    three existing task roles with isolated read policies. Terraform stores no passwords.
 4. In a controlled provisioning process, securely set APP_USER_PASSWORD,
    OUTBOX_WORKER_PASSWORD and REMOTE_COMMAND_WORKER_PASSWORD to distinct values.
-   Run `python -m database.provision_runtime_credentials` with migration credentials
-   and AWS credentials authorized to PutSecretValue on all three secret containers.
-   It applies database/runtime-grants.sql transactionally, assigns passwords, then
-   writes the matching JSON secrets. The AWS bootstrap task role alone does not
+   Run `python -m database.provision_runtime_credentials` with both management
+   identities and Secrets Manager provisioning permissions (Describe/Get/Put and
+   UpdateSecretVersionStage, plus CreateSecret for missing containers and relevant KMS access).
+   It manages roles through Bootstrap, applies Schema ACL through the migration
+   owner, and verifies/compensates password publication as described in
+   [database management](../docs/DATABASE_MANAGEMENT.md). The AWS bootstrap task role alone does not
    confer database admin access: the provisioning operator needs both capabilities.
 5. Start/restart each runtime with its own task role and secret ID from Terraform's
    database_runtime_configuration output. Do not inject migration credentials or
@@ -62,11 +68,13 @@ conditions and the output mapping; do not deploy the local root against AWS.
 
 Stop/drain runtimes before initial cutover or password changes. Database changes and
 Secrets Manager writes cannot form one distributed transaction. If a secret write
-fails, provisioning fails; keep runtimes stopped and rerun with the same passwords
-until every secret is updated. Rerunning the grants clears old table/column grants
-and role memberships. Existing runtime object ownership fails the transaction;
+fails, the protocol attempts restoration of all old database passwords and current
+Secret versions. Incomplete restoration requires explicit journal recovery, with
+runtimes stopped. Existing rotations require CREDENTIAL_ROTATION_MAINTENANCE_MODE=true.
+Rerunning Schema grants clears old table/column grants; the separate Bootstrap
+role manager removes unsafe memberships. Existing runtime object ownership fails the transaction;
 transfer it to the migration owner before retrying. No automatic ownership transfer
-or shared-password rollback is performed.
+is performed. Journals and recovery rules are documented in the management guide.
 
 Grants revoke PUBLIC privileges on the target database and public schema, so run this
 only in the dedicated application database and review any other consumers first.

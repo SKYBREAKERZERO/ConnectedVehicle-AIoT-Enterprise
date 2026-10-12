@@ -29,7 +29,7 @@ module "secret_bootstrap_policy" {
   policy_name = "${local.name_prefix}-secret-bootstrap"
 
   description = (
-    "Least-privilege access for bootstrapping the application database secret value."
+    "Controlled publication and recovery for the three runtime database secrets."
   )
 
   policy_json = jsonencode({
@@ -37,15 +37,17 @@ module "secret_bootstrap_policy" {
 
     Statement = [
       {
-        Sid    = "BootstrapDatabaseApplicationSecret"
+        Sid    = "PublishAndRecoverRuntimeDatabaseSecrets"
         Effect = "Allow"
 
         Action = [
           "secretsmanager:PutSecretValue",
-          "secretsmanager:DescribeSecret"
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:UpdateSecretVersionStage"
         ]
 
-        Resource = [for secret in module.platform_secret : secret.secret_arn]
+        Resource = [for name in ["database_application", "database_outbox", "database_remote_command"] : module.platform_secret[name].secret_arn]
       },
       {
         Sid    = "UseSecretsKeyViaSecretsManager"
@@ -60,7 +62,8 @@ module "secret_bootstrap_policy" {
 
         Condition = {
           StringEquals = {
-            "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com"
+            "kms:ViaService"                  = "secretsmanager.${var.aws_region}.amazonaws.com"
+            "kms:EncryptionContext:SecretARN" = [for name in ["database_application", "database_outbox", "database_remote_command"] : module.platform_secret[name].secret_arn]
           }
         }
       }
