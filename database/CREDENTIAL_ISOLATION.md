@@ -31,7 +31,8 @@ enforce database ownership through RLS. See [local tenant RLS](../docs/LOCAL_TEN
    OUTBOX_WORKER_PASSWORD and REMOTE_COMMAND_WORKER_PASSWORD to distinct values.
    Run `python -m database.provision_runtime_credentials` with both management
    identities and Secrets Manager provisioning permissions (Describe/Get/Put and
-   UpdateSecretVersionStage, plus CreateSecret for missing containers and relevant KMS access).
+   UpdateSecretVersionStage and relevant KMS access). Terraform must pre-create the
+   containers; missing Secrets are rejected before database provisioning.
    It manages roles through Bootstrap, applies Schema ACL through the migration
    owner, and verifies/compensates password publication as described in
    [database management](../docs/DATABASE_MANAGEMENT.md). The AWS bootstrap task role alone does not

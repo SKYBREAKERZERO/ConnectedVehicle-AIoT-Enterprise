@@ -33,6 +33,7 @@ STAGES = (
     "migration-scale-locks",
     "migration-guards",
     "credential-rotation",
+    "credential-recovery-hardening",
 )
 CATALOG_SECTIONS = {
     "tables",
@@ -341,6 +342,46 @@ def validate(
         )
     ):
         raise ValueError("Credential rotation recovery evidence incomplete")
+    hardening = reports["credential-recovery-hardening"]
+    required_cases = {
+        "legacy-version",
+        "invalid-candidate",
+        "unknown-candidate",
+        "bootstrap-role",
+        "migration-role",
+        "foreign-secret",
+        "wrong-host",
+        "wrong-port",
+        "wrong-database",
+        "wrong-environment",
+        "wrong-tenant",
+        "wrong-region",
+        "wrong-endpoint",
+        "unknown-phase",
+        "duplicate-entry",
+        "missing-runtime",
+        "foreign-version-payload",
+    }
+    if (
+        hardening["scope"] != "localstack-and-postgresql"
+        or type(hardening["journal_version"]) is not int
+        or hardening["journal_version"] != 2
+        or set(hardening["invalid_cases"]) != required_cases
+        or len(hardening["invalid_cases"]) != len(required_cases)
+        or hardening["iam_enforcement_verified"] is not False
+        or any(
+            hardening[key] is not True
+            for key in (
+                "invalid_journal_no_side_effects",
+                "missing_secret_not_created",
+                "missing_secret_no_password_changes",
+                "compensation_failure_observed",
+                "explicit_recovery_succeeded",
+                "repeated_recovery_no_side_effects",
+            )
+        )
+    ):
+        raise ValueError("Credential recovery hardening evidence incomplete")
     rls = reports["12a-rls"]
     if (
         rls["dedicated_roles"] != 6
