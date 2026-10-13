@@ -12,7 +12,11 @@ from uuid import uuid4
 
 import pytest
 
-from database.credential_journal import CredentialPreflightError
+from database.credential_journal import (
+    CredentialPreflightError,
+    database_target,
+    environment_target,
+)
 from database.credential_rotation import Target, current_version, recover, restore, rotate
 from database.provision_runtime_credentials import provision
 from enterprise_platform.config.settings import Settings
@@ -685,3 +689,53 @@ async def test_provisioning_checks_containers_before_role_or_schema_changes(
     roles.assert_not_awaited()
     grants.assert_not_awaited()
     assert not service.calls.get("create_secret")
+
+
+async def test_forged_initial_recovery_cannot_clear_a_secretless_existing_password(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, targets, service, database = setup(False)
+    settings.credential_rotation_maintenance_mode = True
+    database.values[targets[2].role] = "legacy-password-with-no-secret"
+    record = {
+        "version": 2,
+        "operation_id": uuid4().hex,
+        "phase": "preparing",
+        "scope": "runtimes",
+        "database": database_target(settings),
+        "environment": environment_target(settings),
+        "entries": [
+            {
+                "target": {
+                    "runtime": t.runtime,
+                    "role": t.role,
+                    "secret_id": t.secret_id,
+                    "tenant": t.tenant,
+                },
+                "previous_version": None,
+                "candidate_version": uuid4().hex,
+            }
+            for t in targets
+        ],
+    }
+    path = tmp_path / "forged-initial.json"
+    path.write_text(json.dumps(record))
+    before = deepcopy(
+        (service.values, service.labels, database.values, database.writes, path.read_bytes())
+    )
+
+    @asynccontextmanager
+    async def manager(settings: Settings, targets: list[Target]) -> AsyncIterator[Passwords]:
+        yield database
+
+    monkeypatch.setattr("database.credential_rotation.password_manager", manager)
+    with pytest.raises(CredentialPreflightError, match="existing database password"):
+        await recover(settings, path, service)
+    assert (
+        service.values,
+        service.labels,
+        database.values,
+        database.writes,
+        path.read_bytes(),
+    ) == before

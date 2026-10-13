@@ -225,6 +225,7 @@ def validate_payload(
 async def recovery_passwords(
     record: dict[str, Any],
     client: Any,
+    backend: PasswordBackend,
     *,
     settings: Settings,
     scope: RecoveryScope = "runtimes",
@@ -279,6 +280,10 @@ async def recovery_passwords(
                 settings, target, await payload(client, target, previous)
             ).password.get_secret_value()
         else:
+            if candidate not in metadata and await backend.has_password(target.role):
+                raise CredentialPreflightError(
+                    "Unwritten initial candidate cannot recover an existing database password"
+                )
             old[target.role] = None
     return old
 
@@ -294,7 +299,7 @@ async def restore(
     check_source: bool = False,
 ) -> None:
     try:
-        old = await recovery_passwords(record, client, settings=settings, scope=scope)
+        old = await recovery_passwords(record, client, backend, settings=settings, scope=scope)
     except CredentialPreflightError:
         raise
     except Exception:
