@@ -119,6 +119,7 @@ jobs:
             .runtime-reports/day12-migration-scale-locks.json
             .runtime-reports/day12-migration-guards.json
             .runtime-reports/day12-credential-rotation.json
+            .runtime-reports/day12-credential-recovery-hardening.json
             .runtime-reports/day12-acceptance.json
           include-hidden-files: true
           if-no-files-found: error

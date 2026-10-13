@@ -2,6 +2,8 @@
 
 本次自动验收只运行本地 PostgreSQL 与免费 LocalStack。真实 AWS 工具已提供，未联网执行，
 本地报告始终保留 `iam_enforcement_verified=false`。
+Day14 的 Secret 缺失拒绝、v2 日志格式和无副作用回归见
+[DAY14_CREDENTIAL_RECOVERY.md](DAY14_CREDENTIAL_RECOVERY.md)。旧 v1 日志不能自动恢复。
 
 ## 身份边界
 
@@ -56,6 +58,7 @@ PostgreSQL 单用户只有一个密码，因此当前采用维护窗口协议，
 恢复失败则日志标记 `recovery_required`，不能启动 Runtime，也不能把失败当作成功。
 恢复日志位于被 Git 忽略的 `.runtime-reports/credential-operations/<UUID>.json`，
 只含身份、端点、版本 ID、阶段及异常类别，不含密码、Token 或 SecretString。
+v2 日志还绑定当前环境及身份范围；非法输入在修改密码前拒绝，日志不能选择任意角色或 Secret。
 将该目录作为受控运维资料保存，限制访问并防止误改；旧版本 Secret 在恢复完成前不能删除。
 
 ```powershell

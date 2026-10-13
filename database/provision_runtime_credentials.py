@@ -8,7 +8,8 @@ import os
 from pathlib import Path
 
 from database.bootstrap_cluster import SQLDriver as SQLDriver
-from database.credential_rotation import Target, password_manager, recover, rotate
+from database.credential_journal import RecoveryScope
+from database.credential_rotation import Target, current_version, password_manager, recover, rotate
 from database.schema_permissions import grant_runtimes, prepare_roles
 from enterprise_platform.cloud.client_factory import AWSClientFactory
 from enterprise_platform.config.settings import Settings
@@ -28,8 +29,6 @@ async def provision(settings: Settings) -> None:
     ):
         raise ValueError("Runtime passwords must differ from management passwords")
     roles = dict(DATABASE_USERS)
-    await prepare_roles(settings, roles)
-    await grant_runtimes(settings, roles)
     ids = {
         "application": settings.application_database_secret_id,
         "outbox": settings.outbox_database_secret_id,
@@ -45,6 +44,11 @@ async def provision(settings: Settings) -> None:
         for runtime, role in roles.items()
     ]
     client = AWSClientFactory(settings).secrets_manager()
+    # Reject absent Terraform containers before role or Schema provisioning.
+    for target in targets:
+        await current_version(client, target.secret_id)
+    await prepare_roles(settings, roles)
+    await grant_runtimes(settings, roles)
     async with password_manager(settings, targets) as backend:
         await rotate(settings, targets, passwords, client, backend)
 
@@ -54,10 +58,22 @@ def main() -> None:
     parser.add_argument(
         "--recover", type=Path, help="Recover a sanitized credential-operation journal"
     )
+    parser.add_argument(
+        "--recover-scope",
+        choices=("runtimes", "observability"),
+        help="Explicitly select the independently configured recovery identity group",
+    )
     args = parser.parse_args()
+    if args.recover is None and args.recover_scope is not None:
+        parser.error("--recover-scope requires --recover")
     settings = Settings()
     if args.recover is not None:
-        asyncio.run(recover(settings, args.recover, AWSClientFactory(settings).secrets_manager()))
+        scope: RecoveryScope = args.recover_scope or "runtimes"
+        asyncio.run(
+            recover(
+                settings, args.recover, AWSClientFactory(settings).secrets_manager(), scope=scope
+            )
+        )
     else:
         asyncio.run(provision(settings))
 

@@ -18,12 +18,21 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from database.bootstrap_cluster import SQLDriver, check_bootstrap
+from database.credential_journal import (
+    CredentialPreflightError,
+    JournalTarget,
+    RecoveryScope,
+    database_target,
+    environment_target,
+    load_journal,
+    strict_json,
+    validate_journal,
+    validate_targets,
+)
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.credentials import (
-    DATABASE_USERS,
     DatabaseCredentials,
     bootstrap_database_settings,
-    runtime_database_user,
 )
 from enterprise_platform.database.engine import create_database_engine
 from enterprise_platform.database.runtime_security import verify_runtime_database_security
@@ -37,14 +46,10 @@ class Target:
     tenant: str | None = None
 
     def validate(self) -> None:
-        if self.runtime == "observability":
-            valid = self.role == "observability_reader" and self.tenant is None
-        else:
-            valid = self.runtime in DATABASE_USERS and self.role == runtime_database_user(
-                cast(Any, self.runtime), self.tenant
-            )
-        if not valid or not self.secret_id:
-            raise ValueError("Invalid rotation target identity")
+        try:
+            JournalTarget.model_validate(asdict(self))
+        except ValueError:
+            raise CredentialPreflightError("Invalid rotation target identity") from None
 
 
 class PasswordBackend(Protocol):
@@ -85,15 +90,7 @@ class PostgreSQLPasswords:
                 await driver.execute(f"ALTER ROLE {name} PASSWORD {value}")
 
     async def verify(self, target: Target, payload: dict[str, Any]) -> None:
-        credentials = DatabaseCredentials.model_validate(payload)
-        if (
-            credentials.username != target.role
-            or credentials.tenant_id != target.tenant
-            or credentials.host != self.settings.database_host
-            or credentials.port != self.settings.database_port
-            or credentials.dbname != self.settings.database_name
-        ):
-            raise ValueError("Rotation credential endpoint/identity mismatch")
+        credentials = validate_payload(self.settings, target, payload)
         engine = create_database_engine(
             self.settings.model_copy(
                 update={
@@ -167,21 +164,31 @@ async def request(client: Any, method: str, **kwargs: Any) -> Any:
     return await asyncio.to_thread(getattr(client, method), **kwargs)
 
 
-async def current_version(client: Any, secret: str) -> str | None:
+async def secret_metadata(client: Any, secret: str) -> dict[str, list[str]]:
     try:
         metadata = await request(client, "describe_secret", SecretId=secret)
     except ClientError as error:
         if error.response["Error"]["Code"] != "ResourceNotFoundException":
             raise
-        await request(client, "create_secret", Name=secret)
-        return None
-    versions = [
-        key
-        for key, stages in metadata.get("VersionIdsToStages", {}).items()
-        if "AWSCURRENT" in stages
-    ]
+        raise CredentialPreflightError(
+            "Secret does not exist; pre-create it with Terraform"
+        ) from None
+    versions = metadata.get("VersionIdsToStages", {})
+    if not isinstance(versions, dict) or any(
+        not isinstance(key, str)
+        or not isinstance(stages, list)
+        or any(not isinstance(stage, str) for stage in stages)
+        for key, stages in versions.items()
+    ):
+        raise CredentialPreflightError("Invalid Secret version metadata")
+    return cast(dict[str, list[str]], versions)
+
+
+async def current_version(client: Any, secret: str) -> str | None:
+    metadata = await secret_metadata(client, secret)
+    versions = [key for key, stages in metadata.items() if "AWSCURRENT" in stages]
     if len(versions) > 1:
-        raise ValueError("Ambiguous current credential version")
+        raise CredentialPreflightError("Ambiguous current credential version")
     return versions[0] if versions else None
 
 
@@ -189,7 +196,91 @@ async def payload(client: Any, target: Target, version: str) -> dict[str, Any]:
     response = await request(
         client, "get_secret_value", SecretId=target.secret_id, VersionId=version
     )
-    return cast(dict[str, Any], json.loads(response["SecretString"]))
+    if response.get("VersionId") != version:
+        raise CredentialPreflightError("Secret response version mismatch")
+    try:
+        return cast(dict[str, Any], strict_json(response["SecretString"]))
+    except (ValueError, KeyError, TypeError):
+        raise CredentialPreflightError("Invalid credential version payload") from None
+
+
+def validate_payload(
+    settings: Settings, target: Target, value: dict[str, Any]
+) -> DatabaseCredentials:
+    try:
+        credentials = DatabaseCredentials.model_validate(value, strict=True)
+        if (
+            credentials.username != target.role
+            or credentials.tenant_id != target.tenant
+            or credentials.host != settings.database_host
+            or credentials.port != settings.database_port
+            or credentials.dbname != settings.database_name
+        ):
+            raise ValueError("Credential identity mismatch")
+        return credentials
+    except ValueError:
+        raise CredentialPreflightError("Rotation credential endpoint/identity mismatch") from None
+
+
+async def recovery_passwords(
+    record: dict[str, Any],
+    client: Any,
+    *,
+    settings: Settings,
+    scope: RecoveryScope = "runtimes",
+) -> dict[str, str | None]:
+    validate_journal(record, settings, scope)
+    targets = [Target(**row["target"]) for row in record["entries"]]
+    old: dict[str, str | None] = {}
+    for target, entry in zip(targets, record["entries"], strict=True):
+        target.validate()
+        metadata = await secret_metadata(client, target.secret_id)
+        currents = [key for key, labels in metadata.items() if "AWSCURRENT" in labels]
+        if len(currents) > 1:
+            raise CredentialPreflightError("Ambiguous current credential version")
+        current = currents[0] if currents else None
+        if current not in {entry["previous_version"], entry["candidate_version"]}:
+            raise CredentialPreflightError("Rotation recovery was superseded by another operation")
+        candidate = entry["candidate_version"]
+        if candidate in metadata:
+            if "AWSPENDING" not in metadata[candidate]:
+                raise CredentialPreflightError(
+                    "Candidate version is not bound to the pending operation"
+                )
+            validate_payload(settings, target, await payload(client, target, candidate))
+        else:
+            preparing = "preparing" in {
+                record["phase"],
+                record.get("failed_phase"),
+                record.get("recovery_from_phase"),
+            }
+            later_pending = any(
+                "AWSPENDING" in labels
+                and key != entry["previous_version"]
+                and not (
+                    current is None
+                    and entry["previous_version"] is None
+                    and "AWSPREVIOUS" in labels
+                )
+                for key, labels in metadata.items()
+            )
+            if not preparing or later_pending:
+                raise CredentialPreflightError(
+                    "Candidate credential version is missing or superseded"
+                )
+        previous = entry["previous_version"]
+        if previous is not None:
+            required = "AWSCURRENT" if current == previous else "AWSPREVIOUS"
+            if required not in metadata.get(previous, []):
+                raise CredentialPreflightError(
+                    "Previous version is not bound to the current operation"
+                )
+            old[target.role] = validate_payload(
+                settings, target, await payload(client, target, previous)
+            ).password.get_secret_value()
+        else:
+            old[target.role] = None
+    return old
 
 
 async def restore(
@@ -197,19 +288,21 @@ async def restore(
     client: Any,
     backend: PasswordBackend,
     path: Path,
+    *,
+    settings: Settings,
+    scope: RecoveryScope = "runtimes",
+    check_source: bool = False,
 ) -> None:
+    try:
+        old = await recovery_passwords(record, client, settings=settings, scope=scope)
+    except CredentialPreflightError:
+        raise
+    except Exception:
+        raise CredentialPreflightError("Recovery versions could not be verified") from None
+    if check_source and load_journal(path, settings, scope) != record:
+        raise CredentialPreflightError("Recovery journal changed during preflight")
     targets = [Target(**row["target"]) for row in record["entries"]]
-    old: dict[str, str | None] = {}
-    for target, entry in zip(targets, record["entries"], strict=True):
-        target.validate()
-        current = await current_version(client, target.secret_id)
-        if current not in {entry["previous_version"], entry["candidate_version"]}:
-            raise ValueError("Rotation recovery was superseded by another operation")
-        old[target.role] = (
-            None
-            if entry["previous_version"] is None
-            else (await payload(client, target, entry["previous_version"]))["password"]
-        )
+    record.setdefault("recovery_from_phase", record.get("failed_phase") or record["phase"])
     record["phase"] = "recovering"
     save_journal(path, record)
     await backend.set_passwords(old)
@@ -254,17 +347,17 @@ async def rotate(
         raise ValueError("Rotation requires distinct nonempty candidate passwords")
     for target in targets:
         target.validate()
+    scope: RecoveryScope = "observability" if targets[0].runtime == "observability" else "runtimes"
+    validate_targets(settings, [asdict(target) for target in targets], scope)
     operation = uuid4().hex
     path = directory / f"{operation}.json"
     record: dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "operation_id": operation,
         "phase": "preparing",
-        "database": {
-            "host": settings.database_host,
-            "port": settings.database_port,
-            "name": settings.database_name,
-        },
+        "scope": scope,
+        "database": database_target(settings),
+        "environment": environment_target(settings),
         "entries": [],
     }
     # Preflight all active credentials before changing any password or current label.
@@ -283,6 +376,7 @@ async def rotate(
                 "candidate_version": uuid4().hex,
             }
         )
+    validate_journal(record, settings, scope)
     save_journal(path, record)
     try:
         for target, entry in zip(targets, record["entries"], strict=True):
@@ -345,7 +439,7 @@ async def rotate(
         if isinstance(error, ClientError):
             record["service_error_code"] = error.response["Error"]["Code"]
         try:
-            await restore(record, client, backend, path)
+            await restore(record, client, backend, path, settings=settings, scope=scope)
         except Exception:
             record["phase"] = "recovery_required"
             save_journal(path, record)
@@ -359,22 +453,37 @@ async def rotate(
         ) from None
 
 
-async def recover(settings: Settings, path: Path, client: Any) -> None:
+async def recover(
+    settings: Settings,
+    path: Path,
+    client: Any,
+    *,
+    scope: RecoveryScope = "runtimes",
+) -> None:
     if not settings.credential_rotation_maintenance_mode:
         raise ValueError("Credential recovery requires a maintenance window")
-    record = json.loads(path.read_text())
-    if record["version"] != 1 or record["database"] != {
-        "host": settings.database_host,
-        "port": settings.database_port,
-        "name": settings.database_name,
-    }:
-        raise ValueError("Recovery journal database mismatch")
+    record = load_journal(path, settings, scope)
     if record["phase"] in {"complete", "recovered"}:
         return
     targets = [Target(**entry["target"]) for entry in record["entries"]]
     try:
         async with password_manager(settings, targets) as backend:
-            await restore(record, client, backend, path)
+            # Re-read under the database lock: a concurrent recovery may have
+            # finished, or the input may have been replaced while this caller waited.
+            record = load_journal(path, settings, scope)
+            if record["phase"] in {"complete", "recovered"}:
+                return
+            await restore(
+                record,
+                client,
+                backend,
+                path,
+                settings=settings,
+                scope=scope,
+                check_source=True,
+            )
+    except CredentialPreflightError:
+        raise
     except Exception:
         record["phase"] = "recovery_required"
         save_journal(path, record)
