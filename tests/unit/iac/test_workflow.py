@@ -53,13 +53,19 @@ def test_runtime_gate_cannot_skip_contracts_or_quality_checks() -> None:
         "scripts.contracts --baseline",
         "tests/e2e/test_independent_runtimes.py",
         "tests/e2e/test_device_full_chain.py",
+        "tests/integration/day16",
+        "scripts.day16_evidence --check-existing",
         "tests/integration/security/test_database_runtime_permissions.py",
         "tests/integration/reliability/test_redis_idempotency.py",
         "tests/integration/remote_command/test_remote_command_sqs_worker_integration.py",
         "alembic upgrade head",
     ):
         assert command in commands
-    assert not any("if" in step for step in job["steps"])
+    for step in job["steps"]:
+        if "if" in step:
+            # Always upload failure evidence; checks themselves remain unconditional.
+            assert step.get("uses", "").startswith("actions/upload-artifact@")
+            assert step["if"] == "${{ always() }}"
     for step in job["steps"]:
         if "uses" in step:
             assert re.fullmatch(r"[\w/-]+@[0-9a-f]{40}", step["uses"])

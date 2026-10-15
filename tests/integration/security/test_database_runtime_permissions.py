@@ -121,6 +121,8 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
         for user, password in passwords.items():
             monkeypatch.setenv(f"{user.upper()}_PASSWORD", password)
         writer = MemorySecrets()
+        for runtime in DATABASE_USERS:
+            writer.create_secret(Name=f"/connected-vehicle/local/database/{runtime}")
         with patch("database.provision_runtime_credentials.AWSClientFactory") as factory:
             factory.return_value.secrets_manager.return_value = writer
             await provision(settings)

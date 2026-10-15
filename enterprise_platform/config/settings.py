@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     database_pool_timeout_seconds: float = Field(default=30.0, gt=0)
     database_connect_timeout_seconds: float = Field(default=5.0, gt=0)
     database_health_timeout_seconds: float = Field(default=3.0, gt=0)
+    database_lock_timeout_seconds: float = Field(default=2.0, gt=0, le=60)
+    database_statement_timeout_seconds: float = Field(default=10.0, gt=0, le=3600)
+    database_idle_transaction_timeout_seconds: float = Field(default=30.0, gt=0, le=3600)
 
     redis_host: str = Field(default="localhost", min_length=1)
     redis_port: int = Field(default=16379, ge=1, le=65535)

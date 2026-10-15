@@ -14,6 +14,7 @@ from prometheus_client import (
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from enterprise_platform.config.settings import Settings
+from enterprise_platform.observability.recovery import RECOVERY_MONITOR
 
 
 class HTTPMetrics:
@@ -77,7 +78,8 @@ def configure_metrics(app: FastAPI, settings: Settings) -> HTTPMetrics:
         ):
             raise HTTPException(status_code=403, detail="Metrics access denied")
         return Response(
-            generate_latest(metrics.registry), headers={"Content-Type": CONTENT_TYPE_LATEST}
+            generate_latest(metrics.registry) + generate_latest(RECOVERY_MONITOR.registry),
+            headers={"Content-Type": CONTENT_TYPE_LATEST},
         )
 
     return metrics
