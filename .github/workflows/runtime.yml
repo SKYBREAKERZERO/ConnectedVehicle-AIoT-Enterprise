@@ -97,6 +97,8 @@ jobs:
         env:
           RUNTIME_EVIDENCE_DIR: .runtime-reports
         run: pytest tests/unit tests/contract tests/e2e/test_independent_runtimes.py tests/e2e/test_device_full_chain.py tests/integration/day12 tests/integration/day16 tests/integration/security/test_database_runtime_permissions.py tests/integration/reliability/test_redis_idempotency.py tests/integration/remote_command/test_remote_command_sqs_worker_integration.py -q
+      - name: Require Day16 persistent state and monitoring proof
+        run: python -m scripts.day16_evidence --check-existing
       - name: Upload Day16 recovery acceptance evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

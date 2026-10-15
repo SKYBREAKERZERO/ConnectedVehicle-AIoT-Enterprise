@@ -28,7 +28,14 @@ def local_environment() -> Iterator[Settings]:
             (prefix + "-db", 5432, "postgres:16-alpine", ["-e", "POSTGRES_PASSWORD=test-admin"]),
             (prefix + "-aws", 4566, LOCALSTACK, ["-e", "SERVICES=iam,kms,secretsmanager,sts,sqs"]),
         ):
-            docker("run", "-d", "--name", name, "-p", f"127.0.0.1::{port}", *arguments, image)
+            labels = (
+                ["--label", "cv.day16.run=" + os.environ["DAY16_DEMO_OWNER"]]
+                if "DAY16_DEMO_OWNER" in os.environ
+                else []
+            )
+            docker(
+                "run", "-d", "--name", name, *labels, "-p", f"127.0.0.1::{port}", *arguments, image
+            )
             containers.append(name)
         db_port = int(docker("port", containers[0], "5432").split(":")[-1])
         aws_port = int(docker("port", containers[1], "4566").split(":")[-1])

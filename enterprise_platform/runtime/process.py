@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager, suppress
 from typing import Any
 
+from enterprise_platform.observability.recovery import observe_recovery, recovery_scope
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +47,26 @@ async def run_worker(
     shutdown_timeout: float,
     operation_timeout: float,
 ) -> None:
+    with recovery_scope("worker"):
+        await _run_worker(
+            operation,
+            stop=stop,
+            poll_interval=poll_interval,
+            error_delay=error_delay,
+            shutdown_timeout=shutdown_timeout,
+            operation_timeout=operation_timeout,
+        )
+
+
+async def _run_worker(
+    operation: Callable[[], Awaitable[object]],
+    *,
+    stop: asyncio.Event,
+    poll_interval: float,
+    error_delay: float,
+    shutdown_timeout: float,
+    operation_timeout: float,
+) -> None:
     """Stop polling on termination, drain once, then cancel without ACK."""
 
     async def one_batch() -> object:
@@ -71,12 +93,18 @@ async def run_worker(
                 break
             try:
                 result = await batch
+                if consecutive_errors:
+                    observe_recovery("VERIFY", consecutive_errors + 1)
+                    observe_recovery("RECOVERED", consecutive_errors + 1)
                 consecutive_errors = 0
                 report(logging.INFO, "worker_batch: %s", result)
             except Exception as exc:
                 # Do not log broker URLs, payloads, passwords or raw SDK errors.
                 report(logging.WARNING, "worker_batch_failed: %s", type(exc).__name__)
                 consecutive_errors += 1
+                observe_recovery("FAULT_DETECTED", consecutive_errors)
+                observe_recovery("CLASSIFIED", consecutive_errors)
+                observe_recovery("RETRY", consecutive_errors)
                 delay = min(30.0, error_delay * 2 ** min(consecutive_errors - 1, 10))
                 delay *= random.uniform(0.5, 1.0)
         finally:

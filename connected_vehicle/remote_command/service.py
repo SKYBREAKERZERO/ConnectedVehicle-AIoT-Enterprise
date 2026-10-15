@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -83,11 +84,18 @@ class IssueRemoteCommandService:
                 return None
             return IssueRemoteCommandResult(command=existing, created=False)
 
-        result = await recover_transaction(execute, reconcile)
-        self._ensure_idempotent_replay_matches(
-            existing=result.command,
-            command_type=command_type,
-            ttl_seconds=ttl_seconds,
+        identity = "\0".join((tenant_id.strip(), vehicle_id.value, idempotency_key))
+
+        def validate(result: IssueRemoteCommandResult) -> None:
+            self._ensure_idempotent_replay_matches(
+                existing=result.command, command_type=command_type, ttl_seconds=ttl_seconds
+            )
+
+        result = await recover_transaction(
+            execute,
+            reconcile,
+            operation_id=sha256(identity.encode()).hexdigest(),
+            validate=validate,
         )
         return result
 

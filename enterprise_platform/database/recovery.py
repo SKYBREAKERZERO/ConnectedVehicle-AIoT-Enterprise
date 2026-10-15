@@ -10,10 +10,13 @@ from contextlib import suppress
 
 from sqlalchemy.exc import DBAPIError
 
+from enterprise_platform.observability.recovery import observe_recovery, recovery_scope
+
 logger = logging.getLogger(__name__)
 
 
 def record_recovery(state: str, attempt: int, code: str | None = None) -> None:
+    observe_recovery(state, attempt, code)
     with suppress(Exception):
         logger.warning(
             "database_transaction_recovery state=%s attempt=%s sqlstate=%s",
@@ -62,6 +65,29 @@ async def recover_transaction[T](
     max_attempts: int = 3,
     base_delay: float = 0.1,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    operation_id: str | None = None,
+    validate: Callable[[T], None] | None = None,
+) -> T:
+    with recovery_scope("database", operation_id=operation_id):
+        observe_recovery("RUNNING")
+        return await _recover_transaction(
+            operation,
+            reconcile,
+            max_attempts=max_attempts,
+            base_delay=base_delay,
+            sleep=sleep,
+            validate=validate,
+        )
+
+
+async def _recover_transaction[T](
+    operation: Callable[[], Awaitable[T]],
+    reconcile: Callable[[], Awaitable[T | None]],
+    *,
+    max_attempts: int,
+    base_delay: float,
+    sleep: Callable[[float], Awaitable[None]],
+    validate: Callable[[T], None] | None,
 ) -> T:
     """Each operation invocation must own a fresh transaction and have no external I/O.
 
@@ -72,22 +98,40 @@ async def recover_transaction[T](
         raise ValueError("Invalid transaction recovery bounds")
     for attempt in range(max_attempts):
         try:
-            return await operation()
+            result = await operation()
+            if validate is not None:
+                validate(result)
+            if attempt:
+                record_recovery("VERIFY", attempt + 1)
+                record_recovery("RECOVERED", attempt + 1)
+            return result
         except CommitOutcomeUnknown as exc:
+            record_recovery("FAULT_DETECTED", attempt + 1)
+            record_recovery("CLASSIFIED", attempt + 1)
             record_recovery("RECONCILE", attempt + 1)
             try:
                 async with asyncio.timeout(10):
-                    result = await reconcile()
+                    reconciled = await reconcile()
             except Exception as lookup_error:
                 record_recovery("ESCALATED", attempt + 1)
                 raise CommitOutcomeUnknown("Commit reconciliation unavailable") from lookup_error
-            if result is None:
+            if reconciled is None:
+                record_recovery("QUARANTINE", attempt + 1)
                 record_recovery("ESCALATED", attempt + 1)
                 raise CommitOutcomeUnknown("Commit unresolved; reconciliation required") from exc
+            try:
+                if validate is not None:
+                    validate(reconciled)
+            except Exception:
+                record_recovery("ESCALATED", attempt + 1)
+                raise
+            record_recovery("VERIFY", attempt + 1)
             record_recovery("RECOVERED", attempt + 1)
-            return result
+            return reconciled
         except DBAPIError as exc:
             code = sqlstate(exc)
+            record_recovery("FAULT_DETECTED", attempt + 1, code)
+            record_recovery("CLASSIFIED", attempt + 1, code)
             if code not in {"40P01", "40001", "55P03"} or attempt + 1 == max_attempts:
                 record_recovery("ESCALATED", attempt + 1, code)
                 raise

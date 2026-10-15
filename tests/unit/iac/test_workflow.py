@@ -54,6 +54,7 @@ def test_runtime_gate_cannot_skip_contracts_or_quality_checks() -> None:
         "tests/e2e/test_independent_runtimes.py",
         "tests/e2e/test_device_full_chain.py",
         "tests/integration/day16",
+        "scripts.day16_evidence --check-existing",
         "tests/integration/security/test_database_runtime_permissions.py",
         "tests/integration/reliability/test_redis_idempotency.py",
         "tests/integration/remote_command/test_remote_command_sqs_worker_integration.py",

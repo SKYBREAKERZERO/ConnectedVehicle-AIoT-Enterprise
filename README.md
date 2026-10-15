@@ -15,3 +15,6 @@ Independent runtimes, MQTT contract and real-process validation: [Runtime and E2
 Database credential lifecycle and local fault acceptance: [Day15](docs/DAY15_CREDENTIAL_LIFECYCLE.md).
 
 Transaction recovery, process crashes and mandatory evidence: [Day16](docs/DAY16_RESILIENCE.md).
+
+Repeatable lock/crash exercise and monitored completion contract:
+[Day16 demonstration](docs/DAY16_DEMONSTRATION.md).

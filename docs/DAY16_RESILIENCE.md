@@ -76,7 +76,8 @@ $env:RUNTIME_EVIDENCE_DIR = Join-Path '.runtime-reports' $day16Run
 .\.venv\Scripts\python.exe -m pytest tests/integration/day16 -q
 ```
 
-The final test requires all eleven scenario records and writes an exclusive
+The final test requires eleven fault-matrix records plus a recovery demonstration,
+including actual Prometheus observations and a reviewable public audit chain, and writes an exclusive
 `day16-acceptance.json`. Keep test order for this suite; partial or shuffled runs
 intentionally cannot produce complete acceptance. Records bind the run ID, Git
 commit and current Python source digest, including uncommitted code. Missing
@@ -109,7 +110,7 @@ network partitions, disaster durability or physical exactly-once actuation.
 
 ## Local validation — 2026-10-15
 
-The final unit/contract/Day16 run passed 907 tests, including all eleven evidence
+The initial unit/contract/Day16 run passed 907 tests, including the original eleven evidence
 scenarios. The existing 25 Day12/security/E2E cases also passed in the broader
 regression. That earlier run had one workflow-guard failure because it prohibited
 the always-upload evidence step; the corrected guard is covered by the final run
@@ -119,4 +120,9 @@ Ruff check and format check (349 files), mypy (332 source files), module contrac
 Terraform recursive format check, and local/dev validation passed. Day16 evidence
 includes the dirty working-tree Python digest rather than claiming that HEAD alone
 identifies these changes. No Day16 commit, push, remote CI or real AWS acceptance
-is claimed by this local result.
+is claimed by that initial local result. The implementation was subsequently pushed
+as PR #11; Runtime and IaC passed on `1d38345`. These historical runs do not establish
+that later monitoring/demo changes passed CI.
+
+For the expanded completion contract, correlated monitoring, repeatable command,
+reviewable audit chain and AWS limitations, see [Day16 demonstration](DAY16_DEMONSTRATION.md).
