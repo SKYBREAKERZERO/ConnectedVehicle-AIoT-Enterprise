@@ -31,7 +31,7 @@ class MemorySecrets:
         self.fault("describe_secret")
         if SecretId not in self.values:
             raise ClientError({"Error": {"Code": "ResourceNotFoundException"}}, "DescribeSecret")
-        return {"VersionIdsToStages": self.labels[SecretId]}
+        return {"Name": SecretId, "VersionIdsToStages": self.labels[SecretId]}
 
     def put_secret_value(
         self,

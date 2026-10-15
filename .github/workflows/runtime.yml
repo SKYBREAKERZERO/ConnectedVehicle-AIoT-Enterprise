@@ -19,6 +19,7 @@ jobs:
     env:
       CLOUD_RUNTIME: localstack
       DAY12_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+      DAY16_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
       APP_ENV: local
       AWS_ENDPOINT_URL: http://127.0.0.1:14566
       AWS_ACCESS_KEY_ID: test
@@ -95,7 +96,16 @@ jobs:
       - name: Unit, contract, real permissions and independent-process E2E tests
         env:
           RUNTIME_EVIDENCE_DIR: .runtime-reports
-        run: pytest tests/unit tests/contract tests/e2e/test_independent_runtimes.py tests/e2e/test_device_full_chain.py tests/integration/day12 tests/integration/security/test_database_runtime_permissions.py tests/integration/reliability/test_redis_idempotency.py tests/integration/remote_command/test_remote_command_sqs_worker_integration.py -q
+        run: pytest tests/unit tests/contract tests/e2e/test_independent_runtimes.py tests/e2e/test_device_full_chain.py tests/integration/day12 tests/integration/day16 tests/integration/security/test_database_runtime_permissions.py tests/integration/reliability/test_redis_idempotency.py tests/integration/remote_command/test_remote_command_sqs_worker_integration.py -q
+      - name: Upload Day16 recovery acceptance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day16-local-resilience
+          path: .runtime-reports/day16-*.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload Day11 simulation evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -120,6 +130,9 @@ jobs:
             .runtime-reports/day12-migration-guards.json
             .runtime-reports/day12-credential-rotation.json
             .runtime-reports/day12-credential-recovery-hardening.json
+            .runtime-reports/day12-credential-lifecycle.json
+            .runtime-reports/day12-credential-version-competition.json
+            .runtime-reports/day12-credential-cloud-lifecycle.json
             .runtime-reports/day12-acceptance.json
           include-hidden-files: true
           if-no-files-found: error

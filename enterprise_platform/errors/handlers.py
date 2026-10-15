@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from enterprise_platform.database.recovery import CommitOutcomeUnknown
 from enterprise_platform.errors.base import ApplicationError
 from enterprise_platform.errors.codes import ErrorCode
 from enterprise_platform.observability.context import get_observability_context
@@ -207,9 +208,20 @@ async def unexpected_error_handler(
     )
 
 
+async def commit_unknown_handler(request: Request, exc: Exception) -> JSONResponse:
+    del exc
+    return _build_error_response(
+        request,
+        status_code=503,
+        code=ErrorCode.DEPENDENCY_UNAVAILABLE,
+        message="Commit outcome unresolved. Retry with the same idempotency key.",
+    )
+
+
 def register_exception_handlers(
     app: FastAPI,
 ) -> None:
+    app.add_exception_handler(CommitOutcomeUnknown, commit_unknown_handler)
     app.add_exception_handler(
         ApplicationError,
         application_error_handler,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -21,12 +22,29 @@ Phase = Literal[
     "prepared",
     "database_changed",
     "verified",
+    "promoting",
+    "retiring",
+    "recovery_verified",
     "recovering",
     "recovery_required",
     "complete",
     "recovered",
 ]
 MAX_JOURNAL_BYTES = 65536
+
+TRANSITIONS: dict[str, set[str]] = {
+    "preparing": {"prepared", "recovering", "recovery_required"},
+    "prepared": {"database_changed", "recovering", "recovery_required"},
+    "database_changed": {"verified", "recovering", "recovery_required"},
+    "verified": {"promoting", "recovering", "recovery_required"},
+    "promoting": {"retiring", "recovering", "recovery_required"},
+    "retiring": {"complete", "recovery_required"},
+    "recovering": {"recovery_verified", "recovery_required"},
+    "recovery_verified": {"recovered", "recovery_required"},
+    "recovery_required": {"recovering", "retiring", "recovery_verified"},
+    "complete": set(),
+    "recovered": set(),
+}
 
 
 class CredentialPreflightError(ValueError):
@@ -91,6 +109,23 @@ class JournalEntry(StrictRecord):
         return self
 
 
+class LifecycleEvent(StrictRecord):
+    sequence: int = Field(ge=1)
+    time: str = Field(min_length=1, max_length=64)
+    phase: Phase
+    action: Literal["state", "retire_pending"] = "state"
+    retirement_status: Literal["in_progress", "complete", "retry_required"] | None = None
+
+    @field_validator("time")
+    @classmethod
+    def timestamp(cls, value: str) -> str:
+        if datetime.fromisoformat(value).utcoffset() is None:
+            raise ValueError("Audit timestamp requires a timezone")
+        return value
+
+    failure_type: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+
+
 class Journal(StrictRecord):
     version: Literal[2]
     operation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
@@ -99,7 +134,12 @@ class Journal(StrictRecord):
     database: DatabaseTarget
     environment: EnvironmentTarget
     entries: list[JournalEntry] = Field(min_length=1, max_length=3)
+    events: list[LifecycleEvent] = Field(default_factory=list)
+    audit_offset: int = Field(default=0, ge=0)
+    audit_archive_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    pending_retirement: Literal["in_progress", "complete", "retry_required"] | None = None
     failure_type: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+    recovery_failure_type: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
     failed_phase: Phase | None = None
     recovery_from_phase: Phase | None = None
     service_error_code: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
@@ -128,11 +168,49 @@ class Journal(StrictRecord):
         ):
             if len(set(values)) != len(values):
                 raise ValueError("Duplicate recovery entries or candidate versions")
+        if (self.audit_offset == 0) != (self.audit_archive_sha256 is None):
+            raise ValueError("Invalid archive checkpoint")
+        if self.pending_retirement is not None and self.phase not in {"complete", "recovered"}:
+            raise ValueError("Explicit retirement requires a terminal operation")
+        if self.audit_offset and not self.events:
+            raise ValueError("Archive checkpoint requires a current audit event")
+        validate_event_chain(self.events, self.audit_offset)
+        if any(
+            event.sequence != index
+            for index, event in enumerate(self.events, self.audit_offset + 1)
+        ):
+            raise ValueError("Invalid audit sequence")
+        if self.events and self.events[-1].phase != self.phase:
+            raise ValueError("Audit phase mismatch")
+        if self.phase == "recovery_required" and self.failure_type is None:
+            raise ValueError("Recovery required must record a failure")
+        if self.failed_phase in {"complete", "recovered", "recovery_required"}:
+            raise ValueError("Invalid failed operation phase")
+        if (
+            self.pending_retirement is not None
+            and self.events
+            and (
+                self.events[-1].action != "retire_pending"
+                or self.events[-1].retirement_status != self.pending_retirement
+            )
+        ):
+            raise ValueError("Retirement audit status mismatch")
         if (self.failure_type is None) != (self.failed_phase is None):
             raise ValueError("Incomplete failure metadata")
+        if self.recovery_failure_type is not None and self.failure_type is None:
+            raise ValueError("Unbound recovery failure metadata")
         if self.service_error_code is not None and self.failure_type is None:
             raise ValueError("Unbound service error metadata")
         return self
+
+
+def validate_event_chain(events: list[LifecycleEvent], offset: int = 0) -> None:
+    for index, event in enumerate(events, offset + 1):
+        if event.sequence != index:
+            raise ValueError("Invalid audit sequence")
+    for previous, current in zip(events, events[1:], strict=False):
+        if previous.phase != current.phase and current.phase not in TRANSITIONS[previous.phase]:
+            raise ValueError("Illegal audit transition")
 
 
 def database_target(settings: Settings) -> dict[str, Any]:
@@ -260,7 +338,11 @@ def load_journal(path: Path, settings: Settings, scope: RecoveryScope) -> dict[s
             data = stream.read(MAX_JOURNAL_BYTES + 1)
         if len(data) > MAX_JOURNAL_BYTES:
             raise ValueError("Oversized journal")
-        return validate_journal(strict_json(data.decode("utf-8")), settings, scope)
+        value = validate_journal(strict_json(data.decode("utf-8")), settings, scope)
+        from database.credential_audit import verify_archive_chain
+
+        verify_archive_chain(path, value)
+        return value
     except (ValueError, OSError):
         raise CredentialPreflightError(
             "Invalid recovery journal or configured target mismatch"

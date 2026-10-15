@@ -102,3 +102,16 @@ python -m scripts.aws_runtime_probe --target <目标JSON> --report <新的报告
 API 语义参见 [AssumeRole](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html)
 和 [Decrypt](https://docs.aws.amazon.com/kms/latest/APIReference/API_Decrypt.html)。
 报告采用新文件创建，拒绝覆盖输入或历史报告。当前只运行模拟客户端测试，不执行真实 AWS 请求。
+
+## Day15 lifecycle constraints
+
+Existing AWSPENDING or scheduled Secret deletion blocks a new rotation. Completion and compensation
+retire only this operation's Pending label, preserving Current/Previous. Retirement recovery verifies
+passwords without rewriting them. See [Day15](DAY15_CREDENTIAL_LIFECYCLE.md).
+
+Existing terminal Day14 journals with retained Pending can be explicitly reconciled using
+`python -m database.provision_runtime_credentials --retire <journal.json> --scope runtimes`
+in maintenance mode. The tool validates Current and database logins before removing owned labels;
+it never resets a password. Preserve the journal and adjacent `audit/` segments together.
+Lock acquisition failures preserve the journal. Soft cancellation drains in-flight cloud calls
+before releasing the session lock. These checks do not assert physical power-loss durability.

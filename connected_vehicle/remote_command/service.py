@@ -27,6 +27,7 @@ from connected_vehicle.vehicle import VehicleId
 from connected_vehicle.vehicle.persistence.repository import (
     SQLAlchemyVehicleRepository,
 )
+from enterprise_platform.database.recovery import recover_transaction
 from enterprise_platform.database.repositories.outbox import (
     SQLAlchemyOutboxRepository,
 )
@@ -55,6 +56,42 @@ class IssueRemoteCommandService:
         self._session_factory = session_factory
 
     async def issue(
+        self,
+        *,
+        vehicle_id: VehicleId,
+        tenant_id: str,
+        command_type: RemoteCommandType,
+        idempotency_key: str,
+        ttl_seconds: int = DEFAULT_REMOTE_COMMAND_TTL_SECONDS,
+    ) -> IssueRemoteCommandResult:
+        async def execute() -> IssueRemoteCommandResult:
+            return await self._issue_with_conflict_resolution(
+                vehicle_id=vehicle_id,
+                tenant_id=tenant_id,
+                command_type=command_type,
+                idempotency_key=idempotency_key,
+                ttl_seconds=ttl_seconds,
+            )
+
+        async def reconcile() -> IssueRemoteCommandResult | None:
+            existing = await self._find_existing_after_conflict(
+                vehicle_id=vehicle_id,
+                tenant_id=tenant_id.strip(),
+                idempotency_key=idempotency_key,
+            )
+            if existing is None:
+                return None
+            return IssueRemoteCommandResult(command=existing, created=False)
+
+        result = await recover_transaction(execute, reconcile)
+        self._ensure_idempotent_replay_matches(
+            existing=result.command,
+            command_type=command_type,
+            ttl_seconds=ttl_seconds,
+        )
+        return result
+
+    async def _issue_with_conflict_resolution(
         self,
         *,
         vehicle_id: VehicleId,

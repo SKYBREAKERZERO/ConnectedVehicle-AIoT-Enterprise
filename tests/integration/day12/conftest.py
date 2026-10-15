@@ -26,7 +26,7 @@ def local_environment() -> Iterator[Settings]:
     try:
         for name, port, image, arguments in (
             (prefix + "-db", 5432, "postgres:16-alpine", ["-e", "POSTGRES_PASSWORD=test-admin"]),
-            (prefix + "-aws", 4566, LOCALSTACK, ["-e", "SERVICES=iam,kms,secretsmanager,sts"]),
+            (prefix + "-aws", 4566, LOCALSTACK, ["-e", "SERVICES=iam,kms,secretsmanager,sts,sqs"]),
         ):
             docker("run", "-d", "--name", name, "-p", f"127.0.0.1::{port}", *arguments, image)
             containers.append(name)
