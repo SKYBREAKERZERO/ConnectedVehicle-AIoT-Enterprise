@@ -18,3 +18,6 @@ Transaction recovery, process crashes and mandatory evidence: [Day16](docs/DAY16
 
 Repeatable lock/crash exercise and monitored completion contract:
 [Day16 demonstration](docs/DAY16_DEMONSTRATION.md).
+
+SLOs, canary abort/recovery, runbooks and exact-head release readiness:
+[Day17 operational readiness](docs/DAY17_OPERATIONS.md).

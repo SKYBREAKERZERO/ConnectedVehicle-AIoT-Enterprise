@@ -1,0 +1,22 @@
+rule_files:
+  - ../../../infra/observability/day17-slo.yml
+evaluation_interval: 1m
+tests:
+  - name: readiness-budget-burn-then-resolved
+    interval: 1m
+    input_series:
+      - series: 'vehicle_http_requests_total{route="/health/ready",status="200"}'
+        values: '0+100x30'
+      - series: 'vehicle_http_requests_total{route="/health/ready",status="503"}'
+        values: '0+5x8 40+0x21'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: VehicleReadinessBudgetBurn
+        exp_alerts:
+          - exp_labels: {severity: warning, profile: local_drill}
+            exp_annotations:
+              summary: Readiness error budget is burning
+              runbook_url: https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/blob/main/docs/DAY17_OPERATIONS.md#readiness-budget-burn
+      - eval_time: 20m
+        alertname: VehicleReadinessBudgetBurn
+        exp_alerts: []
