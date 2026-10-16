@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Index, String
+from sqlalchemy import CheckConstraint, DateTime, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from enterprise_platform.database.base import Base
@@ -43,6 +43,7 @@ class VehicleModel(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_vehicles_tenant_id"),
         CheckConstraint(
             "status IN ('provisioning', 'active', 'suspended', 'decommissioned')",
             name="ck_vehicles_status_valid",

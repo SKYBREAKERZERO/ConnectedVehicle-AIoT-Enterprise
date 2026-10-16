@@ -11,6 +11,7 @@ import pytest
 
 from scripts.day16_evidence import provenance
 from scripts.day17_release import (
+    OTA_CHECKS,
     evaluate,
     readiness_digest,
     verify_artifact,
@@ -26,6 +27,18 @@ def bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from scripts.day16_evidence import verify
 
     verify(tmp_path)
+    write_json(
+        tmp_path / "day17-ota-foundation.json",
+        dict(
+            version=1,
+            profile="local_drill",
+            provenance=provenance(),
+            checks={key: True for key in sorted(OTA_CHECKS)},
+            generated_at_utc=datetime.now(UTC).isoformat(),
+            real_aws_verified=False,
+            device_execution_verified=False,
+        ),
+    )
     fault = window(failures=5, age=2).model_copy(update={"phase": "fault"})
     recovered = window().model_copy(update={"window_id": "b" * 32})
     write_json(
@@ -60,7 +73,18 @@ def test_readiness_bundle_replays_without_overwriting(
 
 @pytest.mark.parametrize(
     "case",
-    ["source", "policy", "superuser", "missing_fault", "metrics", "day16", "manifest", "future"],
+    [
+        "source",
+        "policy",
+        "superuser",
+        "missing_fault",
+        "metrics",
+        "day16",
+        "manifest",
+        "future",
+        "ota_missing",
+        "ota_failed",
+    ],
 )
 def test_release_rejects_inconsistent_or_missing_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
@@ -84,6 +108,13 @@ def test_release_rejects_inconsistent_or_missing_evidence(
         record["recovered"]["ended_at"] = (datetime.now(UTC) + timedelta(minutes=1)).isoformat()
     elif case == "day16":
         (tmp_path / "day16-outbox-crash.json").unlink()
+    elif case == "ota_missing":
+        (tmp_path / "day17-ota-foundation.json").unlink()
+    elif case == "ota_failed":
+        ota_path = tmp_path / "day17-ota-foundation.json"
+        ota = json.loads(ota_path.read_text())
+        ota["checks"]["cross_tenant_api_denied"] = False
+        ota_path.write_text(json.dumps(ota))
     else:
         result = json.loads((tmp_path / "day17-readiness.json").read_text())
         result["decision"] = "abort"

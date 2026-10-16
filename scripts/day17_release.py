@@ -21,6 +21,30 @@ from scripts.day17_rules import POLICY, RULES, generated, policy
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise"
+OTA_CHECKS = frozenset(
+    {
+        "inventory_registration_idempotent",
+        "negative_requests_no_side_effects",
+        "release_immutable_and_idempotent",
+        "cross_tenant_api_denied",
+        "authentication_and_ota_permission_required",
+        "hardware_mismatch_rejected",
+        "concurrent_duplicate_single_job",
+        "one_outstanding_job_per_ecu",
+        "job_idempotency_conflicts_rejected",
+        "job_query_persisted",
+        "audit_failure_rolls_back_create_and_cancel",
+        "cancellation_idempotent_and_audited",
+        "fixed_login_rls_blocks_forged_context",
+        "workers_denied_all_ota_tables",
+        "runtime_ddl_and_immutable_updates_denied",
+        "audit_actor_time_and_single_operation",
+        "runtime_security_contract_verified",
+        "competing_operations_single_active_job",
+        "composite_foreign_keys_enforce_ownership_and_hardware",
+        "rls_force_drift_rejected",
+    }
+)
 
 
 def readiness_digest() -> str:
@@ -32,10 +56,19 @@ def readiness_digest() -> str:
         "infra/observability/compose.yml",
         "tests/fixtures/day17/alerts.test.yml",
         "docs/DAY17_OPERATIONS.md",
+        "docs/DAY17_OTA_FOUNDATION.md",
+        "contracts/platform-v1.json",
         ".github/workflows/runtime.yml",
     ):
         digest.update(relative.encode() + b"\0")
         digest.update((ROOT / relative).read_text(encoding="utf-8").encode())
+    sql_files = [
+        *(ROOT / "database").glob("*.sql"),
+        *(ROOT / "database/migrations/sql").glob("*.sql"),
+    ]
+    for path in sorted(sql_files):
+        digest.update(path.relative_to(ROOT).as_posix().encode() + b"\0")
+        digest.update(path.read_text(encoding="utf-8").encode())
     return digest.hexdigest()
 
 
@@ -120,6 +153,20 @@ def evaluate(directory: Path, *, now: datetime | None = None) -> dict[str, Any]:
     ):
         raise ValueError("Readiness evidence is stale for this source/policy")
     proof = verify_day16(directory, report.provenance, now=current)
+    ota = read_json(directory / "day17-ota-foundation.json")
+    observed = datetime.fromisoformat(ota["generated_at_utc"])
+    if (
+        ota.get("version") != 1
+        or ota.get("profile") != "local_drill"
+        or ota.get("provenance") != report.provenance
+        or ota.get("real_aws_verified") is not False
+        or ota.get("device_execution_verified") is not False
+        or set(ota.get("checks", {})) != OTA_CHECKS
+        or any(value is not True for value in ota["checks"].values())
+        or observed.utcoffset() is None
+        or not -5 <= (current - observed).total_seconds() <= policy().maximum_evidence_age_seconds
+    ):
+        raise ValueError("Missing, inconsistent or expired OTA foundation evidence")
     target = policy()
     fault = evaluate_window(report.fault, target, now=current)
     recovered = evaluate_window(report.recovered, target, now=current)
@@ -132,8 +179,14 @@ def evaluate(directory: Path, *, now: datetime | None = None) -> dict[str, Any]:
         "recovery_objective": all(
             0 < value <= target.recovery_seconds for value in recovery.values()
         ),
+        "ota_foundation": True,
     }
-    files = ["day16-acceptance.json", "day16-demo-proof.json", "day17-canary.json"]
+    files = [
+        "day16-acceptance.json",
+        "day16-demo-proof.json",
+        "day17-canary.json",
+        "day17-ota-foundation.json",
+    ]
     return {
         "version": 1,
         "profile": "local_drill",
@@ -250,7 +303,11 @@ def verify_remote_artifacts(directory: Path, head: str, run_id: int) -> list[dic
             "day16-demo-proof.json",
             *("day16-" + name + ".json" for name in sorted(day16_evidence.SCENARIOS)),
         ],
-        "day17-local-readiness": ["day17-canary.json", "day17-readiness.json"],
+        "day17-local-readiness": [
+            "day17-canary.json",
+            "day17-readiness.json",
+            "day17-ota-foundation.json",
+        ],
     }
     for name, filenames in groups.items():
         matches = [row for row in records if row.get("name") == name]

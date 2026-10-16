@@ -411,6 +411,360 @@
     "title": "DispatchPayload",
     "type": "object"
   },
+  "ota-ecu-registration/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "ecu_type": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Ecu Type",
+        "type": "string"
+      },
+      "firmware_version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Firmware Version",
+        "type": "string"
+      },
+      "hardware_version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Hardware Version",
+        "type": "string"
+      },
+      "serial_number": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Serial Number",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ecu_type",
+      "hardware_version",
+      "firmware_version",
+      "serial_number"
+    ],
+    "title": "ECURegistration",
+    "type": "object"
+  },
+  "ota-ecu/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "created_by": {
+        "title": "Created By",
+        "type": "string"
+      },
+      "ecu_type": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Ecu Type",
+        "type": "string"
+      },
+      "firmware_version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Firmware Version",
+        "type": "string"
+      },
+      "hardware_version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Hardware Version",
+        "type": "string"
+      },
+      "id": {
+        "format": "uuid",
+        "title": "Id",
+        "type": "string"
+      },
+      "serial_number": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Serial Number",
+        "type": "string"
+      },
+      "vehicle_id": {
+        "format": "uuid",
+        "title": "Vehicle Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ecu_type",
+      "hardware_version",
+      "firmware_version",
+      "serial_number",
+      "id",
+      "vehicle_id",
+      "created_at",
+      "created_by"
+    ],
+    "title": "ECUView",
+    "type": "object"
+  },
+  "ota-firmware-registration/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "artifact_bucket": {
+        "maxLength": 63,
+        "minLength": 3,
+        "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$",
+        "title": "Artifact Bucket",
+        "type": "string"
+      },
+      "artifact_key": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "title": "Artifact Key",
+        "type": "string"
+      },
+      "artifact_version": {
+        "maxLength": 255,
+        "minLength": 1,
+        "title": "Artifact Version",
+        "type": "string"
+      },
+      "ecu_type": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Ecu Type",
+        "type": "string"
+      },
+      "hardware_version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Hardware Version",
+        "type": "string"
+      },
+      "sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Sha256",
+        "type": "string"
+      },
+      "size_bytes": {
+        "exclusiveMinimum": 0,
+        "maximum": 4294967296,
+        "title": "Size Bytes",
+        "type": "integer"
+      },
+      "version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Version",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ecu_type",
+      "hardware_version",
+      "version",
+      "artifact_bucket",
+      "artifact_key",
+      "artifact_version",
+      "sha256",
+      "size_bytes"
+    ],
+    "title": "FirmwareRegistration",
+    "type": "object"
+  },
+  "ota-firmware/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "artifact_bucket": {
+        "maxLength": 63,
+        "minLength": 3,
+        "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$",
+        "title": "Artifact Bucket",
+        "type": "string"
+      },
+      "artifact_key": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "title": "Artifact Key",
+        "type": "string"
+      },
+      "artifact_version": {
+        "maxLength": 255,
+        "minLength": 1,
+        "title": "Artifact Version",
+        "type": "string"
+      },
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "created_by": {
+        "title": "Created By",
+        "type": "string"
+      },
+      "ecu_type": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Ecu Type",
+        "type": "string"
+      },
+      "hardware_version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Hardware Version",
+        "type": "string"
+      },
+      "id": {
+        "format": "uuid",
+        "title": "Id",
+        "type": "string"
+      },
+      "sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Sha256",
+        "type": "string"
+      },
+      "size_bytes": {
+        "exclusiveMinimum": 0,
+        "maximum": 4294967296,
+        "title": "Size Bytes",
+        "type": "integer"
+      },
+      "verification_status": {
+        "const": "unverified",
+        "default": "unverified",
+        "title": "Verification Status",
+        "type": "string"
+      },
+      "version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Version",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ecu_type",
+      "hardware_version",
+      "version",
+      "artifact_bucket",
+      "artifact_key",
+      "artifact_version",
+      "sha256",
+      "size_bytes",
+      "id",
+      "created_at",
+      "created_by"
+    ],
+    "title": "FirmwareView",
+    "type": "object"
+  },
+  "ota-job-cancel/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "reason"
+    ],
+    "title": "CancelJob",
+    "type": "object"
+  },
+  "ota-job-request/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "release_id": {
+        "format": "uuid",
+        "title": "Release Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "release_id"
+    ],
+    "title": "JobRequest",
+    "type": "object"
+  },
+  "ota-job/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "created_by": {
+        "title": "Created By",
+        "type": "string"
+      },
+      "ecu_id": {
+        "format": "uuid",
+        "title": "Ecu Id",
+        "type": "string"
+      },
+      "id": {
+        "format": "uuid",
+        "title": "Id",
+        "type": "string"
+      },
+      "release_id": {
+        "format": "uuid",
+        "title": "Release Id",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "pending_verification",
+          "cancelled"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "updated_at": {
+        "format": "date-time",
+        "title": "Updated At",
+        "type": "string"
+      },
+      "vehicle_id": {
+        "format": "uuid",
+        "title": "Vehicle Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "vehicle_id",
+      "ecu_id",
+      "release_id",
+      "status",
+      "created_at",
+      "updated_at",
+      "created_by"
+    ],
+    "title": "JobView",
+    "type": "object"
+  },
   "telemetry/1.0": {
     "additionalProperties": false,
     "properties": {

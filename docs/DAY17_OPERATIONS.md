@@ -1,5 +1,12 @@
 # Day17 — Local operational readiness
 
+The companion [OTA Foundation](DAY17_OTA_FOUNDATION.md) adds ECU inventory,
+firmware release metadata, durable OTA jobs and audit. The combined gate requires
+its fresh, same-run `day17-ota-foundation.json` alongside the SLO/fault evidence.
+Missing or failed OTA assertions block readiness; pending jobs do not authorize
+device installation. SQL migration/grant files and both Day17 documents are also
+bound to the readiness digest.
+
 This profile proves a short local drill, not a production 30-day SLO. Only
 PostgreSQL 16, free LocalStack and local processes are used. No deployment,
 rollback, credential rotation or PR merge occurs implicitly in the release gate.

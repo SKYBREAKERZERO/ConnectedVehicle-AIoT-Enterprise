@@ -33,18 +33,21 @@ from database.dlq_operations import redrive, redrive_status
 from database.operations import reconcile, replay_outbox, timeout_commands
 from database.provision_runtime_credentials import SQLDriver, provision
 from enterprise_platform.config.settings import Settings
-from enterprise_platform.database.base import Base
 from enterprise_platform.database.credentials import DATABASE_USERS, runtime_database_user
 from enterprise_platform.database.engine import create_database_engine
 from enterprise_platform.database.models.operations import OperatorActionModel
 from enterprise_platform.database.models.outbox import OutboxEventModel
 from enterprise_platform.database.outbox_store import SQLAlchemyOutboxStore
-from enterprise_platform.database.runtime_security import verify_runtime_database_security
+from enterprise_platform.database.runtime_security import (
+    OTA_TABLES,
+    verify_runtime_database_security,
+)
 from enterprise_platform.database.session import create_session_factory
 from enterprise_platform.database.tenant import set_tenant_scope
 from enterprise_platform.errors.base import ResourceNotFoundError
 from enterprise_platform.messaging.exceptions import InvalidMessageError
 from tests.integration.day12.conftest import evidence
+from tests.integration.day12.test_migrations import shared_upgrade
 from tests.support.secret_versions import MemorySecrets
 
 
@@ -107,11 +110,9 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
             )
         )
         async with schema.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+            await connection.run_sync(shared_upgrade)
             raw = await connection.get_raw_connection()
             driver = cast(SQLDriver, raw.driver_connection)
-            for source in ("tenant-bindings.sql", "tenant-rls.sql", "outbox-tenant-policy.sql"):
-                await driver.execute(Path("database", source).read_text())
             sql = Path("database/runtime-grants.sql").read_text()
             await driver.execute(sql)
             await driver.execute(sql)  # Idempotent grants, including column privilege reset.
@@ -567,7 +568,7 @@ async def test_real_postgres_runtime_permissions(monkeypatch: pytest.MonkeyPatch
             policies = await session.scalar(
                 text("SELECT count(*) FROM pg_policies WHERE policyname='tenant_guard'")
             )
-            assert policies == 5
+            assert policies == 5 + len(OTA_TABLES)
 
         # Even a stolen pinned login cannot select a foreign tenant by setting the GUC.
         async with admin.begin() as connection:

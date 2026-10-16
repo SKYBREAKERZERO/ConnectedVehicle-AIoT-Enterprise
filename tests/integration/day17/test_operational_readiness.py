@@ -25,7 +25,7 @@ from enterprise_platform.database.credentials import load_runtime_database_setti
 from enterprise_platform.database.engine import create_database_engine
 from enterprise_platform.reliability.slo import CanaryWindow, evaluate_window
 from scripts.day16_evidence import provenance
-from scripts.day17_release import evaluate, readiness_digest, verify_readiness, write_json
+from scripts.day17_release import readiness_digest, write_json
 from scripts.day17_rules import ROOT, policy
 from tests.e2e.test_independent_runtimes import free_port
 from tests.integration.day12.test_credential_cloud_contracts import prepare
@@ -252,11 +252,3 @@ async def test_failed_canary_aborts_then_recovery_can_proceed(
             output / "day17-canary-diagnostics.json",
             {"completed_windows": [row["phase"] for row in windows], "provenance": provenance()},
         )
-
-
-def test_zz_readiness_gate() -> None:
-    directory = Path(os.environ["RUNTIME_EVIDENCE_DIR"])
-    result = evaluate(directory)
-    assert result["decision"] == "ready_for_local_release"
-    write_json(directory / "day17-readiness.json", result)
-    verify_readiness(directory)
