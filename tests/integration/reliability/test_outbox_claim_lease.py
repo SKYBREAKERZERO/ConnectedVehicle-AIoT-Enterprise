@@ -111,12 +111,7 @@ async def test_two_workers_claim_disjoint_batches_with_skip_locked() -> None:
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
-    base_time = datetime(
-        2000,
-        1,
-        1,
-        tzinfo=UTC,
-    )
+    base_time = datetime.now(UTC)
     claim_time = base_time + timedelta(hours=1)
 
     event_ids = [f"skip-locked-{uuid4()}" for _ in range(10)]
@@ -181,12 +176,7 @@ async def test_expired_lease_is_reclaimed_and_stale_token_is_fenced() -> None:
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
-    base_time = datetime(
-        2001,
-        1,
-        1,
-        tzinfo=UTC,
-    )
+    base_time = datetime.now(UTC)
 
     first_claim_time = base_time + timedelta(seconds=1)
     reclaim_time = base_time + timedelta(seconds=32)
@@ -295,12 +285,7 @@ async def test_scheduled_retry_is_not_claimed_before_available_at() -> None:
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
-    base_time = datetime(
-        2002,
-        1,
-        1,
-        tzinfo=UTC,
-    )
+    base_time = datetime.now(UTC)
 
     first_claim_time = base_time + timedelta(seconds=1)
     retry_available_at = base_time + timedelta(seconds=61)

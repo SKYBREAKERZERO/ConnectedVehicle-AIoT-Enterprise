@@ -61,4 +61,11 @@ def test_create_database_engine_applies_pool_policy() -> None:
     assert kwargs["pool_size"] == 12
     assert kwargs["max_overflow"] == 24
     assert kwargs["pool_timeout"] == 15.0
-    assert kwargs["connect_args"] == {"timeout": 4.0}
+    assert kwargs["connect_args"] == {
+        "timeout": 4.0,
+        "server_settings": {
+            "lock_timeout": "2000",
+            "statement_timeout": "10000",
+            "idle_in_transaction_session_timeout": "30000",
+        },
+    }

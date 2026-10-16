@@ -16,6 +16,15 @@ from apps.api.contracts import (
     IssueRemoteCommandResponse,
 )
 from connected_vehicle.device_data import CommandReport, TelemetrySample
+from connected_vehicle.ota.contracts import (
+    CancelJob,
+    ECURegistration,
+    ECUView,
+    FirmwareRegistration,
+    FirmwareView,
+    JobRequest,
+    JobView,
+)
 from connected_vehicle.remote_command.wire_contracts import DispatchPayload, RequestedPayload
 from enterprise_platform.messaging.envelope import EventEnvelope
 
@@ -33,6 +42,13 @@ def schemas() -> dict[str, Any]:
         "api-issue-request/1.0": IssueRemoteCommandRequest.model_json_schema(),
         "api-issue-response/1.0": IssueRemoteCommandResponse.model_json_schema(),
         "api-error/1.0": ErrorResponseContract.model_json_schema(),
+        "ota-ecu-registration/1.0": ECURegistration.model_json_schema(),
+        "ota-ecu/1.0": ECUView.model_json_schema(),
+        "ota-firmware-registration/1.0": FirmwareRegistration.model_json_schema(),
+        "ota-firmware/1.0": FirmwareView.model_json_schema(),
+        "ota-job-request/1.0": JobRequest.model_json_schema(),
+        "ota-job/1.0": JobView.model_json_schema(),
+        "ota-job-cancel/1.0": CancelJob.model_json_schema(),
     }
 
 
