@@ -84,7 +84,10 @@ async def test_failed_canary_aborts_then_recovery_can_proceed(
         DATABASE_CONNECT_TIMEOUT_SECONDS="0.5",
         DATABASE_HEALTH_TIMEOUT_SECONDS="1",
     )
-    flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+    if sys.platform == "win32":
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        flags = 0
     output = Path(os.environ["RUNTIME_EVIDENCE_DIR"])
     process: subprocess.Popen[bytes] | None = None
     limit: int | None = None
@@ -234,9 +237,10 @@ async def test_failed_canary_aborts_then_recovery_can_proceed(
         if limit is not None:
             await set_limit(limit)
         if process is not None and process.poll() is None:
-            process.send_signal(
-                signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGTERM
-            )
+            if sys.platform == "win32":
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                process.send_signal(signal.SIGTERM)
             try:
                 await asyncio.to_thread(process.wait, 5)
             except subprocess.TimeoutExpired:

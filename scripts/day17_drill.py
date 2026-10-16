@@ -32,6 +32,10 @@ def main() -> int:
     )
     print("Local-only operational evidence: " + str(directory), flush=True)
     process: subprocess.Popen[bytes] | None = None
+    if sys.platform == "win32":
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        flags = 0
     try:
         process = subprocess.Popen(
             [
@@ -46,7 +50,7 @@ def main() -> int:
             ],
             cwd=ROOT,
             env=environment,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+            creationflags=flags,
             start_new_session=sys.platform != "win32",
         )
         code = process.wait(timeout=360)
