@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from enterprise_platform.database.credentials import DatabaseRuntime, runtime_database_user
+from enterprise_platform.database.ota_authority_contract import FUNCTIONS
 
 OTA_TABLES = (
     "ecu_inventory",
@@ -193,10 +194,10 @@ async def verify_runtime_database_security(
             allowed = runtime == "application"
             if dict(privileges) != dict(
                 read=allowed,
-                insert=allowed,
+                insert=allowed and table != "ecu_inventory",
                 excess=False,
                 broad_update=False,
-                any_update=allowed and table in {"ota_jobs", "ecu_inventory", "ota_executions"},
+                any_update=allowed and table in {"ota_jobs", "ota_executions"},
             ):
                 raise RuntimeError("Unsafe OTA runtime privilege contract")
         immutable_job_columns = (
@@ -219,6 +220,8 @@ async def verify_runtime_database_security(
                 raise RuntimeError("Unsafe OTA immutable job privileges")
         for table, columns in {
             "ecu_inventory": (
+                "firmware_version",
+                "security_version",
                 "tenant_id",
                 "id",
                 "vehicle_id",
@@ -280,6 +283,41 @@ async def verify_runtime_database_security(
             for row in guards
         ):
             raise RuntimeError("Unsafe OTA monotonic security counter guard")
+        if await connection.scalar(
+            text("SELECT has_column_privilege('public.ecu_inventory','security_version','INSERT')")
+        ):
+            raise RuntimeError("Unsafe OTA initial security counter privilege")
+        if await connection.scalar(
+            text("SELECT has_schema_privilege('ota_authority','USAGE,CREATE')")
+        ):
+            raise RuntimeError("Unsafe OTA private authority schema access")
+        for name, (_, expected_body) in FUNCTIONS.items():
+            rows = (
+                (
+                    await connection.execute(
+                        text("""SELECT p.prosrc,p.prosecdef,p.proconfig,
+                pg_get_userbyid(p.proowner) AS owner,
+                has_function_privilege(p.oid,'EXECUTE') AS execute,
+                EXISTS(SELECT FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
+                       WHERE a.grantee=0 AND a.privilege_type='EXECUTE') AS public_execute
+                FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                WHERE n.nspname='public' AND p.proname=:name"""),
+                        {"name": name},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            if len(rows) != 1 or any(
+                " ".join(row["prosrc"].split()) != " ".join(expected_body.split())
+                or not row["prosecdef"]
+                or row["proconfig"] != ["search_path=pg_catalog"]
+                or row["owner"] != guards[0]["owner"]
+                or row["public_execute"]
+                or row["execute"] != (runtime == "application")
+                for row in rows
+            ):
+                raise RuntimeError("Unsafe OTA installation authority function")
 
 
 def validate_policy_contract(policies: list[dict[str, Any]]) -> None:

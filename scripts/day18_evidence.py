@@ -25,6 +25,9 @@ from scripts.day17_rules import policy
 
 REQUIRED = frozenset(
     {
+        "independent_ecu_proof_and_replay_protection",
+        "database_credential_cannot_forge_installation",
+        "database_authority_drift_fails_closed",
         "unverified_claim_denied",
         "untrusted_signature_denied",
         "checksum_failure_no_execution_side_effects",

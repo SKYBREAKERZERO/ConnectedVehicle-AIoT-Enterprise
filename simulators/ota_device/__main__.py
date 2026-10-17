@@ -6,14 +6,48 @@ import os
 import sqlite3
 import sys
 import time
+from collections.abc import Generator
 from pathlib import Path
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx2 as httpx
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from connected_vehicle.ota.artifacts import verify_signature
+from connected_vehicle.ota.device_proof import proof_headers
 from connected_vehicle.ota.execution_contracts import ClaimResult
 from simulators.ota_device.store import DeviceStore, exclusive
+
+
+class ECUAuth(httpx.Auth):
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
+        raw = args.ecu_private_key.read_bytes()
+        if len(raw) > 4096:
+            raise ValueError("Oversized ECU key")
+        key = serialization.load_pem_private_key(raw, password=None)
+        if not isinstance(key, Ed25519PrivateKey):
+            raise ValueError("ECU proof requires Ed25519")
+        self.key = key
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        request.headers.update(
+            proof_headers(
+                self.key,
+                method=request.method,
+                path=request.url.path,
+                body=request.content,
+                tenant=self.args.tenant,
+                vehicle=self.args.vehicle,
+                ecu=self.args.ecu,
+                device=self.args.device_id,
+                nonce=str(uuid4()),
+                timestamp=str(int(time.time())),
+            )
+        )
+        yield request
 
 
 def request(
@@ -119,6 +153,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             with httpx.Client(
                 base_url=args.base_url,
                 headers={"Authorization": "Bearer " + token},
+                auth=ECUAuth(args),
                 timeout=3,
                 trust_env=False,
                 follow_redirects=False,
@@ -213,6 +248,12 @@ def main() -> int:
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--token-file", type=Path, required=True)
     parser.add_argument("--trusted-keys", type=Path, required=True)
+    parser.add_argument(
+        "--ecu-private-key",
+        type=Path,
+        required=True,
+        help="Independent ECU installation proof key; never supplied by API",
+    )
     parser.add_argument(
         "--crash-at", choices=("after_download", "after_install", "after_terminal_ack")
     )

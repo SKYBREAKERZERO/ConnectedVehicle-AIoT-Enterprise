@@ -40,7 +40,15 @@ DO $$ BEGIN
   IF to_regclass('public.ota_executions') IS NOT NULL THEN
     GRANT SELECT,INSERT ON public.ota_executions,public.ota_execution_reports TO app_user;
     GRANT UPDATE (device_id,claim_token,claim_operation,report_sequence) ON public.ota_executions TO app_user;
-    GRANT UPDATE (firmware_version,security_version) ON public.ecu_inventory TO app_user;
+    -- Legacy revision grants are removed by the forward security migration.
+    REVOKE UPDATE (firmware_version,security_version) ON public.ecu_inventory FROM app_user;
+    IF to_regprocedure('public.ota_apply_installation(text,text)') IS NOT NULL THEN
+      REVOKE INSERT ON public.ecu_inventory FROM app_user;
+      GRANT INSERT (tenant_id,id,vehicle_id,ecu_type,hardware_version,firmware_version,
+                    serial_number,created_at,created_by) ON public.ecu_inventory TO app_user;
+      GRANT EXECUTE ON FUNCTION public.ota_apply_installation(text,text),
+        public.ota_accept_device_nonce(text,text,uuid) TO app_user;
+    END IF;
   END IF;
 END $$;
 -- New migration-owned tables never automatically become accessible to runtimes.

@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     database_connect_timeout_seconds: float = Field(default=5.0, gt=0)
     database_health_timeout_seconds: float = Field(default=3.0, gt=0)
     ota_trusted_keys_file: str | None = None
+    ota_device_keys_file: str | None = None
+    ota_install_receipt_keys_file: str | None = None
     ota_max_artifact_bytes: int = Field(default=32 * 1024**2, ge=1, le=256 * 1024**2)
     ota_artifact_timeout_seconds: float = Field(default=20.0, ge=1, le=60)
     database_lock_timeout_seconds: float = Field(default=2.0, gt=0, le=60)

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from connected_vehicle.ota.artifacts import ArtifactVerifier
+from connected_vehicle.ota.artifacts import ArtifactVerifier, verify_signature
 from connected_vehicle.ota.contracts import FirmwareRegistration
 from connected_vehicle.ota.execution_contracts import (
     ClaimRequest,
@@ -17,6 +18,7 @@ from connected_vehicle.ota.execution_contracts import (
     SignedManifest,
     VerificationRequest,
 )
+from connected_vehicle.ota.install_receipt import sign_receipt
 from connected_vehicle.ota.models import (
     ECUModel,
     FirmwareModel,
@@ -25,7 +27,11 @@ from connected_vehicle.ota.models import (
     OTAReportModel,
 )
 from connected_vehicle.ota.service import OTAService, fingerprint
-from enterprise_platform.errors.base import ConflictError, ResourceNotFoundError
+from enterprise_platform.errors.base import (
+    ConflictError,
+    DependencyUnavailableError,
+    ResourceNotFoundError,
+)
 
 
 class OTAExecutionService:
@@ -134,13 +140,11 @@ class OTAExecutionService:
                     raise ConflictError("Concurrent verification conflicts.")
                 return ExecutionView.model_validate(job)
             locked_ecu = await session.scalar(
-                select(ECUModel)
-                .where(
+                select(ECUModel).where(
                     ECUModel.tenant_id == tenant,
                     ECUModel.id == job.ecu_id,
                     ECUModel.vehicle_id == job.vehicle_id,
                 )
-                .with_for_update()
             )
             assert locked_ecu is not None
             vehicle = await self.base.vehicle(session, tenant, job.vehicle_id)
@@ -306,21 +310,30 @@ class OTAExecutionService:
                         "Installed image digest does not match the verified artifact."
                     )
                 target = await session.scalar(
-                    select(ECUModel)
-                    .where(
+                    select(ECUModel).where(
                         ECUModel.tenant_id == tenant,
                         ECUModel.vehicle_id == vehicle,
                         ECUModel.id == ecu,
                     )
-                    .with_for_update()
                 )
                 assert target is not None
                 if manifest.security_version <= target.security_version:
                     raise ConflictError("Installed security counter would regress.")
-                target.firmware_version, target.security_version = (
-                    manifest.version,
-                    manifest.security_version,
-                )
+                # A runtime password is not installation authority. Recheck the immutable
+                # manufacturer's signature before minting a DB-verifiable capability.
+                if (
+                    manifest.tenant_id != tenant
+                    or not self.artifacts.settings.ota_trusted_keys_file
+                ):
+                    raise ConflictError("Installation manifest tenant/trust mismatch.")
+                try:
+                    verify_signature(
+                        Path(self.artifacts.settings.ota_trusted_keys_file),
+                        manifest,
+                        execution.signature,
+                    )
+                except (OSError, ValueError) as exc:
+                    raise ConflictError("Installation signature is no longer trusted.") from exc
             job.status, job.updated_at = report.status, datetime.now(UTC)
             execution.report_sequence = report.sequence
             session.add(
@@ -344,4 +357,30 @@ class OTAExecutionService:
                 body=body,
                 reason="Authenticated device execution report",
             )
+            if report.status == "succeeded":
+                path = self.artifacts.settings.ota_install_receipt_keys_file
+                if not path:
+                    raise DependencyUnavailableError("Installation authority is not configured.")
+                try:
+                    payload, mac = sign_receipt(
+                        Path(path),
+                        tenant,
+                        job_id=identifier,
+                        vehicle_id=vehicle,
+                        ecu_id=ecu,
+                        device_id=device,
+                        manifest=manifest.model_dump(mode="json"),
+                        signature=execution.signature,
+                        report=body,
+                        report_sha256=fingerprint(body),
+                    )
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    raise DependencyUnavailableError(
+                        "Installation authority is unavailable."
+                    ) from exc
+                await session.flush()
+                await session.execute(
+                    text("SELECT public.ota_apply_installation(:payload,:mac)"),
+                    {"payload": payload, "mac": mac},
+                )
             return ExecutionView.model_validate(job)

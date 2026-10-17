@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import os
+import secrets
 import signal
 import sqlite3
 import subprocess
@@ -20,14 +22,22 @@ import httpx2 as httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
+from connected_vehicle.ota.device_proof import proof_headers
 from connected_vehicle.ota.execution_contracts import SignedManifest
+from database.provision_ota_authority import provision
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.credentials import load_runtime_database_settings
 from enterprise_platform.database.engine import create_database_engine
+from enterprise_platform.database.runtime_security import verify_runtime_database_security
 from scripts.day16_evidence import provenance
 from scripts.day17_release import write_json
 from scripts.day18_evidence import source_digest
@@ -96,6 +106,44 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
     device_token = tmp_path / "device-token"
     device_token.write_text(bearer(device="tbox-1"))
     device_token.chmod(0o600)
+    ecu_key = ed25519.Ed25519PrivateKey.generate()
+    ecu_key_path = tmp_path / "ecu-private.pem"
+    ecu_key_path.write_bytes(
+        ecu_key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+    )
+    ecu_key_path.chmod(0o600)
+    ecu_registry = tmp_path / "ecu-registry.json"
+    ecu_registry.write_text(
+        json.dumps(
+            {
+                "day18-a": {
+                    device: {
+                        ecu: {
+                            "vehicle_id": vehicle,
+                            "install_allowed": True,
+                            "public_key": base64.b64encode(
+                                ecu_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+                            ).decode(),
+                        }
+                    }
+                    for device in ("tbox-1", "other-device")
+                }
+            }
+        )
+    )
+    receipt_keys = tmp_path / "receipt-keys.json"
+    receipt_keys.write_text(
+        json.dumps(
+            {
+                "day18-a": {
+                    "key_id": "local-receipt-1",
+                    "secret": base64.b64encode(secrets.token_bytes(32)).decode(),
+                }
+            }
+        )
+    )
+    receipt_keys.chmod(0o600)
+    await provision(local_environment, "day18-a", receipt_keys)
     s3: Any = boto3.client(
         "s3",
         endpoint_url=settings.aws_endpoint_url,
@@ -164,6 +212,8 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
         OIDC_ISSUER="https://day18.identity.example",
         OIDC_AUDIENCE="vehicle-api",
         OIDC_PUBLIC_KEY_FILE=str(oidc_key),
+        OTA_DEVICE_KEYS_FILE=str(ecu_registry),
+        OTA_INSTALL_RECEIPT_KEYS_FILE=str(receipt_keys),
     )
     if sys.platform == "win32":
         flags = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -212,11 +262,35 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                 token: str | None = None,
                 body: object = None,
                 key: str | None = None,
+                sign_proof: bool = True,
             ) -> dict[str, Any]:
                 headers = {"Authorization": "Bearer " + (token or bearer())}
                 if key:
                     headers["Idempotency-Key"] = key
-                response = await client.request(method, path, headers=headers, json=body)
+                if path.endswith("/artifact"):
+                    headers["X-OTA-Claim"] = str(uuid4())
+                request = client.build_request(method, path, headers=headers, json=body)
+                claims = jwt.decode(token or bearer(), options={"verify_signature": False})
+                if (
+                    sign_proof
+                    and claims.get("principal_type") == "device"
+                    and path.startswith("/v2/vehicles/")
+                ):
+                    request.headers.update(
+                        proof_headers(
+                            ecu_key,
+                            method=method,
+                            path=path,
+                            body=request.content,
+                            tenant=claims["tenant_id"],
+                            vehicle=claims["vehicle_id"],
+                            ecu=path.split("/")[5],
+                            device=claims["sub"],
+                            nonce=str(uuid4()),
+                            timestamp=str(int(time.time())),
+                        )
+                    )
+                response = await client.send(request)
                 assert response.status_code == expected, f"{method} {path}: {response.status_code}"
                 return response.json()  # type: ignore[no-any-return]
 
@@ -277,6 +351,71 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
 
             job, verification = await candidate()
             path = f"/v2/vehicles/{vehicle}/ecus/{ecu}/ota-jobs/{job}"
+            before_proofs = await api("GET", f"/v2/ota/jobs/{job}")
+            for method, endpoint, payload in (
+                ("POST", path + "/claim", {"operation_id": str(uuid4())}),
+                ("GET", path + "/artifact", None),
+                ("GET", f"/v2/vehicles/{vehicle}/ecus/{ecu}/ota-jobs/next", None),
+                (
+                    "POST",
+                    path + "/reports",
+                    dict(
+                        event_id=str(uuid4()),
+                        claim_token=str(uuid4()),
+                        sequence=1,
+                        status="installing",
+                        occurred_at=datetime.now(UTC).isoformat(),
+                    ),
+                ),
+            ):
+                # A valid vehicle JWT alone is no longer installation authority.
+                await api(
+                    method,
+                    endpoint,
+                    token=bearer(device="tbox-1"),
+                    body=payload,
+                    sign_proof=False,
+                    expected=403,
+                )
+            await api(
+                "POST",
+                path + "/claim",
+                token=bearer(device="unregistered-device"),
+                body={"operation_id": str(uuid4())},
+                expected=403,
+            )
+            await api(
+                "POST",
+                f"/v2/vehicles/{vehicle}/ecus/{other_ecu}/ota-jobs/{job}/claim",
+                token=bearer(device="tbox-1"),
+                body={"operation_id": str(uuid4())},
+                expected=403,
+            )
+            replay_body = json.dumps({"operation_id": str(uuid4())}, separators=(",", ":")).encode()
+            replay_headers = {
+                "Authorization": "Bearer " + bearer(device="tbox-1"),
+                "Content-Type": "application/json",
+                **proof_headers(
+                    ecu_key,
+                    method="POST",
+                    path=path + "/claim",
+                    body=replay_body,
+                    tenant="day18-a",
+                    vehicle=vehicle,
+                    ecu=ecu,
+                    device="tbox-1",
+                    nonce=str(uuid4()),
+                    timestamp=str(int(time.time())),
+                ),
+            }
+            assert (
+                await client.post(path + "/claim", content=replay_body, headers=replay_headers)
+            ).status_code == 409
+            assert (
+                await client.post(path + "/claim", content=replay_body, headers=replay_headers)
+            ).status_code == 403
+            assert await api("GET", f"/v2/ota/jobs/{job}") == before_proofs
+            checks["independent_ecu_proof_and_replay_protection"] = True
             await api(
                 "POST",
                 path + "/claim",
@@ -397,6 +536,8 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                 str(device_token),
                 "--trusted-keys",
                 str(trust),
+                "--ecu-private-key",
+                str(ecu_key_path),
             ]
 
             async def agent(
@@ -546,16 +687,120 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                 await load_runtime_database_settings(settings, "application")
             )
             try:
-                for change in ("security_version=0", "firmware_version='forged'"):
+                for change in (
+                    "security_version=0",
+                    "firmware_version='forged'",
+                    "security_version=999,firmware_version='forged-higher'",
+                ):
                     with pytest.raises(DBAPIError) as rejected:
                         async with runtime_engine.begin() as connection:
                             await connection.execute(
                                 text(f"UPDATE ecu_inventory SET {change} WHERE id=:id"), {"id": ecu}
                             )
-                    assert getattr(rejected.value.orig, "sqlstate", None) == "23514"
+                    assert getattr(rejected.value.orig, "sqlstate", None) == "42501"
             finally:
                 await runtime_engine.dispose()
             checks["database_monotonic_counter_guard"] = True
+            runtime_engine = create_database_engine(
+                await load_runtime_database_settings(settings, "application")
+            )
+            try:
+                for sql in (
+                    "SELECT * FROM ota_authority.receipt_keys",
+                    "UPDATE ota_authority.receipt_keys SET enabled=true",
+                    "INSERT INTO ecu_inventory(tenant_id,id,security_version) "
+                    "VALUES ('day18-a','fake',999)",
+                ):
+                    with pytest.raises(DBAPIError) as rejected:
+                        async with runtime_engine.begin() as connection:
+                            await connection.execute(text(sql))
+                    assert getattr(rejected.value.orig, "sqlstate", None) == "42501"
+                async with admin.connect() as connection:
+                    authentic = await connection.scalar(
+                        text(
+                            "SELECT payload FROM ota_authority.installation_receipts "
+                            "WHERE job_id=:job"
+                        ),
+                        {"job": job},
+                    )
+                secret = base64.b64decode(json.loads(receipt_keys.read_text())["day18-a"]["secret"])
+                variants = [
+                    authentic | {"ecu_id": other_ecu},
+                    authentic | {"expires": 0},
+                    authentic | {"expires": int(time.time()) + 9999},
+                    authentic | {"expires": None},
+                    authentic | {"manifest": authentic["manifest"] | {"security_version": 999}},
+                ]
+                for variant in variants:
+                    receipt_payload = json.dumps(variant, sort_keys=True, separators=(",", ":"))
+                    mac = hmac.new(secret, receipt_payload.encode(), hashlib.sha256).hexdigest()
+                    with pytest.raises(DBAPIError):
+                        async with runtime_engine.begin() as connection:
+                            await connection.execute(
+                                text("SELECT ota_apply_installation(:payload,:mac)"),
+                                {"payload": receipt_payload, "mac": mac},
+                            )
+                receipt_payload = json.dumps(authentic)
+                with pytest.raises(DBAPIError) as rejected:
+                    async with runtime_engine.begin() as connection:
+                        await connection.execute(
+                            text("SELECT ota_apply_installation(:payload,:mac)"),
+                            {"payload": receipt_payload, "mac": "0" * 64},
+                        )
+                assert getattr(rejected.value.orig, "sqlstate", None) == "42501"
+                async with admin.connect() as connection:
+                    assert (
+                        await connection.scalar(
+                            text(
+                                "SELECT count(*) FROM ota_authority.installation_receipts "
+                                "WHERE job_id=:job"
+                            ),
+                            {"job": job},
+                        )
+                        == 1
+                    )
+                    assert (
+                        await connection.scalar(
+                            text("SELECT security_version FROM ecu_inventory WHERE id=:ecu"),
+                            {"ecu": ecu},
+                        )
+                        == 1
+                    )
+            finally:
+                await runtime_engine.dispose()
+            checks["database_credential_cannot_forge_installation"] = True
+            runtime_engine = create_database_engine(
+                await load_runtime_database_settings(settings, "application")
+            )
+            try:
+                async with admin.connect() as connection:
+                    definition = await connection.scalar(
+                        text(
+                            "SELECT pg_get_functiondef("
+                            "'public.ota_apply_installation(text,text)'::regprocedure)"
+                        )
+                    )
+                async with admin.begin() as connection:
+                    await connection.execute(
+                        text("""CREATE OR REPLACE FUNCTION
+                        public.ota_apply_installation(p_payload text,p_mac text) RETURNS void
+                        LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog
+                        AS $$ BEGIN RETURN; END $$""")
+                    )
+                try:
+                    with pytest.raises(RuntimeError, match="installation authority function"):
+                        await verify_runtime_database_security(
+                            runtime_engine, "application", tenant_id="day18-a"
+                        )
+                finally:
+                    async with admin.begin() as connection:
+                        await connection.execute(text(definition))
+                await verify_runtime_database_security(
+                    runtime_engine, "application", tenant_id="day18-a"
+                )
+            finally:
+                await runtime_engine.dispose()
+            checks["database_authority_drift_fails_closed"] = True
             image.write_bytes(b"damaged local bank")
             await agent(job, expected=1)
             image.write_bytes(data)

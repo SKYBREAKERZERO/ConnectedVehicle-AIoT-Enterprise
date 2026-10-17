@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from sqlalchemy import text
 
 from apps.api.routers.device_data import Identity, Sessions, device, tenant
 from connected_vehicle.ota.artifacts import ArtifactVerifier
+from connected_vehicle.ota.device_proof import verify_proof
 from connected_vehicle.ota.execution_contracts import (
     ClaimRequest,
     ClaimResult,
@@ -17,6 +20,7 @@ from connected_vehicle.ota.execution_contracts import (
 )
 from connected_vehicle.ota.execution_service import OTAExecutionService
 from enterprise_platform.config.settings import get_settings
+from enterprise_platform.errors.base import ConflictError
 from enterprise_platform.security.permissions import Permission
 
 router = APIRouter(tags=["OTA Execution v2"])
@@ -29,6 +33,35 @@ def service(request: Request, sessions: Sessions) -> OTAExecutionService:
 
 
 Service = Annotated[OTAExecutionService, Depends(service)]
+
+
+async def ecu_device(
+    request: Request, context: Identity, execution: Service, vehicle: UUID, ecu: UUID
+) -> str:
+    bound = device(context, vehicle, Permission.OTA_EXECUTE)
+    path = get_settings().ota_device_keys_file
+    if not path:
+        raise HTTPException(403, "Independent ECU installation proof required")
+    try:
+        nonce = verify_proof(
+            Path(path),
+            method=request.method,
+            path=request.url.path,
+            body=await request.body(),
+            tenant=bound,
+            vehicle=str(vehicle),
+            ecu=str(ecu),
+            device=context.principal.principal_id,
+            headers=request.headers,
+        )
+        async with execution.base.transaction(bound) as session:
+            await session.execute(
+                text("SELECT public.ota_accept_device_nonce(:tenant,:device,:nonce)"),
+                {"tenant": bound, "device": context.principal.principal_id, "nonce": nonce},
+            )
+    except (OSError, ValueError, ConflictError) as exc:
+        raise HTTPException(403, "Invalid, expired, replayed or unauthorized ECU proof") from exc
+    return bound
 
 
 @router.get("/v2/vehicles/{vehicle_id}/ecus/{ecu_id}", operation_id="getOTAInventoryV2")
@@ -44,10 +77,10 @@ async def inventory(
     "/v2/vehicles/{vehicle_id}/ecus/{ecu_id}/ota-jobs/next", operation_id="pollOTAExecutionV2"
 )
 async def available(
-    vehicle_id: UUID, ecu_id: UUID, context: Identity, execution: Service
+    vehicle_id: UUID, ecu_id: UUID, context: Identity, execution: Service, request: Request
 ) -> list[ExecutionView]:
     return await execution.available(
-        device(context, vehicle_id, Permission.OTA_EXECUTE),
+        await ecu_device(request, context, execution, vehicle_id, ecu_id),
         context.principal.principal_id,
         str(vehicle_id),
         str(ecu_id),
@@ -82,9 +115,10 @@ async def claim(
     body: ClaimRequest,
     context: Identity,
     execution: Service,
+    request: Request,
 ) -> ClaimResult:
     return await execution.claim(
-        device(context, vehicle_id, Permission.OTA_EXECUTE),
+        await ecu_device(request, context, execution, vehicle_id, ecu_id),
         context.principal.principal_id,
         str(vehicle_id),
         str(ecu_id),
@@ -103,10 +137,11 @@ async def download(
     job_id: UUID,
     context: Identity,
     execution: Service,
+    request: Request,
     claim_token: Annotated[UUID, Header(alias="X-OTA-Claim")],
 ) -> Response:
     data = await execution.artifact(
-        device(context, vehicle_id, Permission.OTA_EXECUTE),
+        await ecu_device(request, context, execution, vehicle_id, ecu_id),
         context.principal.principal_id,
         str(vehicle_id),
         str(ecu_id),
@@ -129,9 +164,10 @@ async def report(
     body: OTAReport,
     context: Identity,
     execution: Service,
+    request: Request,
 ) -> ExecutionView:
     return await execution.report(
-        device(context, vehicle_id, Permission.OTA_EXECUTE),
+        await ecu_device(request, context, execution, vehicle_id, ecu_id),
         context.principal.principal_id,
         str(vehicle_id),
         str(ecu_id),

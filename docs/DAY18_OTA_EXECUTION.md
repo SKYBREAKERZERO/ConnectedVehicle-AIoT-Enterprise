@@ -95,20 +95,85 @@ numbers, valid state transitions and nonregressing event time. The same event an
 body return the durable result; conflicting payloads and stale claims are rejected.
 Success must report the verified digest. Job state, report ledger, ECU version /
 monotonic security counter and audit append commit together. An audit failure rolls
-them all back. All new tables use FORCE RLS and fixed-login tenant binding. Workers
+them all back. Public OTA tables use FORCE RLS and fixed-login tenant binding. Workers
 get no execution-table access; only required application column updates are granted.
-A migration-owned trigger independently rejects a decreasing counter or a firmware
-change without a counter increase, including direct SQL by the application role.
-Startup also verifies the trigger's exact body, enabled state and ownership.
+A migration-owned trigger independently rejects counter regression. The forward
+security migration additionally removes application UPDATE access to both version
+columns and INSERT access to the initial security counter. Only a short-lived,
+independently authenticated installation receipt can advance an existing ECU.
+Startup verifies both the trigger and the exact authority function bodies,
+ownership, SECURITY DEFINER/search_path settings and runtime/public privileges.
 
-Revision `d72fa60b319e` follows `c61f98a742de`. Use the existing independent migration
-owner; bootstrap and runtime credentials stay separate. Destructive downgrade is
-refused to preserve installed security counters and audit history.
+The authoritative published lineage is `c61f98a742de` → `d72fa60b319e` →
+`e83c904a127f`. The first two revisions remain unchanged; the forward migration
+repairs existing base and tenant roles as well as freshly provisioned roles.
+`d72a91b63ef0` is an alternate local proposal absent from this published Git
+history, not a compatible predecessor or an alias. Its databases are refused by
+Alembic. Never stamp them onto this line: preserve a backup and the original
+revision source, compare schema/state/ACLs, then implement a reviewed explicit
+conversion. There is no safe automatic merge without that source and data.
+Single-head lineage and unknown-revision rejection are regression tested.
+Use the independent non-superuser migration owner; bootstrap/runtime credentials
+stay separate. Destructive downgrade is refused.
+
+## Independent installation authority and ECU proof
+
+`OTA_DEVICE_KEYS_FILE` is an operator-controlled public registry, independent of
+JWT claims and application database rows:
+
+```json
+{"tenant-a":{"tbox-1":{"<ecu-uuid>":{"vehicle_id":"<vehicle-uuid>","install_allowed":true,"public_key":"<base64 raw Ed25519 public key>"}}}}
+```
+
+All four device routes (poll, claim, download, report) require proof using that
+ECU's independent private key, in addition to the vehicle JWT. `X-ECU-Nonce`,
+`X-ECU-Time` and `X-ECU-Signature` sign the method, exact path/body hash, tenant,
+vehicle, ECU, principal, nonce and timestamp with domain `CV-ECU-PROOF/1`.
+Proofs outside ±60 seconds, unauthorized/revoked mappings, altered requests and
+reused nonces fail closed. Nonces persist in a private schema across API restarts;
+each HTTP retry uses a fresh nonce while its business event/operation stays stable.
+The simulator's private key is local and never returned by cloud endpoints.
+This proves software key possession, not TPM-backed physical hardware identity.
+
+`OTA_INSTALL_RECEIPT_KEYS_FILE` is a separate API authority secret, never derived
+from or included in the application database Secret. It contains a random 32-byte
+HMAC key per tenant, with an immutable key ID:
+
+```json
+{"tenant-a":{"key_id":"local-receipt-1","secret":"<base64 32 random bytes>"}}
+```
+
+Keep this file outside Git/reports, mounted read-only with restrictive OS access.
+An operator explicitly registers the same key in the database using migration
+credentials; runtime roles cannot read, replace, enable or register authority keys:
+
+```powershell
+.\.venv\Scripts\python.exe -m database.provision_ota_authority --tenant tenant-a --key-file <authority-secret.json>
+```
+
+The migration installs trusted PostgreSQL `pgcrypto` in private `ota_authority`.
+An existing installation of that extension elsewhere requires reviewed migration
+planning; it is not silently moved. No bootstrap/superuser credentials enter API
+execution. Before minting a 60-second receipt the API rechecks the manufacturer
+signature and the ECU proof, ordered success report and digest. The database
+function verifies the HMAC and expiry, fixed-login tenant, exact job/release/ECU,
+manifest/signature, device/claim, report sequence/body and audit digest. It inserts
+an immutable private receipt and advances the version in the same transaction.
+Job/report/audit failures roll back the entire transaction. A fabricated job,
+report or SQL function call using only runtime database credentials cannot mint
+this capability. The monotonic trigger remains a second guard.
+
+Only the management owner can disable a compromised receipt key or provision a
+new ID; old IDs cannot silently change material. Private receipts are retained.
+Owner-only nonce housekeeping may delete entries older than 120 seconds, after
+their proof validity window. Full API process/authority-key compromise remains a
+different threat from leaked database credentials; production key custody and
+hardware attestation are separate deployments.
 
 ## Device bank simulator and recovery
 
 ```powershell
-.\.venv\Scripts\python.exe -m simulators.ota_device --base-url http://127.0.0.1:8000 --tenant tenant-a --vehicle <UUID> --ecu <UUID> --device-id tbox-1 --ecu-type body --hardware-version hw-1 --job <UUID> --state-dir <device-directory> --token-file <JWT-file> --trusted-keys <public-registry>
+.\.venv\Scripts\python.exe -m simulators.ota_device --base-url http://127.0.0.1:8000 --tenant tenant-a --vehicle <UUID> --ecu <UUID> --device-id tbox-1 --ecu-type body --hardware-version hw-1 --job <UUID> --state-dir <device-directory> --token-file <JWT-file> --trusted-keys <public-registry> --ecu-private-key <local-ECU-key.pem>
 ```
 
 This entry point accepts only loopback HTTP, disables proxies/redirects, and reads
