@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -14,6 +15,56 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from connected_vehicle.ota.artifacts import unique_pairs
+from connected_vehicle.ota.execution_contracts import ClaimResult, InstallationProof
+
+
+def ecu_key(registry: Path, tenant: str, vehicle: str, ecu: str, device: str) -> Ed25519PublicKey:
+    with registry.open("rb") as stream:
+        encoded = stream.read(65537)
+    if len(encoded) > 65536:
+        raise ValueError("Oversized ECU registry")
+    entry = json.loads(encoded, object_pairs_hook=unique_pairs)[tenant][device][ecu]
+    if entry["vehicle_id"] != vehicle or entry["install_allowed"] is not True:
+        raise ValueError("ECU installation not authorized")
+    return Ed25519PublicKey.from_public_bytes(base64.b64decode(entry["public_key"], validate=True))
+
+
+def verify_boot(
+    registry: Path, claim: ClaimResult, proof: InstallationProof, *, observed: bool = False
+) -> None:
+    expected = (
+        claim.manifest.tenant_id,
+        claim.job.vehicle_id,
+        claim.job.ecu_id,
+        claim.device_id,
+        claim.job.id,
+        claim.claim_token,
+        claim.install_challenge,
+    )
+    actual = (
+        proof.tenant_id,
+        proof.vehicle_id,
+        proof.ecu_id,
+        proof.device_id,
+        proof.job_id,
+        proof.claim_token,
+        proof.challenge,
+    )
+    if (
+        expected != actual
+        or proof.booted_at < claim.job.created_at
+        or proof.booted_at > datetime.now(UTC) + timedelta(seconds=60)
+    ):
+        raise ValueError("Boot proof target, claim or time mismatch")
+    if not observed and (proof.sha256, proof.firmware_version, proof.security_version) != (
+        claim.manifest.sha256,
+        claim.manifest.version,
+        claim.manifest.security_version,
+    ):
+        raise ValueError("Boot result differs from signed target")
+    ecu_key(
+        registry, proof.tenant_id, str(proof.vehicle_id), str(proof.ecu_id), proof.device_id
+    ).verify(base64.b64decode(proof.signature, validate=True), proof.canonical())
 
 
 def message(

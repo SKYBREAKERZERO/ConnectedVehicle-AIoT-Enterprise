@@ -411,6 +411,131 @@
     "title": "DispatchPayload",
     "type": "object"
   },
+  "ota-boot-proof/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "bank": {
+        "enum": [
+          "A",
+          "B"
+        ],
+        "title": "Bank",
+        "type": "string"
+      },
+      "boot_confirmed": {
+        "const": true,
+        "title": "Boot Confirmed",
+        "type": "boolean"
+      },
+      "boot_id": {
+        "format": "uuid",
+        "title": "Boot Id",
+        "type": "string"
+      },
+      "boot_process_id": {
+        "minimum": 1,
+        "title": "Boot Process Id",
+        "type": "integer"
+      },
+      "booted_at": {
+        "format": "date-time",
+        "title": "Booted At",
+        "type": "string"
+      },
+      "challenge": {
+        "format": "uuid",
+        "title": "Challenge",
+        "type": "string"
+      },
+      "claim_token": {
+        "format": "uuid",
+        "title": "Claim Token",
+        "type": "string"
+      },
+      "device_id": {
+        "maxLength": 255,
+        "minLength": 1,
+        "title": "Device Id",
+        "type": "string"
+      },
+      "ecu_id": {
+        "format": "uuid",
+        "title": "Ecu Id",
+        "type": "string"
+      },
+      "firmware_version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Firmware Version",
+        "type": "string"
+      },
+      "job_id": {
+        "format": "uuid",
+        "title": "Job Id",
+        "type": "string"
+      },
+      "proof_source": {
+        "const": "local_process",
+        "default": "local_process",
+        "title": "Proof Source",
+        "type": "string"
+      },
+      "protocol": {
+        "const": "cv-boot/1",
+        "default": "cv-boot/1",
+        "title": "Protocol",
+        "type": "string"
+      },
+      "security_version": {
+        "minimum": 0,
+        "title": "Security Version",
+        "type": "integer"
+      },
+      "sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Sha256",
+        "type": "string"
+      },
+      "signature": {
+        "maxLength": 88,
+        "minLength": 88,
+        "title": "Signature",
+        "type": "string"
+      },
+      "tenant_id": {
+        "maxLength": 255,
+        "minLength": 1,
+        "title": "Tenant Id",
+        "type": "string"
+      },
+      "vehicle_id": {
+        "format": "uuid",
+        "title": "Vehicle Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "boot_process_id",
+      "tenant_id",
+      "vehicle_id",
+      "ecu_id",
+      "device_id",
+      "job_id",
+      "claim_token",
+      "challenge",
+      "sha256",
+      "firmware_version",
+      "security_version",
+      "bank",
+      "boot_id",
+      "boot_confirmed",
+      "booted_at",
+      "signature"
+    ],
+    "title": "InstallationProof",
+    "type": "object"
+  },
   "ota-claim-request/2.0": {
     "additionalProperties": false,
     "properties": {
@@ -609,11 +734,52 @@
         "title": "Device Id",
         "type": "string"
       },
+      "install_challenge": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Install Challenge"
+      },
       "job": {
         "$ref": "#/$defs/ExecutionView"
       },
       "manifest": {
         "$ref": "#/$defs/SignedManifest"
+      },
+      "recorded_firmware_version": {
+        "anyOf": [
+          {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Recorded Firmware Version"
+      },
+      "recorded_security_version": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Recorded Security Version"
       },
       "signature": {
         "title": "Signature",
@@ -966,6 +1132,11 @@
   "ota-inventory/2.0": {
     "additionalProperties": false,
     "properties": {
+      "bootstrap_confirmed": {
+        "default": false,
+        "title": "Bootstrap Confirmed",
+        "type": "boolean"
+      },
       "created_at": {
         "format": "date-time",
         "title": "Created At",
@@ -1226,6 +1397,133 @@
     "type": "object"
   },
   "ota-report/2.0": {
+    "$defs": {
+      "InstallationProof": {
+        "additionalProperties": false,
+        "properties": {
+          "bank": {
+            "enum": [
+              "A",
+              "B"
+            ],
+            "title": "Bank",
+            "type": "string"
+          },
+          "boot_confirmed": {
+            "const": true,
+            "title": "Boot Confirmed",
+            "type": "boolean"
+          },
+          "boot_id": {
+            "format": "uuid",
+            "title": "Boot Id",
+            "type": "string"
+          },
+          "boot_process_id": {
+            "minimum": 1,
+            "title": "Boot Process Id",
+            "type": "integer"
+          },
+          "booted_at": {
+            "format": "date-time",
+            "title": "Booted At",
+            "type": "string"
+          },
+          "challenge": {
+            "format": "uuid",
+            "title": "Challenge",
+            "type": "string"
+          },
+          "claim_token": {
+            "format": "uuid",
+            "title": "Claim Token",
+            "type": "string"
+          },
+          "device_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Device Id",
+            "type": "string"
+          },
+          "ecu_id": {
+            "format": "uuid",
+            "title": "Ecu Id",
+            "type": "string"
+          },
+          "firmware_version": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Firmware Version",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "proof_source": {
+            "const": "local_process",
+            "default": "local_process",
+            "title": "Proof Source",
+            "type": "string"
+          },
+          "protocol": {
+            "const": "cv-boot/1",
+            "default": "cv-boot/1",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "security_version": {
+            "minimum": 0,
+            "title": "Security Version",
+            "type": "integer"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "signature": {
+            "maxLength": 88,
+            "minLength": 88,
+            "title": "Signature",
+            "type": "string"
+          },
+          "tenant_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "vehicle_id": {
+            "format": "uuid",
+            "title": "Vehicle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "boot_process_id",
+          "tenant_id",
+          "vehicle_id",
+          "ecu_id",
+          "device_id",
+          "job_id",
+          "claim_token",
+          "challenge",
+          "sha256",
+          "firmware_version",
+          "security_version",
+          "bank",
+          "boot_id",
+          "boot_confirmed",
+          "booted_at",
+          "signature"
+        ],
+        "title": "InstallationProof",
+        "type": "object"
+      }
+    },
     "additionalProperties": false,
     "properties": {
       "claim_token": {
@@ -1254,6 +1552,17 @@
         ],
         "default": null,
         "title": "Failure Code"
+      },
+      "installation_proof": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/InstallationProof"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "observed_sha256": {
         "anyOf": [

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from cryptography.exceptions import InvalidSignature
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from connected_vehicle.ota.artifacts import ArtifactVerifier, verify_signature
+from connected_vehicle.ota.artifacts import ArtifactHandle, ArtifactVerifier, verify_signature
 from connected_vehicle.ota.contracts import FirmwareRegistration
+from connected_vehicle.ota.device_proof import verify_boot
 from connected_vehicle.ota.execution_contracts import (
     ClaimRequest,
     ClaimResult,
@@ -26,6 +27,7 @@ from connected_vehicle.ota.models import (
     OTAExecutionModel,
     OTAReportModel,
 )
+from connected_vehicle.ota.publisher_keys import public_key
 from connected_vehicle.ota.service import OTAService, fingerprint
 from enterprise_platform.errors.base import (
     ConflictError,
@@ -55,11 +57,76 @@ class OTAExecutionService:
         if vehicle is not None:
             statement = statement.where(JobModel.vehicle_id == vehicle, JobModel.ecu_id == ecu)
         if lock:
-            statement = statement.with_for_update()
+            await self.base.lock(session, tenant, "execution", identifier)
         row = await session.scalar(statement)
         if row is None:
             raise ResourceNotFoundError()
         return row
+
+    async def policy(
+        self, session: AsyncSession, tenant: str, job: str, key: str | None = None
+    ) -> None:
+        if not await session.scalar(
+            text("SELECT public.ota_execution_ready(:tenant,:job)"), dict(tenant=tenant, job=job)
+        ):
+            raise ConflictError(
+                "Active vehicle, trusted bootstrap and unquarantined claim required."
+            )
+        if key and not await session.scalar(
+            text("SELECT public.ota_publisher_trusted(:tenant,:key)"), dict(tenant=tenant, key=key)
+        ):
+            raise ConflictError("Publisher key is unregistered, expired or revoked.")
+        if key:
+            try:
+                configured = self.artifacts.settings.ota_trusted_keys_file
+                if not configured:
+                    raise ValueError("Missing publisher trust")
+                public_key(Path(configured), tenant, key)
+            except (OSError, KeyError, TypeError, ValueError) as exc:
+                raise ConflictError(
+                    "Publisher trust file is revoked, expired or unavailable."
+                ) from exc
+
+    async def transition(
+        self,
+        session: AsyncSession,
+        job: JobModel,
+        manifest: SignedManifest,
+        signature: str,
+        action: str,
+        actor: str,
+        operation: str,
+        body: object,
+        **values: object,
+    ) -> None:
+        path = self.artifacts.settings.ota_install_receipt_keys_file
+        if not path:
+            raise DependencyUnavailableError("OTA transition authority is not configured.")
+        try:
+            payload, mac = sign_receipt(
+                Path(path),
+                job.tenant_id,
+                job_id=job.id,
+                vehicle_id=job.vehicle_id,
+                ecu_id=job.ecu_id,
+                expected_status=job.status,
+                manifest=manifest.model_dump(mode="json"),
+                signature=signature,
+                action=action,
+                actor=actor,
+                operation=operation,
+                request_sha256=fingerprint(body),
+                report_sha256=fingerprint(body),
+                audit_id=str(uuid4()),
+                reason="Authenticated OTA " + action,
+                **values,
+            )
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise DependencyUnavailableError("OTA transition authority unavailable.") from exc
+        await session.execute(
+            text("SELECT public.ota_transition(:payload,:mac)"), dict(payload=payload, mac=mac)
+        )
+        await session.refresh(job)
 
     async def read(self, tenant: str, identifier: str) -> ExecutionView:
         async with self.base.transaction(tenant) as session:
@@ -85,6 +152,11 @@ class OTAExecutionService:
                         & (OTAExecutionModel.job_id == JobModel.id),
                     )
                     .where(
+                        text("public.ota_execution_ready(ota_jobs.tenant_id,ota_jobs.id)"),
+                        text(
+                            "public.ota_publisher_trusted(ota_jobs.tenant_id,ota_executions.ma"
+                            "nifest->>'key_id')"
+                        ),
                         JobModel.tenant_id == tenant,
                         JobModel.vehicle_id == vehicle,
                         JobModel.ecu_id == ecu,
@@ -113,6 +185,7 @@ class OTAExecutionService:
                 if previous.verification_sha256 != digest:
                     raise ConflictError("Verification parameters are immutable.")
                 return ExecutionView.model_validate(job)
+            await self.policy(session, tenant, identifier, request.key_id)
             if job.status != "pending_verification":
                 raise ConflictError("Job is not awaiting verification.")
             release = await session.get(FirmwareModel, (tenant, job.release_id))
@@ -131,7 +204,8 @@ class OTAExecutionService:
                 security_version=request.security_version,
             )
         # Never hold a row lock/transaction while reading an external object.
-        await self.artifacts.fetch(manifest, request.signature)
+        validated = await self.artifacts.fetch_file(manifest, request.signature)
+        validated.close()
         async with self.base.transaction(tenant) as session:
             job = await self.job(session, tenant, identifier, lock=True)
             previous = await session.get(OTAExecutionModel, (tenant, identifier))
@@ -152,30 +226,15 @@ class OTAExecutionService:
                 raise ConflictError("Job or vehicle changed during verification.")
             if manifest.security_version <= locked_ecu.security_version:
                 raise ConflictError("ECU security version advanced during verification.")
-            session.add(
-                OTAExecutionModel(
-                    tenant_id=tenant,
-                    job_id=identifier,
-                    release_id=job.release_id,
-                    verification_operation=str(request.operation_id),
-                    verification_sha256=digest,
-                    manifest=manifest.model_dump(mode="json"),
-                    signature=request.signature,
-                    verified_at=datetime.now(UTC),
-                    report_sequence=0,
-                )
-            )
-            job.status, job.updated_at = "verified", datetime.now(UTC)
-            await self.base.audit(
+            await self.transition(
                 session,
-                tenant=tenant,
-                actor=actor,
-                resource="job",
-                identifier=identifier,
-                action="verify",
-                key=str(request.operation_id),
-                body=request.model_dump(mode="json"),
-                reason="Pinned bytes and trusted Ed25519 manifest verified",
+                job,
+                manifest,
+                request.signature,
+                "verify",
+                actor,
+                str(request.operation_id),
+                request.model_dump(mode="json"),
             )
             return ExecutionView.model_validate(job)
 
@@ -194,6 +253,8 @@ class OTAExecutionService:
             if execution is None:
                 raise ConflictError("Only verified firmware may be claimed.")
             manifest = SignedManifest.model_validate(execution.manifest)
+            await self.policy(session, tenant, identifier, manifest.key_id)
+            recorded = await self.base.ecu(session, tenant, vehicle, ecu)
             if execution.device_id is not None:
                 if execution.device_id != device or execution.claim_operation != str(
                     request.operation_id
@@ -208,20 +269,20 @@ class OTAExecutionService:
                     or manifest.security_version <= target.security_version
                 ):
                     raise ConflictError("Job is no longer eligible for device delivery.")
-                execution.device_id, execution.claim_operation = device, str(request.operation_id)
-                execution.claim_token = str(uuid4())
-                job.status, job.updated_at = "downloading", datetime.now(UTC)
-                await self.base.audit(
+                await self.transition(
                     session,
-                    tenant=tenant,
-                    actor=device,
-                    resource="job",
-                    identifier=identifier,
-                    action="claim",
-                    key=str(request.operation_id),
-                    body={"job_id": identifier, "device_id": device},
-                    reason="Device-bound claim retained until execution is reconciled",
+                    job,
+                    manifest,
+                    execution.signature,
+                    "claim",
+                    device,
+                    str(request.operation_id),
+                    {"job_id": identifier, "device_id": device},
+                    device_id=device,
+                    claim_token=str(uuid4()),
+                    install_challenge=str(uuid4()),
                 )
+                await session.refresh(execution)
             assert execution.claim_token is not None
             return ClaimResult(
                 job=ExecutionView.model_validate(job),
@@ -229,6 +290,11 @@ class OTAExecutionService:
                 claim_token=UUID(execution.claim_token),
                 manifest=manifest,
                 signature=execution.signature,
+                recorded_security_version=recorded.security_version,
+                recorded_firmware_version=recorded.firmware_version,
+                install_challenge=UUID(execution.install_challenge)
+                if execution.install_challenge
+                else None,
             )
 
     async def artifact(
@@ -239,7 +305,7 @@ class OTAExecutionService:
         ecu: str,
         identifier: str,
         token: str,
-    ) -> bytes:
+    ) -> ArtifactHandle:
         async with self.base.transaction(tenant) as session:
             job = await self.job(session, tenant, identifier, vehicle=vehicle, ecu=ecu)
             execution = await session.get(OTAExecutionModel, (tenant, identifier))
@@ -252,7 +318,15 @@ class OTAExecutionService:
                 raise ConflictError("Stale or unauthorized artifact claim.")
             manifest = SignedManifest.model_validate(execution.manifest)
             signature = execution.signature
-        return await self.artifacts.fetch(manifest, signature)
+            await self.policy(session, tenant, identifier, manifest.key_id)
+        result = await self.artifacts.fetch_file(manifest, signature)
+        try:
+            async with self.base.transaction(tenant) as session:
+                await self.policy(session, tenant, identifier, manifest.key_id)
+            return result
+        except BaseException:
+            result.close()
+            raise
 
     async def report(
         self,
@@ -278,109 +352,43 @@ class OTAExecutionService:
                 if previous.job_id != identifier or previous.payload != body:
                     raise ConflictError("Report identity belongs to a different payload.")
                 return ExecutionView.model_validate(job)
-            if report.sequence != execution.report_sequence + 1:
-                raise ConflictError("Report sequence has a gap or regressed.")
-            if execution.report_sequence:
-                prior = await session.scalar(
-                    select(OTAReportModel).where(
-                        OTAReportModel.tenant_id == tenant,
-                        OTAReportModel.job_id == identifier,
-                        OTAReportModel.sequence == execution.report_sequence,
-                    )
-                )
-                assert prior is not None
-                if report.occurred_at < datetime.fromisoformat(str(prior.payload["occurred_at"])):
-                    raise ConflictError("Report timestamp regressed behind an acknowledged stage.")
-            if report.occurred_at < job.created_at or report.occurred_at > datetime.now(
-                UTC
-            ) + timedelta(minutes=5):
-                raise ConflictError("Report timestamp is outside the execution window.")
-            if (
-                (report.status == "installing" and job.status != "downloading")
-                or (report.status == "succeeded" and job.status != "installing")
-                or (report.status == "failed" and job.status not in {"downloading", "installing"})
-            ):
-                raise ConflictError("Execution state transition is invalid.")
-            if bool(report.failure_code) != (report.status == "failed"):
-                raise ConflictError("Only failed reports require a failure code.")
             manifest = SignedManifest.model_validate(execution.manifest)
+            await self.policy(session, tenant, identifier, manifest.key_id)
+            if bool(report.failure_code) != (report.status == "failed"):
+                raise ConflictError("Failure reports require a failure code.")
             if report.status == "succeeded":
-                if report.observed_sha256 != manifest.sha256:
-                    raise ConflictError(
-                        "Installed image digest does not match the verified artifact."
-                    )
-                target = await session.scalar(
-                    select(ECUModel).where(
-                        ECUModel.tenant_id == tenant,
-                        ECUModel.vehicle_id == vehicle,
-                        ECUModel.id == ecu,
-                    )
+                if not report.installation_proof or report.observed_sha256 != manifest.sha256:
+                    raise ConflictError("Independent confirmed-boot proof required.")
+                trust = self.artifacts.settings.ota_trusted_keys_file
+                devices = self.artifacts.settings.ota_device_keys_file
+                if not trust or not devices:
+                    raise ConflictError("Installation trust is not configured.")
+                claim = ClaimResult(
+                    job=ExecutionView.model_validate(job),
+                    device_id=device,
+                    claim_token=report.claim_token,
+                    manifest=manifest,
+                    signature=execution.signature,
+                    install_challenge=UUID(execution.install_challenge)
+                    if execution.install_challenge
+                    else None,
                 )
-                assert target is not None
-                if manifest.security_version <= target.security_version:
-                    raise ConflictError("Installed security counter would regress.")
-                # A runtime password is not installation authority. Recheck the immutable
-                # manufacturer's signature before minting a DB-verifiable capability.
-                if (
-                    manifest.tenant_id != tenant
-                    or not self.artifacts.settings.ota_trusted_keys_file
-                ):
-                    raise ConflictError("Installation manifest tenant/trust mismatch.")
                 try:
-                    verify_signature(
-                        Path(self.artifacts.settings.ota_trusted_keys_file),
-                        manifest,
-                        execution.signature,
-                    )
-                except (OSError, ValueError) as exc:
-                    raise ConflictError("Installation signature is no longer trusted.") from exc
-            job.status, job.updated_at = report.status, datetime.now(UTC)
-            execution.report_sequence = report.sequence
-            session.add(
-                OTAReportModel(
-                    tenant_id=tenant,
-                    id=str(report.event_id),
-                    job_id=identifier,
-                    sequence=report.sequence,
-                    payload=body,
-                    received_at=datetime.now(UTC),
-                )
-            )
-            await self.base.audit(
+                    verify_signature(Path(trust), manifest, execution.signature)
+                    verify_boot(Path(devices), claim, report.installation_proof)
+                except (OSError, ValueError, KeyError, InvalidSignature) as exc:
+                    raise ConflictError("Untrusted installation/boot proof.") from exc
+            await self.transition(
                 session,
-                tenant=tenant,
-                actor=device,
-                resource="job",
-                identifier=identifier,
-                action="report",
-                key=str(report.event_id),
-                body=body,
-                reason="Authenticated device execution report",
+                job,
+                manifest,
+                execution.signature,
+                "report",
+                device,
+                str(report.event_id),
+                body,
+                device_id=device,
+                report=body,
+                boot_verified=report.status == "succeeded",
             )
-            if report.status == "succeeded":
-                path = self.artifacts.settings.ota_install_receipt_keys_file
-                if not path:
-                    raise DependencyUnavailableError("Installation authority is not configured.")
-                try:
-                    payload, mac = sign_receipt(
-                        Path(path),
-                        tenant,
-                        job_id=identifier,
-                        vehicle_id=vehicle,
-                        ecu_id=ecu,
-                        device_id=device,
-                        manifest=manifest.model_dump(mode="json"),
-                        signature=execution.signature,
-                        report=body,
-                        report_sha256=fingerprint(body),
-                    )
-                except (OSError, ValueError, KeyError, TypeError) as exc:
-                    raise DependencyUnavailableError(
-                        "Installation authority is unavailable."
-                    ) from exc
-                await session.flush()
-                await session.execute(
-                    text("SELECT public.ota_apply_installation(:payload,:mac)"),
-                    {"payload": payload, "mac": mac},
-                )
             return ExecutionView.model_validate(job)

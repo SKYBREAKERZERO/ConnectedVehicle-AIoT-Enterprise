@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,7 @@ from connected_vehicle.ota.execution_contracts import (
     ClaimResult,
     ExecutionECUView,
     ExecutionView,
+    InstallationProof,
     OTAReport,
     SignedManifest,
     VerificationRequest,
@@ -39,10 +42,13 @@ from enterprise_platform.messaging.envelope import EventEnvelope
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path("contracts/platform-v1.json")
+DAY17 = "cf08e437c79aaa041d25aa49dd572cfb15075048"
+DAY17_HASH = "4b6c4c2baa1fbbb35a0aac277448cfa3725f39fb50ce88307dccb6aec401e06f"
 
 
 def schemas() -> dict[str, Any]:
     return {
+        "ota-boot-proof/1.0": InstallationProof.model_json_schema(),
         "command-report/1.0": CommandReport.model_json_schema(),
         "telemetry/1.0": TelemetrySample.model_json_schema(),
         "mqtt-dispatch/1.0": DispatchPayload.model_json_schema(),
@@ -138,6 +144,15 @@ def compatible(old: Any, new: Any, path: str = "schema") -> list[str]:
 def check(root: Path, baseline: Path | None = None) -> list[str]:
     errors = boundaries(root)
     expected = schemas()
+    fixed = json.loads((ROOT / "contracts/day17-baseline.json").read_text(encoding="utf-8"))
+    if fixed["commit"] != DAY17 or fixed["sha256"] != DAY17_HASH:
+        errors.append("Pinned Day17 contract identity changed")
+    for name, schema in fixed["contracts"].items():
+        if name.startswith("ota-"):
+            if name not in expected:
+                errors.append(f"{name}: pinned Day17 OTA contract removed")
+            else:
+                errors.extend(compatible(schema, expected[name], name))
     committed = json.loads((root / MANIFEST).read_text(encoding="utf-8"))
     if committed != expected:
         errors.append("Contract snapshot does not match runtime models; regenerate and review.")
@@ -155,7 +170,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--write", action="store_true")
+    parser.add_argument("--require-day17", action="store_true")
     args = parser.parse_args()
+    if args.require_day17:
+        raw = subprocess.check_output(
+            ["git", "show", DAY17 + ":contracts/platform-v1.json"], cwd=ROOT
+        )
+        fixed = json.loads((ROOT / "contracts/day17-baseline.json").read_text(encoding="utf-8"))
+        if hashlib.sha256(raw).hexdigest() != DAY17_HASH or fixed["contracts"] != json.loads(raw):
+            raise ValueError("Frozen Day17 contracts differ from the pinned published commit")
     if args.write:
         (ROOT / MANIFEST).parent.mkdir(parents=True, exist_ok=True)
         (ROOT / MANIFEST).write_text(

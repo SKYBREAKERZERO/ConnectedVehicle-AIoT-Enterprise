@@ -87,6 +87,7 @@ jobs:
           baseline=$(mktemp -d)
           git archive "$base" | tar -x -C "$baseline"
           python -m scripts.contracts --baseline "$baseline"
+          python -m scripts.contracts --require-day17
       - name: Bootstrap cluster roles with separate management identity
         env:
           BOOTSTRAP_DATABASE_USERNAME: cluster_bootstrap

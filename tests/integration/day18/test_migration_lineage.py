@@ -117,5 +117,5 @@ async def test_unknown_local_revision_is_refused_without_stamping(
             )
     finally:
         async with engine.begin() as connection:
-            await connection.execute(text("UPDATE alembic_version SET version_num='e83c904a127f'"))
+            await connection.execute(text("UPDATE alembic_version SET version_num='f94d016b238a'"))
         await engine.dispose()

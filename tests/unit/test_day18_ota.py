@@ -6,11 +6,17 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
 
 from connected_vehicle.ota.artifacts import verify_signature
 from connected_vehicle.ota.execution_contracts import (
@@ -19,7 +25,9 @@ from connected_vehicle.ota.execution_contracts import (
     OTAState,
     SignedManifest,
 )
+from simulators.ota_device.boot_probe import probe
 from simulators.ota_device.store import DeviceStore, exclusive
+from tests.ota_support import registry
 
 
 def fixture_claim(tmp_path: Path) -> tuple[ClaimResult, Path, bytes]:
@@ -43,14 +51,15 @@ def fixture_claim(tmp_path: Path) -> tuple[ClaimResult, Path, bytes]:
     trust = tmp_path / "public.json"
     trust.write_text(
         json.dumps(
-            {
-                "tenant-a": {
-                    "key-1": base64.b64encode(
-                        private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-                    ).decode()
-                }
-            }
+            registry(
+                "tenant-a",
+                "key-1",
+                private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw),
+            )
         )
+    )
+    (tmp_path / "ecu.pem").write_bytes(
+        private.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
     )
     job = ExecutionView(
         id=uuid4(),
@@ -69,10 +78,20 @@ def fixture_claim(tmp_path: Path) -> tuple[ClaimResult, Path, bytes]:
             claim_token=uuid4(),
             manifest=manifest,
             signature=signature,
+            install_challenge=uuid4(),
         ),
         trust,
         data,
     )
+
+
+def install(store: DeviceStore, claim: ClaimResult, trust: Path) -> None:
+    if store.state(str(claim.job.id)) in {"installed", "failed", "reported"}:
+        store.activate(claim, healthy=True)
+        return
+    store.stage(claim)
+    proof = probe(store.root, claim, trust.parent / "ecu.pem", trust)
+    store.activate(claim, healthy=True, proof=proof)
 
 
 @pytest.mark.parametrize("change", ["tenant", "bytes", "counter", "key", "signature"])
@@ -104,9 +123,9 @@ def test_signed_manifest_cannot_be_retargeted(tmp_path: Path, change: str) -> No
 def test_activation_and_terminal_outbox_survive_restart_without_second_effect(
     tmp_path: Path,
 ) -> None:
-    claim, _, data = fixture_claim(tmp_path)
+    claim, trust, data = fixture_claim(tmp_path)
     root = tmp_path / "device"
-    binding = dict(
+    binding: dict[str, Any] = dict(
         tenant="tenant-a",
         vehicle=str(claim.job.vehicle_id),
         ecu=str(claim.job.ecu_id),
@@ -134,25 +153,36 @@ def test_activation_and_terminal_outbox_survive_restart_without_second_effect(
         store.downloaded(str(claim.job.id))
         store.installing(claim)
         with pytest.raises(ValueError, match="confirmed"):
-            store.activate(claim, healthy=True)
+            install(store, claim, trust)
         store.delivered(store.pending(str(claim.job.id))[0][0])
-        store.activate(claim, healthy=True)
+        install(store, claim, trust)
         before = store.active()
         pending = store.pending(str(claim.job.id))
         store.close()
     with exclusive(root):
         store = DeviceStore(root, **binding)
         store.accept(claim)
-        store.activate(claim, healthy=True)
+        install(store, claim, trust)
         assert store.active() == before and store.pending(str(claim.job.id)) == pending
         assert before is not None and before["installations"] == 1
+        with pytest.raises(ValueError, match="trusted cloud floor"):
+            store.accept(
+                claim.model_copy(
+                    update={
+                        "job": claim.job.model_copy(update={"id": uuid4()}),
+                        "recorded_security_version": 0,
+                        "recorded_firmware_version": "factory-wrong",
+                    }
+                )
+            )
+        assert store.active() == before and store.pending(str(claim.job.id)) == pending
         store.close()
 
 
 def test_persistent_ownership_and_process_lock_are_enforced(tmp_path: Path) -> None:
     claim, _, _ = fixture_claim(tmp_path)
     root = tmp_path / "device"
-    binding = dict(
+    binding: dict[str, Any] = dict(
         tenant="tenant-a",
         vehicle=str(claim.job.vehicle_id),
         ecu=str(claim.job.ecu_id),
@@ -170,7 +200,7 @@ def test_persistent_ownership_and_process_lock_are_enforced(tmp_path: Path) -> N
 
 
 def test_local_commit_failure_and_anti_rollback_preserve_active_pointer(tmp_path: Path) -> None:
-    claim, _, data = fixture_claim(tmp_path)
+    claim, trust, data = fixture_claim(tmp_path)
     root = tmp_path / "device"
     with exclusive(root):
         store = DeviceStore(
@@ -194,11 +224,11 @@ def test_local_commit_failure_and_anti_rollback_preserve_active_pointer(tmp_path
         store.db.execute("""CREATE TRIGGER fail_terminal BEFORE INSERT ON reports
             WHEN NEW.sequence=2 BEGIN SELECT RAISE(ABORT,'commit fault'); END""")
         with pytest.raises(sqlite3.IntegrityError):
-            store.activate(claim, healthy=True)
+            install(store, claim, trust)
         assert store.active() is None and store.state(job) == "installing"
         assert not store.pending(job)
         store.db.execute("DROP TRIGGER fail_terminal")
-        store.activate(claim, healthy=True)
+        install(store, claim, trust)
         before = store.active()
         replay = claim.model_copy(update={"job": claim.job.model_copy(update={"id": uuid4()})})
         replay_id = str(replay.job.id)
@@ -208,6 +238,6 @@ def test_local_commit_failure_and_anti_rollback_preserve_active_pointer(tmp_path
         store.installing(replay)
         store.delivered(store.pending(replay_id)[0][0])
         with pytest.raises(ValueError, match="anti-rollback"):
-            store.activate(replay, healthy=True)
+            install(store, replay, trust)
         assert store.active() == before
         store.close()

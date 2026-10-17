@@ -7,6 +7,9 @@ durable reports → cloud inventory and audit agree. Use PostgreSQL 16 and free
 LocalStack. No real AWS calls, physical flashing or bootloader guarantees are
 included in this acceptance.
 
+The [remediation matrix and operator procedures](DAY18_REMEDIATION_MATRIX.md)
+map each security finding to its implementation, evidence and remaining limits.
+
 ## Eight-hour work plan
 
 | Budget | Work | Acceptance |
@@ -26,11 +29,17 @@ entire allocation or that eight hours proves production readiness.
 `OTA_TRUSTED_KEYS_FILE` points to an operator-managed JSON public-key registry:
 
 ```json
-{"tenant-a":{"manufacturer-1":"<base64-encoded 32-byte Ed25519 public key>"}}
+{"protocol":"cv-ota-keys/1","tenants":{"tenant-a":{"manufacturer-1":{"public_key":"<base64 raw 32-byte public key>","not_before":"2026-01-01T00:00:00+00:00","not_after":"2027-01-01T00:00:00+00:00","revoked":false}}}}
 ```
 
 Trust roots are never accepted in API bodies. Duplicate keys, missing tenant/key,
-invalid signatures and oversized registries fail closed. Keep signing private keys
+expired/revoked keys, invalid signatures and oversized registries fail closed.
+Register the same immutable key ID and validity window in the private database
+registry through the independent management owner. Database revocation remains
+effective even when an API instance retains an older registry file. The explicit
+`scripts.ota_key_registry` converter migrates legacy public-key maps with an audit;
+it neither activates keys nor changes the signed `cv-ota/2` manifest protocol.
+Keep signing private keys
 outside runtime processes, reports and Git. The offline helper accepts an existing
 Ed25519 PEM key and a complete signed manifest JSON:
 
@@ -46,9 +55,12 @@ SHA256, security counter and key ID. This binds both bytes and deployment metada
 The API verifies the signature before S3 access, then streams exactly the requested
 object `VersionId`. ContentLength, returned VersionId, streamed byte count and SHA256
 must match. The latest object is never a fallback. `OTA_MAX_ARTIFACT_BYTES` defaults
-to 32 MiB for this local exercise (the Day17 registry can describe larger images).
-Reads have SDK connect/read limits, a deadline checked between SDK reads and a
-two-read concurrency limit. Cancellation retains capacity until the worker stops.
+to 32 MiB, with an explicit supported maximum of 256 MiB. Verified bytes stream
+through an anonymous temporary file in 64 KiB chunks, rather than a whole-image
+response buffer. Reads have SDK connect/read limits and a deadline checked before
+and after every read, including the final chunk and EOF. Two capacity slots remain
+held through HTTP delivery; queue waits and delivery time are bounded. Cancellation
+retains capacity until the worker stops, then closes the spool and releases it.
 The artifact endpoint revalidates trust and bytes; it requires both a device JWT
 and the persistent claim, and never returns an S3 URL or AWS credentials.
 
@@ -72,6 +84,7 @@ vehicle. Signed device scopes never confer operator management permissions.
 | `POST /v2/vehicles/{vehicle_id}/ecus/{ecu_id}/ota-jobs/{job_id}/claim` | Device supplies a durable operation UUID; identical retry returns its same claim |
 | `GET .../artifact` | Claimed device presents `X-OTA-Claim`; returns verified bytes |
 | `POST .../reports` | Device reports sequence, stable event UUID and claim token |
+| `GET .../resolution` | Bound device reads an audited operator reconciliation result |
 
 States are `pending_verification → verified → downloading → installing → succeeded`
 or `failed`. Day17 cancellation is allowed only before verification. One nonterminal
@@ -87,8 +100,11 @@ jobs. The new states are not silently returned through the old two-state contrac
 
 Claims are persistent ownership/fencing identities, not automatically expiring
 permission to repeat a physical effect. Another device or claim operation cannot
-take over an installation of unknown outcome. Operator reconciliation is required
-for permanently lost device state; there is intentionally no force-reclaim API.
+take over an installation of unknown outcome. An independent management owner can
+quarantine the job, inspect a fresh signed observation and atomically reconcile a
+known previous bank or the verified candidate. A quarantined job never regains
+execution permission, including after resolution. A new job requires a separate
+intent; there is no blind force-reclaim API.
 
 An installing report precedes success. Reports must have consecutive sequence
 numbers, valid state transitions and nonregressing event time. The same event and
@@ -96,22 +112,24 @@ body return the durable result; conflicting payloads and stale claims are reject
 Success must report the verified digest. Job state, report ledger, ECU version /
 monotonic security counter and audit append commit together. An audit failure rolls
 them all back. Public OTA tables use FORCE RLS and fixed-login tenant binding. Workers
-get no execution-table access; only required application column updates are granted.
-A migration-owned trigger independently rejects counter regression. The forward
-security migration additionally removes application UPDATE access to both version
-columns and INSERT access to the initial security counter. Only a short-lived,
-independently authenticated installation receipt can advance an existing ECU.
+get no execution-table access. Application roles cannot UPDATE job/claim state,
+INSERT execution/report/audit rows or modify firmware/security/bootstrap fields.
+An insert trigger restricts new job intents to `pending_verification`.
+Sensitive transitions go through the migration-owned `ota_transition` function,
+authenticated by an independent short-lived HMAC capability. The owner-only
+installation function is not directly executable by application roles. Bounded
+intent-audit and pending-cancellation functions preserve the Day17 contract.
+A migration-owned trigger independently rejects counter regression. Only a
+verified installation receipt or audited management reconciliation can advance an ECU.
 Startup verifies both the trigger and the exact authority function bodies,
 ownership, SECURITY DEFINER/search_path settings and runtime/public privileges.
 
 The authoritative published lineage is `c61f98a742de` → `d72fa60b319e` →
-`e83c904a127f`. The first two revisions remain unchanged; the forward migration
+`e83c904a127f` → `f94d016b238a`. Historical revisions remain unchanged; forward migrations
 repairs existing base and tenant roles as well as freshly provisioned roles.
 `d72a91b63ef0` is an alternate local proposal absent from this published Git
-history, not a compatible predecessor or an alias. Its databases are refused by
-Alembic. Never stamp them onto this line: preserve a backup and the original
-revision source, compare schema/state/ACLs, then implement a reviewed explicit
-conversion. There is no safe automatic merge without that source and data.
+history. The user confirmed it was never deployed, so no conversion or stamping
+is needed. Unknown revisions are refused rather than silently treated as aliases.
 Single-head lineage and unknown-revision rejection are regression tested.
 Use the independent non-superuser migration owner; bootstrap/runtime credentials
 stay separate. Destructive downgrade is refused.
@@ -125,7 +143,7 @@ JWT claims and application database rows:
 {"tenant-a":{"tbox-1":{"<ecu-uuid>":{"vehicle_id":"<vehicle-uuid>","install_allowed":true,"public_key":"<base64 raw Ed25519 public key>"}}}}
 ```
 
-All four device routes (poll, claim, download, report) require proof using that
+All device routes (poll, claim, download, report and resolution) require proof using that
 ECU's independent private key, in addition to the vehicle JWT. `X-ECU-Nonce`,
 `X-ECU-Time` and `X-ECU-Signature` sign the method, exact path/body hash, tenant,
 vehicle, ECU, principal, nonce and timestamp with domain `CV-ECU-PROOF/1`.
@@ -155,7 +173,10 @@ The migration installs trusted PostgreSQL `pgcrypto` in private `ota_authority`.
 An existing installation of that extension elsewhere requires reviewed migration
 planning; it is not silently moved. No bootstrap/superuser credentials enter API
 execution. Before minting a 60-second receipt the API rechecks the manufacturer
-signature and the ECU proof, ordered success report and digest. The database
+signature, the ECU request proof, and a separate signed `cv-boot/1` confirmation
+from the local boot subprocess, including the server challenge and exact candidate
+bank/digest/counter. The database trusts this independent API verification
+attestation; it does not itself implement Ed25519 verification. The database
 function verifies the HMAC and expiry, fixed-login tenant, exact job/release/ECU,
 manifest/signature, device/claim, report sequence/body and audit digest. It inserts
 an immutable private receipt and advances the version in the same transaction.
@@ -172,8 +193,15 @@ hardware attestation are separate deployments.
 
 ## Device bank simulator and recovery
 
+Existing ECU rows default to `bootstrap_confirmed=false`; a zero counter alone is
+not a trusted installation baseline. Before verification, an independent operator
+must record the observed factory firmware, digest and counter using the owner-only
+bootstrap operation. The device must initialize from the same explicit factory
+image and refuses a disagreement with the cloud's trusted floor. Bootstrap cannot
+reset an already confirmed device or race an active execution.
+
 ```powershell
-.\.venv\Scripts\python.exe -m simulators.ota_device --base-url http://127.0.0.1:8000 --tenant tenant-a --vehicle <UUID> --ecu <UUID> --device-id tbox-1 --ecu-type body --hardware-version hw-1 --job <UUID> --state-dir <device-directory> --token-file <JWT-file> --trusted-keys <public-registry> --ecu-private-key <local-ECU-key.pem>
+.\.venv\Scripts\python.exe -m simulators.ota_device --base-url http://127.0.0.1:8000 --tenant tenant-a --vehicle <UUID> --ecu <UUID> --device-id tbox-1 --ecu-type body --hardware-version hw-1 --job <UUID> --state-dir <device-directory> --token-file <JWT-file> --trusted-keys <public-registry> --ecu-private-key <local-ECU-key.pem> --bootstrap-image <factory.bin> --bootstrap-sha256 <SHA256> --bootstrap-version 1.0 --bootstrap-security-version 0
 ```
 
 This entry point accepts only loopback HTTP, disables proxies/redirects, and reads
@@ -189,12 +217,15 @@ Omit `--job` to first resume locally unfinished reports, then poll the next veri
 job. Polling never transfers another device's claim. Each invocation is bounded;
 an external local scheduler may invoke it again rather than running an infinite loop.
 
-Image files are staged, hashed, fsynced and renamed into a content-addressed bank.
+Image files are staged, hashed, fsynced and renamed into content-addressed A/B banks.
 The device independently checks signature and monotonic security counter. It sends
 and confirms the installing report before activating. The simulator's health check
 is the `CVOTA1\n` image marker, with an explicit health-failure injection option.
-Only a passing candidate becomes active. The SQLite active pointer/counter and
-terminal report are committed together. Old image banks are retained; an unhealthy
+The candidate is staged into the inactive bank. A separate subprocess rechecks its
+bytes, signature, health marker and persisted challenge, then signs its boot proof
+with the ECU key. Only a passing candidate becomes active. The SQLite active
+pointer/counter, confirmed bank and terminal report are committed together. The previous
+bank remains available; an unhealthy
 candidate leaves the previous pointer and counter intact. The simulator never
 executes image bytes or attempts hardware flashing.
 
@@ -202,9 +233,13 @@ Stable outbox events survive restart and 401/403. Authentication failure stops t
 run without deleting reports. Transient HTTP operations have bounded retries;
 rerun with repaired credentials and the same state directory to reconcile. A
 committed terminal response lost before local acknowledgement is safely replayed.
+A fault proxy separately proves this by forwarding the request, consuming the
+server's committed success response and disconnecting before returning it to the device.
 Process-crash recovery is demonstrated; physical power-loss, disk destruction,
-secure boot, Uptane/TUF, key revocation distribution and real ECU rollback remain
-separate work. Retained banks need an explicit future capacity/retention policy.
+secure boot, Uptane/TUF, fleet revocation distribution and real ECU rollback remain
+separate work. Storage is bounded to two banks plus staging; referenced images and
+pending evidence are retained while unreferenced images are pruned. SQLite ledger
+retention and fleet capacity management remain separate operations.
 
 ## Repeatable acceptance and release gate
 
@@ -214,7 +249,8 @@ separate work. Retained banks need an explicit future capacity/retention policy.
 
 The command runs Day16/17 prerequisites plus the real Day18 API/S3/device-process
 chain in fresh labelled containers. It deliberately exits the device after download,
-activation and terminal acknowledgement, then restarts from persisted state.
+inactive-bank staging, boot confirmation, activation and terminal acknowledgement,
+then restarts from persisted state.
 It also injects untrusted signatures, wrong digests, stale/foreign claims, early
 reports, regressed time, expired credentials, audit INSERT failure and unhealthy /
 corrupt banks. PostgreSQL state, SQLite state, exact object bytes and audit counts
@@ -222,7 +258,9 @@ must agree. Reports never include signing keys, JWTs or database credentials.
 
 `day18-ota-execution.json` and `day18-acceptance.json` are source/run-bound, exclusive
 outputs. Python source binding includes API and device code; SQL, contract snapshots,
-workflow and documentation also enter the readiness digest. Evidence must be fresh
+both workflows, IaC policies/Terraform source, the frozen Day17 contract, protocol
+golden fixture and documentation also enter the readiness digest. State files,
+plans and provider caches are excluded. Evidence must be fresh
 within 15 minutes. An optional read-only remote check verifies exact-head trusted
 Runtime/IaC gates and byte-identical authenticated GitHub artifacts:
 

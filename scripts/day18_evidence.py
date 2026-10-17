@@ -25,6 +25,15 @@ from scripts.day17_rules import policy
 
 REQUIRED = frozenset(
     {
+        "candidate_boot_reconciliation_is_atomic",
+        "trusted_initial_bootstrap_required",
+        "inactive_vehicle_fences_download_and_transitions",
+        "ab_bank_boot_confirmation_and_restart_recovery",
+        "all_sensitive_state_writes_are_controlled",
+        "claim_quarantine_reconciliation_fences_old_owner",
+        "publisher_rotation_revocation_and_audit",
+        "http_commit_response_lost_and_reconciled",
+        "independent_signed_boot_proof_required",
         "independent_ecu_proof_and_replay_protection",
         "database_credential_cannot_forge_installation",
         "database_authority_drift_fails_closed",
@@ -57,7 +66,9 @@ REQUIRED = frozenset(
 def source_digest() -> str:
     return hashlib.sha256(
         (
-            readiness_digest() + (ROOT / "docs/DAY18_OTA_EXECUTION.md").read_text(encoding="utf-8")
+            readiness_digest()
+            + (ROOT / "docs/DAY18_OTA_EXECUTION.md").read_text(encoding="utf-8")
+            + (ROOT / "docs/DAY18_REMEDIATION_MATRIX.md").read_text(encoding="utf-8")
         ).encode()
     ).hexdigest()
 
@@ -73,6 +84,7 @@ def evaluate(directory: Path) -> dict[str, Any]:
         or proof.get("profile") != "local_drill"
         or proof.get("real_aws_verified") is not False
         or proof.get("simulated_installation") is not True
+        or proof.get("physical_boot_verified") is not False
         or set(proof.get("checks", {})) != REQUIRED
         or any(value is not True for value in proof["checks"].values())
         or observed.utcoffset() is None
@@ -102,6 +114,7 @@ def evaluate(directory: Path) -> dict[str, Any]:
         },
         real_aws_verified=False,
         simulated_installation=True,
+        physical_boot_verified=False,
     )
 
 
@@ -161,6 +174,7 @@ def main() -> None:
         verify(args.directory)
         remote["artifacts"].append(artifact)
         remote["simulated_installation"] = True
+        remote["physical_boot_verified"] = False
         print(write_json(args.directory / "day18-remote-release.json", remote))
     elif args.check_existing:
         verify(args.directory)

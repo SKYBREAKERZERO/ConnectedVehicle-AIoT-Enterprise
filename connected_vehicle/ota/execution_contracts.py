@@ -71,6 +71,7 @@ class ExecutionView(Contract):
 
 class ExecutionECUView(ECUView):
     security_version: int = Field(ge=0)
+    bootstrap_confirmed: bool = False
 
 
 class ClaimRequest(Contract):
@@ -83,6 +84,43 @@ class ClaimResult(Contract):
     claim_token: UUID
     manifest: SignedManifest
     signature: str
+    install_challenge: UUID | None = None
+    recorded_security_version: int | None = Field(default=None, ge=0)
+    recorded_firmware_version: Name | None = None
+
+
+class InstallationProof(Contract):
+    protocol: Literal["cv-boot/1"] = "cv-boot/1"
+    proof_source: Literal["local_process"] = "local_process"
+    boot_process_id: int = Field(ge=1)
+    tenant_id: str = Field(min_length=1, max_length=255)
+    vehicle_id: UUID
+    ecu_id: UUID
+    device_id: str = Field(min_length=1, max_length=255)
+    job_id: UUID
+    claim_token: UUID
+    challenge: UUID
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    firmware_version: Name
+    security_version: int = Field(strict=True, ge=0)
+    bank: Literal["A", "B"]
+    boot_id: UUID
+    boot_confirmed: Literal[True]
+    booted_at: AwareDatetime
+    signature: str = Field(min_length=88, max_length=88)
+
+    @field_validator("signature")
+    @classmethod
+    def signature_encoding(cls, value: str) -> str:
+        return VerificationRequest.ed25519_signature(value)
+
+    def canonical(self) -> bytes:
+        return json.dumps(
+            self.model_dump(mode="json", exclude={"signature"}),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
 
 
 class OTAReport(Contract):
@@ -93,3 +131,4 @@ class OTAReport(Contract):
     occurred_at: AwareDatetime
     observed_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     failure_code: Literal["download_failed", "integrity_failed", "health_failed"] | None = None
+    installation_proof: InstallationProof | None = None

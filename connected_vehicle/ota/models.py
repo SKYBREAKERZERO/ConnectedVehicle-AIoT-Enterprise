@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
@@ -35,6 +36,9 @@ class ECUModel(Identity, Creation, Base):
     hardware_version: Mapped[str] = mapped_column(String(64), nullable=False)
     firmware_version: Mapped[str] = mapped_column(String(64), nullable=False)
     security_version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    bootstrap_confirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     serial_number: Mapped[str] = mapped_column(String(64), nullable=False)
     __table_args__ = (
         CheckConstraint("security_version >= 0", name="ck_ecu_security_version"),
@@ -160,6 +164,7 @@ class OTAExecutionModel(Base):
     device_id: Mapped[str | None] = mapped_column(String(255))
     claim_token: Mapped[str | None] = mapped_column(String(36))
     claim_operation: Mapped[str | None] = mapped_column(String(36))
+    install_challenge: Mapped[str | None] = mapped_column(String(36))
     report_sequence: Mapped[int] = mapped_column(nullable=False, server_default="0")
     __table_args__ = (
         ForeignKeyConstraint(

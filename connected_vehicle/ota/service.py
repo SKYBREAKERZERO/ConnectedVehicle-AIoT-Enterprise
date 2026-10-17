@@ -22,7 +22,7 @@ from connected_vehicle.ota.contracts import (
     JobView,
 )
 from connected_vehicle.ota.execution_contracts import ACTIVE_STATES
-from connected_vehicle.ota.models import ECUModel, FirmwareModel, JobModel, OTAAuditModel
+from connected_vehicle.ota.models import ECUModel, FirmwareModel, JobModel
 from connected_vehicle.vehicle.persistence.models import VehicleModel
 from enterprise_platform.database.tenant import set_tenant_scope
 from enterprise_platform.errors.base import (
@@ -110,21 +110,21 @@ class OTAService:
     ) -> None:
         if not actor.strip() or len(actor) > 255:
             raise InvalidRequestError("An authenticated actor is required.")
-        session.add(
-            OTAAuditModel(
-                tenant_id=tenant,
+        await session.execute(
+            text("""SELECT public.ota_append_intent_audit(
+            :tenant,:id,:resource,:identifier,:action,:actor,:key,:hash,:reason)"""),
+            dict(
+                tenant=tenant,
                 id=str(uuid4()),
-                resource_type=resource,
-                resource_id=identifier,
+                resource=resource,
+                identifier=identifier,
                 action=action,
-                actor_id=actor,
-                operation_key=key,
-                payload_sha256=fingerprint(body),
+                actor=actor,
+                key=key,
+                hash=fingerprint(body),
                 reason=reason,
-                occurred_at=datetime.now(UTC),
-            )
+            ),
         )
-        await session.flush()
 
     async def register_ecu(
         self,
@@ -366,38 +366,23 @@ class OTAService:
         key = operation_key(key)
         async with self.transaction(tenant) as session:
             await self.lock(session, tenant, "cancel", key)
-            row = await session.scalar(
-                select(JobModel)
-                .where(JobModel.tenant_id == tenant, JobModel.id == job)
-                .with_for_update()
-            )
+            await self.lock(session, tenant, "execution", job)
+            row = await session.get(JobModel, (tenant, job))
             if row is None:
                 raise ResourceNotFoundError()
             body = {"job_id": job, "reason": reason}
-            previous = await session.scalar(
-                select(OTAAuditModel).where(
-                    OTAAuditModel.tenant_id == tenant,
-                    OTAAuditModel.resource_type == "job",
-                    OTAAuditModel.action == "cancel",
-                    OTAAuditModel.operation_key == key,
-                )
+            await session.execute(
+                text("""SELECT public.ota_cancel_pending(
+                :tenant,:job,:actor,:key,:reason,:hash,:audit)"""),
+                dict(
+                    tenant=tenant,
+                    job=job,
+                    actor=actor,
+                    key=key,
+                    reason=reason,
+                    hash=fingerprint(body),
+                    audit=str(uuid4()),
+                ),
             )
-            if previous is not None:
-                if previous.payload_sha256 != fingerprint(body):
-                    raise ConflictError("Cancellation idempotency parameters differ.")
-                return JobView.model_validate(row)
-            if row.status != "pending_verification":
-                raise ConflictError("Only a pending OTA job can be cancelled.")
-            row.status, row.updated_at = "cancelled", datetime.now(UTC)
-            await self.audit(
-                session,
-                tenant=tenant,
-                actor=actor,
-                resource="job",
-                identifier=job,
-                action="cancel",
-                key=key,
-                body=body,
-                reason=reason,
-            )
+            await session.refresh(row)
             return JobView.model_validate(row)

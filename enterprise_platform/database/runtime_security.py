@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from enterprise_platform.database.credentials import DatabaseRuntime, runtime_database_user
 from enterprise_platform.database.ota_authority_contract import FUNCTIONS
+from enterprise_platform.database.ota_lifecycle_contract import FUNCTIONS as LIFECYCLE_FUNCTIONS
+from enterprise_platform.database.ota_lifecycle_contract import INITIAL_BODY
 
 OTA_TABLES = (
     "ecu_inventory",
@@ -194,10 +196,10 @@ async def verify_runtime_database_security(
             allowed = runtime == "application"
             if dict(privileges) != dict(
                 read=allowed,
-                insert=allowed and table != "ecu_inventory",
+                insert=allowed and table in {"firmware_releases", "ota_jobs"},
                 excess=False,
                 broad_update=False,
-                any_update=allowed and table in {"ota_jobs", "ota_executions"},
+                any_update=False,
             ):
                 raise RuntimeError("Unsafe OTA runtime privilege contract")
         immutable_job_columns = (
@@ -220,6 +222,7 @@ async def verify_runtime_database_security(
                 raise RuntimeError("Unsafe OTA immutable job privileges")
         for table, columns in {
             "ecu_inventory": (
+                "bootstrap_confirmed",
                 "firmware_version",
                 "security_version",
                 "tenant_id",
@@ -283,15 +286,24 @@ async def verify_runtime_database_security(
             for row in guards
         ):
             raise RuntimeError("Unsafe OTA monotonic security counter guard")
-        if await connection.scalar(
-            text("SELECT has_column_privilege('public.ecu_inventory','security_version','INSERT')")
-        ):
-            raise RuntimeError("Unsafe OTA initial security counter privilege")
+        for column in ("security_version", "bootstrap_confirmed"):
+            if await connection.scalar(
+                text("SELECT has_column_privilege('public.ecu_inventory',:column,'INSERT')"),
+                {"column": column},
+            ):
+                raise RuntimeError("Unsafe OTA initial security counter privilege")
         if await connection.scalar(
             text("SELECT has_schema_privilege('ota_authority','USAGE,CREATE')")
         ):
             raise RuntimeError("Unsafe OTA private authority schema access")
-        for name, (_, expected_body) in FUNCTIONS.items():
+        contracts = {
+            **FUNCTIONS,
+            **{
+                name: (arguments, body)
+                for name, (arguments, _, body) in LIFECYCLE_FUNCTIONS.items()
+            },
+        }
+        for name, (_, expected_body) in contracts.items():
             rows = (
                 (
                     await connection.execute(
@@ -314,10 +326,33 @@ async def verify_runtime_database_security(
                 or row["proconfig"] != ["search_path=pg_catalog"]
                 or row["owner"] != guards[0]["owner"]
                 or row["public_execute"]
-                or row["execute"] != (runtime == "application")
+                or row["execute"] != (runtime == "application" and name != "ota_apply_installation")
                 for row in rows
             ):
                 raise RuntimeError("Unsafe OTA installation authority function")
+        initial = (
+            (
+                await connection.execute(
+                    text("""SELECT p.prosrc,p.prosecdef,p.proconfig,
+            pg_get_userbyid(p.proowner) AS owner,t.tgenabled::text AS enabled,t.tgtype
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_class c ON c.oid=t.tgrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'
+            AND c.relname='ota_jobs' AND t.tgname='ota_initial_intent' AND NOT t.tgisinternal""")
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if len(initial) != 1 or any(
+            " ".join(row["prosrc"].split()) != " ".join(INITIAL_BODY.split())
+            or row["prosecdef"]
+            or row["proconfig"] != ["search_path=pg_catalog"]
+            or row["owner"] != guards[0]["owner"]
+            or row["enabled"] != "O"
+            or row["tgtype"] != 7
+            for row in initial
+        ):
+            raise RuntimeError("Unsafe OTA initial intent guard")
 
 
 def validate_policy_contract(policies: list[dict[str, Any]]) -> None:

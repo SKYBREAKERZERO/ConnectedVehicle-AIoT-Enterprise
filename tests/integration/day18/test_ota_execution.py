@@ -32,7 +32,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from connected_vehicle.ota.device_proof import proof_headers
-from connected_vehicle.ota.execution_contracts import SignedManifest
+from connected_vehicle.ota.execution_contracts import ClaimResult, ExecutionView, SignedManifest
+from connected_vehicle.ota.publisher_keys import records as publisher_records
+from database.ota_operations import operate
 from database.provision_ota_authority import provision
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.credentials import load_runtime_database_settings
@@ -41,9 +43,12 @@ from enterprise_platform.database.runtime_security import verify_runtime_databas
 from scripts.day16_evidence import provenance
 from scripts.day17_release import write_json
 from scripts.day18_evidence import source_digest
+from simulators.ota_device.boot_probe import probe
 from simulators.ota_device.store import DeviceStore, exclusive
 from tests.e2e.test_independent_runtimes import ROOT, free_port
 from tests.integration.day12.test_credential_cloud_contracts import prepare
+from tests.integration.day18.http_fault_proxy import HTTPResponseDropProxy
+from tests.ota_support import registry
 
 
 @pytest.mark.integration
@@ -70,15 +75,25 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
     trust = tmp_path / "ota-public.json"
     trust.write_text(
         json.dumps(
-            {
-                "day18-a": {
-                    "manufacturer-1": base64.b64encode(
-                        signer.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-                    ).decode()
-                }
-            }
+            registry(
+                "day18-a",
+                "manufacturer-1",
+                signer.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw),
+            )
         )
     )
+    await operate(
+        local_environment,
+        "publisher-register",
+        "day18-a",
+        str(uuid4()),
+        "factory-operator",
+        "approved manufacturer key",
+        {"keys": publisher_records(trust, "day18-a")},
+    )
+    factory = tmp_path / "factory.bin"
+    factory.write_bytes(b"CVOTA1\nfactory image v1")
+    factory_digest = hashlib.sha256(factory.read_bytes()).hexdigest()
 
     def bearer(
         *,
@@ -263,12 +278,14 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                 body: object = None,
                 key: str | None = None,
                 sign_proof: bool = True,
+                extra_headers: dict[str, str] | None = None,
             ) -> dict[str, Any]:
                 headers = {"Authorization": "Bearer " + (token or bearer())}
                 if key:
                     headers["Idempotency-Key"] = key
                 if path.endswith("/artifact"):
                     headers["X-OTA-Claim"] = str(uuid4())
+                headers.update(extra_headers or {})
                 request = client.build_request(method, path, headers=headers, json=body)
                 claims = jwt.decode(token or bearer(), options={"verify_signature": False})
                 if (
@@ -312,6 +329,8 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                 version_name: str = "2.0",
                 security: int = 1,
                 checksum: str = hashlib.sha256(data).hexdigest(),
+                publisher: str = "manufacturer-1",
+                signing: ed25519.Ed25519PrivateKey | None = None,
             ) -> tuple[str, dict[str, object]]:
                 metadata = dict(
                     ecu_type="body",
@@ -339,18 +358,38 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                     tenant_id="day18-a",
                     release_id=release_id,
                     security_version=security,
-                    key_id="manufacturer-1",
+                    key_id=publisher,
                 )
                 request: dict[str, object] = dict(
                     operation_id=str(uuid4()),
-                    key_id="manufacturer-1",
+                    key_id=publisher,
                     security_version=security,
-                    signature=base64.b64encode(signer.sign(manifest.canonical())).decode(),
+                    signature=base64.b64encode(
+                        (signing or signer).sign(manifest.canonical())
+                    ).decode(),
                 )
                 return job["job"]["id"], request
 
             job, verification = await candidate()
             path = f"/v2/vehicles/{vehicle}/ecus/{ecu}/ota-jobs/{job}"
+            await api("POST", f"/v2/ota/jobs/{job}/verify", body=verification, expected=409)
+            for target in (ecu, other_ecu):
+                await operate(
+                    local_environment,
+                    "bootstrap",
+                    "day18-a",
+                    str(uuid4()),
+                    "factory-operator",
+                    "controlled factory measurement",
+                    dict(
+                        vehicle_id=vehicle,
+                        ecu_id=target,
+                        firmware_version="1.0",
+                        security_version=0,
+                        sha256=factory_digest,
+                    ),
+                )
+            checks["trusted_initial_bootstrap_required"] = True
             before_proofs = await api("GET", f"/v2/ota/jobs/{job}")
             for method, endpoint, payload in (
                 ("POST", path + "/claim", {"operation_id": str(uuid4())}),
@@ -493,6 +532,35 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                 body={"operation_id": operation},
                 expected=409,
             )
+            async with admin.begin() as connection:
+                await connection.execute(
+                    text("UPDATE vehicles SET status='suspended' WHERE id=:v"), {"v": vehicle}
+                )
+            await api(
+                "GET",
+                path + "/artifact",
+                token=bearer(device="tbox-1"),
+                expected=409,
+                extra_headers={"X-OTA-Claim": claim["claim_token"]},
+            )
+            await api(
+                "POST",
+                path + "/reports",
+                token=bearer(device="tbox-1"),
+                expected=409,
+                body=dict(
+                    event_id=str(uuid4()),
+                    claim_token=claim["claim_token"],
+                    sequence=1,
+                    status="installing",
+                    occurred_at=datetime.now(UTC).isoformat(),
+                ),
+            )
+            async with admin.begin() as connection:
+                await connection.execute(
+                    text("UPDATE vehicles SET status='active' WHERE id=:v"), {"v": vehicle}
+                )
+            checks["inactive_vehicle_fences_download_and_transitions"] = True
             report = dict(
                 event_id=str(uuid4()),
                 claim_token=claim["claim_token"],
@@ -538,6 +606,14 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                 str(trust),
                 "--ecu-private-key",
                 str(ecu_key_path),
+                "--bootstrap-image",
+                str(factory),
+                "--bootstrap-sha256",
+                factory_digest,
+                "--bootstrap-version",
+                "1.0",
+                "--bootstrap-security-version",
+                "0",
             ]
 
             async def agent(
@@ -556,7 +632,24 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
 
             await agent(job, "--crash-at", "after_download", expected=86)
             checks["download_crash_recovered"] = True
+            await agent(job, "--crash-at", "after_stage", expected=94)
+            with sqlite3.connect(state_dir / "device.sqlite3") as db:
+                assert db.execute("SELECT bank FROM active").fetchone()[0] == "A"
+                assert (
+                    db.execute("SELECT state FROM banks WHERE name='B'").fetchone()[0]
+                    == "pending_boot"
+                )
+            await agent(job, "--crash-at", "after_boot", expected=95)
             await agent(job, "--crash-at", "after_install", expected=87)
+            with sqlite3.connect(state_dir / "device.sqlite3") as db:
+                assert db.execute("SELECT bank FROM active").fetchone()[0] == "B"
+                assert (
+                    db.execute("SELECT state FROM banks WHERE name='A'").fetchone()[0]
+                    == "confirmed"
+                )
+                banks = dict(db.execute("SELECT name,sha256 FROM banks"))
+                assert banks["A"] != banks["B"] == hashlib.sha256(data).hexdigest()
+            checks["ab_bank_boot_confirmation_and_restart_recovery"] = True
             assert (await api("GET", f"/v2/ota/jobs/{job}"))["status"] == "installing"
             with sqlite3.connect(state_dir / "device.sqlite3") as db:
                 assert db.execute("SELECT installations FROM active").fetchone()[0] == 1
@@ -579,6 +672,20 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                 terminal_report = json.loads(
                     db.execute("SELECT payload FROM reports WHERE sequence=2").fetchone()[0]
                 )
+            for invalid_proof in (
+                None,
+                terminal_report["installation_proof"] | {"challenge": str(uuid4())},
+                terminal_report["installation_proof"]
+                | {"signature": base64.b64encode(bytes(64)).decode()},
+            ):
+                await api(
+                    "POST",
+                    path + "/reports",
+                    token=bearer(device="tbox-1"),
+                    body=terminal_report | {"installation_proof": invalid_proof},
+                    expected=409,
+                )
+            checks["independent_signed_boot_proof_required"] = True
             await api(
                 "POST",
                 path + "/reports",
@@ -637,7 +744,12 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                     )
                     await connection.execute(text("DROP FUNCTION reject_day18_audit()"))
             checks["audit_failure_rolls_back_installation_report"] = True
-            await agent(job, "--crash-at", "after_terminal_ack", expected=88)
+            async with HTTPResponseDropProxy(port) as proxy:
+                await agent(
+                    job, "--base-url", proxy.url, "--crash-at", "after_terminal_ack", expected=88
+                )
+                assert proxy.dropped == 1 and proxy.confirmed_status == "HTTP/1.1 200 OK"
+            checks["http_commit_response_lost_and_reconciled"] = True
             assert (await api("GET", f"/v2/ota/jobs/{job}"))["status"] == "succeeded"
             outcome = await agent(job)
             again = await agent(job)
@@ -706,6 +818,12 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
             )
             try:
                 for sql in (
+                    "UPDATE ota_jobs SET status='succeeded'",
+                    "UPDATE ota_executions SET claim_token='forged'",
+                    "UPDATE ota_executions SET report_sequence=2",
+                    "INSERT INTO ota_execution_reports(tenant_id,id) VALUES('day18-a','forged')",
+                    "INSERT INTO ota_executions(tenant_id,id) VALUES('day18-a','forged')",
+                    "INSERT INTO ota_audit_events(tenant_id,id) VALUES('day18-a','forged')",
                     "SELECT * FROM ota_authority.receipt_keys",
                     "UPDATE ota_authority.receipt_keys SET enabled=true",
                     "INSERT INTO ecu_inventory(tenant_id,id,security_version) "
@@ -715,6 +833,32 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                         async with runtime_engine.begin() as connection:
                             await connection.execute(text(sql))
                     assert getattr(rejected.value.orig, "sqlstate", None) == "42501"
+                with pytest.raises(DBAPIError) as blocked:
+                    async with runtime_engine.begin() as connection:
+                        await connection.execute(
+                            text(
+                                "INSERT INTO ota_jobs(tenant_id,id,status) "
+                                "VALUES('day18-a','forged','succeeded')"
+                            )
+                        )
+                assert getattr(blocked.value.orig, "sqlstate", None) == "23514"
+                with pytest.raises(DBAPIError):
+                    async with runtime_engine.begin() as connection:
+                        await connection.execute(
+                            text("SELECT ota_transition(:p,:m)"),
+                            dict(
+                                p=json.dumps(
+                                    dict(
+                                        tenant_id="day18-a",
+                                        protocol="cv-install/1",
+                                        key_id="local-receipt-1",
+                                        expires=int(time.time()) + 60,
+                                    )
+                                ),
+                                m="0" * 64,
+                            ),
+                        )
+                checks["all_sensitive_state_writes_are_controlled"] = True
                 async with admin.connect() as connection:
                     authentic = await connection.scalar(
                         text(
@@ -773,34 +917,361 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                 await load_runtime_database_settings(settings, "application")
             )
             try:
-                async with admin.connect() as connection:
-                    definition = await connection.scalar(
-                        text(
-                            "SELECT pg_get_functiondef("
-                            "'public.ota_apply_installation(text,text)'::regprocedure)"
+                for name in ("ota_apply_installation", "ota_transition"):
+                    async with admin.connect() as connection:
+                        definition = await connection.scalar(
+                            text("SELECT pg_get_functiondef(CAST(:name AS regprocedure))"),
+                            {"name": f"public.{name}(text,text)"},
                         )
-                    )
-                async with admin.begin() as connection:
-                    await connection.execute(
-                        text("""CREATE OR REPLACE FUNCTION
-                        public.ota_apply_installation(p_payload text,p_mac text) RETURNS void
-                        LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog
-                        AS $$ BEGIN RETURN; END $$""")
-                    )
-                try:
-                    with pytest.raises(RuntimeError, match="installation authority function"):
-                        await verify_runtime_database_security(
-                            runtime_engine, "application", tenant_id="day18-a"
-                        )
-                finally:
                     async with admin.begin() as connection:
-                        await connection.execute(text(definition))
+                        await connection.execute(
+                            text(f"""CREATE OR REPLACE FUNCTION
+                            public.{name}(p_payload text,p_mac text) RETURNS void
+                            LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog
+                            AS $$ BEGIN RETURN; END $$""")
+                        )
+                    try:
+                        with pytest.raises(RuntimeError, match="installation authority function"):
+                            await verify_runtime_database_security(
+                                runtime_engine, "application", tenant_id="day18-a"
+                            )
+                    finally:
+                        async with admin.begin() as connection:
+                            await connection.execute(text(definition))
                 await verify_runtime_database_security(
                     runtime_engine, "application", tenant_id="day18-a"
                 )
             finally:
                 await runtime_engine.dispose()
             checks["database_authority_drift_fails_closed"] = True
+            recovery_job, recovery_request = await candidate(version_name="4.0", security=3)
+            await api("POST", f"/v2/ota/jobs/{recovery_job}/verify", body=recovery_request)
+            recovery_path = f"/v2/vehicles/{vehicle}/ecus/{ecu}/ota-jobs/{recovery_job}"
+            with exclusive(state_dir):
+                local = DeviceStore(
+                    state_dir,
+                    tenant="day18-a",
+                    vehicle=vehicle,
+                    ecu=ecu,
+                    device="tbox-1",
+                    ecu_type="body",
+                    hardware_version="hw-1",
+                )
+                recovery_operation = local.prepare(recovery_job)
+                local.close()
+            recovery_claim = ClaimResult.model_validate(
+                await api(
+                    "POST",
+                    recovery_path + "/claim",
+                    token=bearer(device="tbox-1"),
+                    body={"operation_id": recovery_operation},
+                )
+            )
+            with exclusive(state_dir):
+                local = DeviceStore(
+                    state_dir,
+                    tenant="day18-a",
+                    vehicle=vehicle,
+                    ecu=ecu,
+                    device="tbox-1",
+                    ecu_type="body",
+                    hardware_version="hw-1",
+                )
+                local.accept(recovery_claim)
+                local.close()
+            await operate(
+                local_environment,
+                "quarantine",
+                "day18-a",
+                str(uuid4()),
+                "recovery-operator",
+                "old agent stopped and isolated",
+                {"job_id": recovery_job},
+            )
+            await api(
+                "POST",
+                recovery_path + "/claim",
+                token=bearer(device="tbox-1"),
+                body={"operation_id": recovery_operation},
+                expected=409,
+            )
+            observed = probe(state_dir, recovery_claim, ecu_key_path, trust, observed=True)
+            recovery_settings = local_environment.model_copy(
+                update={"ota_device_keys_file": str(ecu_registry)}
+            )
+            reconcile_operation = str(uuid4())
+            reconciliation = {"job_id": recovery_job, "proof": observed.model_dump(mode="json")}
+            await operate(
+                recovery_settings,
+                "reconcile",
+                "day18-a",
+                reconcile_operation,
+                "recovery-operator",
+                "observed confirmed old bank",
+                reconciliation,
+            )
+            await operate(
+                recovery_settings,
+                "reconcile",
+                "day18-a",
+                reconcile_operation,
+                "recovery-operator",
+                "observed confirmed old bank",
+                reconciliation,
+            )
+            await agent(recovery_job, "--reconcile")
+            await api(
+                "GET",
+                recovery_path + "/artifact",
+                token=bearer(device="tbox-1"),
+                extra_headers={"X-OTA-Claim": str(recovery_claim.claim_token)},
+                expected=409,
+            )
+            assert (await api("GET", f"/v2/ota/jobs/{recovery_job}"))["status"] == "failed"
+            checks["claim_quarantine_reconciliation_fences_old_owner"] = True
+            rotated = ed25519.Ed25519PrivateKey.generate()
+            rotation = registry(
+                "day18-a",
+                "manufacturer-2",
+                rotated.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw),
+            )
+            await operate(
+                local_environment,
+                "publisher-register",
+                "day18-a",
+                str(uuid4()),
+                "key-operator",
+                "planned overlapping rotation",
+                {"keys": rotation["tenants"]["day18-a"]},
+            )
+            current_keys = json.loads(trust.read_text())
+            current_keys["tenants"]["day18-a"].update(rotation["tenants"]["day18-a"])
+            trust.write_text(json.dumps(current_keys))
+            rotated_job, rotated_request = await candidate(
+                version_name="5.0", security=4, publisher="manufacturer-2", signing=rotated
+            )
+            await api("POST", f"/v2/ota/jobs/{rotated_job}/verify", body=rotated_request)
+            await operate(
+                local_environment,
+                "publisher-revoke",
+                "day18-a",
+                str(uuid4()),
+                "key-operator",
+                "revocation drill",
+                {"key_id": "manufacturer-2"},
+            )
+            await api(
+                "POST",
+                f"/v2/vehicles/{vehicle}/ecus/{ecu}/ota-jobs/{rotated_job}/claim",
+                token=bearer(device="tbox-1"),
+                body={"operation_id": str(uuid4())},
+                expected=409,
+            )
+            await operate(
+                local_environment,
+                "quarantine",
+                "day18-a",
+                str(uuid4()),
+                "key-operator",
+                "withdraw unclaimed revoked publication",
+                {"job_id": rotated_job},
+            )
+            checks["publisher_rotation_revocation_and_audit"] = True
+            adopted_ecu = str(uuid4())
+            adopted_state = tmp_path / "adopted-device"
+            adopted_key = ed25519.Ed25519PrivateKey.generate()
+            adopted_key_file = tmp_path / "adopted-ecu.pem"
+            adopted_key_file.write_bytes(
+                adopted_key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+            )
+            adopted_token = tmp_path / "adopted-token"
+            adopted_token.write_text(bearer(device="tbox-2"))
+            device_keys = json.loads(ecu_registry.read_text())
+            device_keys["day18-a"]["tbox-2"] = {
+                adopted_ecu: dict(
+                    vehicle_id=vehicle,
+                    install_allowed=True,
+                    public_key=base64.b64encode(
+                        adopted_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+                    ).decode(),
+                )
+            }
+            ecu_registry.write_text(json.dumps(device_keys))
+            await api(
+                "PUT",
+                f"/vehicles/{vehicle}/ecus/{adopted_ecu}",
+                body=dict(
+                    ecu_type="body",
+                    hardware_version="hw-1",
+                    firmware_version="1.0",
+                    serial_number="body-adopt",
+                ),
+            )
+            await operate(
+                local_environment,
+                "bootstrap",
+                "day18-a",
+                str(uuid4()),
+                "factory-operator",
+                "controlled second ECU bootstrap",
+                dict(
+                    vehicle_id=vehicle,
+                    ecu_id=adopted_ecu,
+                    firmware_version="1.0",
+                    security_version=0,
+                    sha256=factory_digest,
+                ),
+            )
+            adopted_job, adopted_request = await candidate(
+                target=adopted_ecu, version_name="6.0", security=1
+            )
+            await api("POST", f"/v2/ota/jobs/{adopted_job}/verify", body=adopted_request)
+            adopted_args = [
+                "--ecu",
+                adopted_ecu,
+                "--device-id",
+                "tbox-2",
+                "--state-dir",
+                str(adopted_state),
+                "--token-file",
+                str(adopted_token),
+                "--ecu-private-key",
+                str(adopted_key_file),
+            ]
+            await agent(adopted_job, *adopted_args, "--crash-at", "after_install", expected=87)
+            with sqlite3.connect(adopted_state / "device.sqlite3") as db:
+                captured = json.loads(
+                    db.execute("SELECT claim FROM jobs WHERE id=?", (adopted_job,)).fetchone()[0]
+                )
+            adopted_claim = ClaimResult(
+                job=ExecutionView.model_validate(await api("GET", f"/v2/ota/jobs/{adopted_job}")),
+                device_id="tbox-2",
+                **captured,
+            )
+            await operate(
+                local_environment,
+                "quarantine",
+                "day18-a",
+                str(uuid4()),
+                "recovery-operator",
+                "crashed device fenced before candidate adoption",
+                {"job_id": adopted_job},
+            )
+            adopted_observation = probe(
+                adopted_state, adopted_claim, adopted_key_file, trust, observed=True
+            )
+            adoption = {"job_id": adopted_job, "proof": adopted_observation.model_dump(mode="json")}
+            adoption_operation = str(uuid4())
+            adoption_settings = recovery_settings.model_copy(
+                update={"ota_trusted_keys_file": str(trust)}
+            )
+            async with admin.begin() as connection:
+                await connection.execute(
+                    text(
+                        "CREATE FUNCTION ota_authority.fail_resolution_audit() RETURNS trigger "
+                        "LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='reconcile' THEN "
+                        "RAISE EXCEPTION 'injected reconciliation audit failure'; "
+                        "END IF; RETURN NEW; END $$"
+                    )
+                )
+                await connection.execute(
+                    text(
+                        "CREATE TRIGGER fail_resolution_audit BEFORE INSERT ON "
+                        "ota_authority.management_audit FOR EACH ROW EXECUTE FUNCTION "
+                        "ota_authority.fail_resolution_audit()"
+                    )
+                )
+            try:
+                with pytest.raises(DBAPIError):
+                    await operate(
+                        adoption_settings,
+                        "reconcile",
+                        "day18-a",
+                        adoption_operation,
+                        "recovery-operator",
+                        "verified candidate boot",
+                        adoption,
+                    )
+                async with admin.connect() as connection:
+                    assert (
+                        await connection.scalar(
+                            text("SELECT security_version FROM ecu_inventory WHERE id=:e"),
+                            {"e": adopted_ecu},
+                        )
+                        == 0
+                    )
+                    assert (
+                        await connection.scalar(
+                            text("SELECT status FROM ota_jobs WHERE id=:j"), {"j": adopted_job}
+                        )
+                        == "installing"
+                    )
+                    assert (
+                        await connection.scalar(
+                            text("SELECT report_sequence FROM ota_executions WHERE id=:j"),
+                            {"j": adopted_job},
+                        )
+                        == 1
+                    )
+                    assert (
+                        await connection.scalar(
+                            text(
+                                "SELECT count(*) FROM ota_authority.installation_receipts "
+                                "WHERE job_id=:j"
+                            ),
+                            {"j": adopted_job},
+                        )
+                        == 0
+                    )
+            finally:
+                async with admin.begin() as connection:
+                    await connection.execute(
+                        text("DROP TRIGGER fail_resolution_audit ON ota_authority.management_audit")
+                    )
+                    await connection.execute(
+                        text("DROP FUNCTION ota_authority.fail_resolution_audit()")
+                    )
+            await operate(
+                adoption_settings,
+                "reconcile",
+                "day18-a",
+                adoption_operation,
+                "recovery-operator",
+                "verified candidate boot",
+                adoption,
+            )
+            await operate(
+                adoption_settings,
+                "reconcile",
+                "day18-a",
+                adoption_operation,
+                "recovery-operator",
+                "verified candidate boot",
+                adoption,
+            )
+            await agent(adopted_job, *adopted_args, "--reconcile")
+            assert (await api("GET", f"/v2/vehicles/{vehicle}/ecus/{adopted_ecu}"))[
+                "security_version"
+            ] == 1
+            async with admin.connect() as connection:
+                assert (
+                    await connection.scalar(
+                        text("SELECT count(*) FROM ota_execution_reports WHERE job_id=:j"),
+                        {"j": adopted_job},
+                    )
+                    == 2
+                )
+                assert (
+                    await connection.scalar(
+                        text(
+                            "SELECT count(*) FROM ota_audit_events "
+                            "WHERE resource_id=:j AND action='reconcile'"
+                        ),
+                        {"j": adopted_job},
+                    )
+                    == 1
+                )
+            checks["candidate_boot_reconciliation_is_atomic"] = True
             image.write_bytes(b"damaged local bank")
             await agent(job, expected=1)
             image.write_bytes(data)
@@ -849,6 +1320,7 @@ async def test_signed_pinned_ota_process_crashes_and_durable_cloud_results(
                     checks=checks,
                     generated_at_utc=datetime.now(UTC).isoformat(),
                     simulated_installation=True,
+                    physical_boot_verified=False,
                     real_aws_verified=False,
                     device_installations=1,
                     cloud_security_version=1,

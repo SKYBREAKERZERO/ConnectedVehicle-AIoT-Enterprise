@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlalchemy import text
+from starlette.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 from apps.api.routers.device_data import Identity, Sessions, device, tenant
-from connected_vehicle.ota.artifacts import ArtifactVerifier
+from connected_vehicle.ota.artifacts import ArtifactHandle, ArtifactVerifier
 from connected_vehicle.ota.device_proof import verify_proof
 from connected_vehicle.ota.execution_contracts import (
     ClaimRequest,
@@ -24,6 +27,23 @@ from enterprise_platform.errors.base import ConflictError
 from enterprise_platform.security.permissions import Permission
 
 router = APIRouter(tags=["OTA Execution v2"])
+
+
+class ArtifactResponse(StreamingResponse):
+    def __init__(self, handle: ArtifactHandle, timeout: float) -> None:
+        self.handle, self.timeout = handle, timeout
+        super().__init__(
+            handle.chunks(),
+            media_type="application/octet-stream",
+            headers={"Cache-Control": "no-store", "Content-Length": str(handle.size)},
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            async with asyncio.timeout(self.timeout):
+                await super().__call__(scope, receive, send)
+        finally:
+            self.handle.close()
 
 
 def service(request: Request, sessions: Sessions) -> OTAExecutionService:
@@ -92,6 +112,28 @@ async def read(job_id: UUID, context: Identity, execution: Service) -> Execution
     return await execution.read(tenant(context, Permission.OTA_READ), str(job_id))
 
 
+@router.get(
+    "/v2/vehicles/{vehicle_id}/ecus/{ecu_id}/ota-jobs/{job_id}/resolution",
+    operation_id="getOTAClaimResolution",
+)
+async def resolution(
+    vehicle_id: UUID,
+    ecu_id: UUID,
+    job_id: UUID,
+    context: Identity,
+    execution: Service,
+    request: Request,
+) -> dict[str, object]:
+    scope = await ecu_device(request, context, execution, vehicle_id, ecu_id)
+    async with execution.base.transaction(scope) as session:
+        await execution.job(session, scope, str(job_id), vehicle=str(vehicle_id), ecu=str(ecu_id))
+        result = await session.scalar(
+            text("SELECT public.ota_claim_resolution(:t,:j,:d)"),
+            dict(t=scope, j=str(job_id), d=context.principal.principal_id),
+        )
+        return dict(result) if result else {"resolved": False}
+
+
 @router.post("/v2/ota/jobs/{job_id}/verify", operation_id="verifyOTAArtifactV2")
 async def verify(
     job_id: UUID,
@@ -148,9 +190,7 @@ async def download(
         str(job_id),
         str(claim_token),
     )
-    return Response(
-        data, media_type="application/octet-stream", headers={"Cache-Control": "no-store"}
-    )
+    return ArtifactResponse(data, get_settings().ota_transfer_timeout_seconds)
 
 
 @router.post(

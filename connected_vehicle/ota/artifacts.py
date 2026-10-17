@@ -5,16 +5,17 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import json
+import tempfile
 import time
-from contextlib import suppress
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, BinaryIO, Protocol, cast
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from connected_vehicle.ota.execution_contracts import SignedManifest
+from connected_vehicle.ota.publisher_keys import public_key
 from enterprise_platform.cloud.client_factory import AWSClientFactory
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.errors.base import ConflictError, DependencyUnavailableError
@@ -30,13 +31,8 @@ def unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def verify_signature(path: Path, manifest: SignedManifest, signature: str) -> None:
-    with path.open("rb") as stream:
-        encoded = stream.read(65537)
-    if len(encoded) > 65536:
-        raise ValueError("Oversized trust store")
-    keys = json.loads(encoded, object_pairs_hook=unique_pairs)
     try:
-        public = base64.b64decode(keys[manifest.tenant_id][manifest.key_id], validate=True)
+        public = public_key(path, manifest.tenant_id, manifest.key_id)
         Ed25519PublicKey.from_public_bytes(public).verify(
             base64.b64decode(signature, validate=True), manifest.canonical()
         )
@@ -48,12 +44,38 @@ class S3Reader(Protocol):
     def get_object(self, **kwargs: object) -> dict[str, Any]: ...
 
 
+class ArtifactHandle:
+    def __init__(self, stream: BinaryIO, size: int, capacity: asyncio.Semaphore) -> None:
+        self.stream, self.size, self.capacity = stream, size, capacity
+        self.closed = False
+
+    def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            try:
+                self.stream.close()
+            finally:
+                self.capacity.release()
+
+    async def aclose(self) -> None:
+        self.close()
+
+    async def chunks(self) -> AsyncIterator[bytes]:
+        try:
+            while block := self.stream.read(65536):
+                yield block
+                await asyncio.sleep(0)
+        finally:
+            self.close()
+
+
 class ArtifactVerifier:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        # At most two validated files/responses, each bounded by the configured size.
         self.capacity = asyncio.Semaphore(2)
 
-    async def fetch(self, manifest: SignedManifest, signature: str) -> bytes:
+    async def fetch_file(self, manifest: SignedManifest, signature: str) -> ArtifactHandle:
         if not self.settings.ota_trusted_keys_file:
             raise ConflictError("OTA trust roots are not configured.")
         try:
@@ -61,22 +83,40 @@ class ArtifactVerifier:
         except (OSError, ValueError) as exc:
             raise ConflictError("OTA signature verification failed.") from exc
         if manifest.size_bytes > self.settings.ota_max_artifact_bytes:
-            raise ConflictError("Artifact exceeds the configured local execution limit.")
-        async with self.capacity:
+            raise ConflictError("Artifact exceeds configured quota.")
+        try:
+            await asyncio.wait_for(
+                self.capacity.acquire(), timeout=self.settings.ota_artifact_timeout_seconds
+            )
+        except TimeoutError as exc:
+            raise DependencyUnavailableError("OTA transfer capacity exhausted.") from exc
+        work = asyncio.create_task(asyncio.to_thread(self.read_file, manifest))
+        try:
+            stream = await asyncio.shield(work)
+            return ArtifactHandle(stream, manifest.size_bytes, self.capacity)
+        except asyncio.CancelledError:
             try:
-                work = asyncio.create_task(asyncio.to_thread(self.read, manifest))
-                try:
-                    return await asyncio.shield(work)
-                except asyncio.CancelledError:
-                    with suppress(Exception):
-                        await work
-                    raise
-            except (ValueError, TimeoutError) as exc:
-                raise ConflictError("OTA artifact integrity verification failed.") from exc
-            except Exception as exc:
-                raise DependencyUnavailableError("Pinned firmware object is unavailable.") from exc
+                stream = await work
+                stream.close()
+            finally:
+                self.capacity.release()
+            raise
+        except (ValueError, TimeoutError) as exc:
+            self.capacity.release()
+            raise ConflictError("OTA artifact integrity/deadline validation failed.") from exc
+        except Exception as exc:
+            self.capacity.release()
+            raise DependencyUnavailableError("Pinned firmware object unavailable.") from exc
 
-    def read(self, manifest: SignedManifest) -> bytes:
+    async def fetch(self, manifest: SignedManifest, signature: str) -> bytes:
+        handle = await self.fetch_file(manifest, signature)
+        try:
+            return handle.stream.read()
+        finally:
+            handle.close()
+
+    def read_file(self, manifest: SignedManifest) -> BinaryIO:
+        deadline = time.monotonic() + self.settings.ota_artifact_timeout_seconds
         client = cast(
             S3Reader,
             AWSClientFactory(
@@ -95,27 +135,34 @@ class ArtifactVerifier:
             VersionId=manifest.artifact_version,
         )
         body = response["Body"]
+        result = cast(BinaryIO, tempfile.TemporaryFile(mode="w+b"))  # noqa: SIM115 -- Ownership transfers to ArtifactHandle; every error closes it below.
         try:
             if (
                 response.get("VersionId") != manifest.artifact_version
                 or response["ContentLength"] != manifest.size_bytes
             ):
-                raise ValueError("Pinned version/size mismatch")
-            deadline = time.monotonic() + self.settings.ota_artifact_timeout_seconds
-            result = bytearray()
+                raise ValueError("Pinned object version/size mismatch")
+            size = 0
             checksum = hashlib.sha256()
             while True:
                 if time.monotonic() > deadline:
-                    raise TimeoutError("Artifact deadline exceeded")
-                chunk = body.read(min(65536, manifest.size_bytes + 1 - len(result)))
+                    raise TimeoutError("Artifact deadline exceeded before read")
+                chunk = body.read(min(65536, manifest.size_bytes + 1 - size))
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Artifact deadline exceeded after read")
                 if not chunk:
                     break
-                result.extend(chunk)
+                size += len(chunk)
+                if size > manifest.size_bytes:
+                    raise ValueError("Object exceeded quota")
+                result.write(chunk)
                 checksum.update(chunk)
-                if len(result) > manifest.size_bytes:
-                    raise ValueError("Oversized object stream")
-            if len(result) != manifest.size_bytes or checksum.hexdigest() != manifest.sha256:
+            if size != manifest.size_bytes or checksum.hexdigest() != manifest.sha256:
                 raise ValueError("Object checksum mismatch")
-            return bytes(result)
+            result.seek(0)
+            return result
+        except BaseException:
+            result.close()
+            raise
         finally:
             body.close()

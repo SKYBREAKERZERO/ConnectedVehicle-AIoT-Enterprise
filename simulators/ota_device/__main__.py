@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import os
 import sqlite3
+import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Generator
 from pathlib import Path
@@ -17,7 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from connected_vehicle.ota.artifacts import verify_signature
 from connected_vehicle.ota.device_proof import proof_headers
-from connected_vehicle.ota.execution_contracts import ClaimResult
+from connected_vehicle.ota.execution_contracts import ClaimResult, InstallationProof
 from simulators.ota_device.store import DeviceStore, exclusive
 
 
@@ -85,7 +88,9 @@ def sync_directory(directory: Path) -> None:
             os.close(handle)
 
 
-def download(client: httpx.Client, path: str, root: Path, claim: ClaimResult) -> None:
+def download(
+    client: httpx.Client, path: str, root: Path, claim: ClaimResult, timeout: float = 60
+) -> None:
     images = root / "images"
     if images.is_symlink():
         raise ValueError("Unsafe bank directory")
@@ -102,6 +107,7 @@ def download(client: httpx.Client, path: str, root: Path, claim: ClaimResult) ->
     if partial.is_symlink():
         raise ValueError("Unsafe staging path")
     digest, size = hashlib.sha256(), 0
+    deadline = time.monotonic() + timeout
     with client.stream(
         "GET", path + "/artifact", headers={"X-OTA-Claim": str(claim.claim_token)}
     ) as response:
@@ -111,6 +117,8 @@ def download(client: httpx.Client, path: str, root: Path, claim: ClaimResult) ->
             raise RuntimeError("Artifact download rejected")
         with partial.open("wb") as stream:
             for chunk in response.iter_bytes(chunk_size=65536):
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Device transfer deadline exceeded")
                 size += len(chunk)
                 if size > claim.manifest.size_bytes:
                     raise ValueError("Oversized firmware download")
@@ -118,6 +126,8 @@ def download(client: httpx.Client, path: str, root: Path, claim: ClaimResult) ->
                 stream.write(chunk)
             stream.flush()
             os.fsync(stream.fileno())
+    if time.monotonic() > deadline:
+        raise TimeoutError("Device transfer deadline exceeded after final chunk")
     if size != claim.manifest.size_bytes or digest.hexdigest() != claim.manifest.sha256:
         raise ValueError("Downloaded bytes do not match the signed manifest")
     os.replace(partial, target)
@@ -125,6 +135,8 @@ def download(client: httpx.Client, path: str, root: Path, claim: ClaimResult) ->
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
+    if not 1 <= args.transfer_timeout <= 300:
+        raise ValueError("Invalid device transfer timeout")
     url = urlsplit(args.base_url)
     if (
         url.scheme != "http"
@@ -148,8 +160,23 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             device=args.device_id,
             ecu_type=args.ecu_type,
             hardware_version=args.hardware_version,
+            max_artifact_bytes=args.max_artifact_bytes,
         )
         try:
+            if store.active() is None:
+                if (
+                    not args.bootstrap_image
+                    or not args.bootstrap_sha256
+                    or args.bootstrap_version is None
+                    or args.bootstrap_security_version is None
+                ):
+                    raise ValueError("Controlled local factory bootstrap required")
+                store.bootstrap(
+                    args.bootstrap_image,
+                    args.bootstrap_sha256,
+                    args.bootstrap_version,
+                    args.bootstrap_security_version,
+                )
             with httpx.Client(
                 base_url=args.base_url,
                 headers={"Authorization": "Bearer " + token},
@@ -176,11 +203,28 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                         args.job = available[0]["id"]
                 operation = store.prepare(args.job)
                 path = f"/v2/vehicles/{args.vehicle}/ecus/{args.ecu}/ota-jobs/{args.job}"
+                if args.reconcile:
+                    resolution = request(client, "GET", path + "/resolution").json()
+                    store.resolve(args.job, resolution)
+                    return dict(
+                        status="reconciled",
+                        active=store.active(),
+                        pending_reports=0,
+                        simulated_installation=True,
+                    )
                 response = request(
                     client, "POST", path + "/claim", json={"operation_id": operation}
                 )
                 claim = ClaimResult.model_validate_json(response.content)
-                if str(claim.job.id) != args.job or claim.manifest.size_bytes > 32 * 1024**2:
+                if (
+                    claim.recorded_security_version is None
+                    or claim.recorded_firmware_version is None
+                ):
+                    raise ValueError("Authoritative enrolled ECU floor required")
+                if (
+                    str(claim.job.id) != args.job
+                    or claim.manifest.size_bytes > args.max_artifact_bytes
+                ):
                     raise ValueError("Unexpected or oversized job")
                 verify_signature(args.trusted_keys, claim.manifest, claim.signature)
                 store.accept(claim)
@@ -192,7 +236,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                 ):
                     raise ValueError("Device anti-rollback floor rejected the job")
                 if store.state(args.job) == "claimed":
-                    download(client, path, args.state_dir, claim)
+                    store.image_quota(claim.manifest.size_bytes, str(claim.job.id))
+                    download(client, path, args.state_dir, claim, timeout=args.transfer_timeout)
                     store.downloaded(args.job)
                     if args.crash_at == "after_download":
                         os._exit(86)
@@ -217,11 +262,47 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                     store.installing(claim)
                 deliver()
                 if store.state(args.job) == "installing":
-                    image = args.state_dir / "images" / (claim.manifest.sha256 + ".bin")
-                    with image.open("rb") as stream:
-                        healthy = stream.read(7) == b"CVOTA1\n" and not args.fail_health_check
+                    store.stage(claim)
+                    if args.crash_at == "after_stage":
+                        os._exit(94)
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", encoding="utf-8", dir=args.state_dir, delete=False
+                    ) as pending:
+                        pending.write(claim.model_dump_json())
+                        boot_path = Path(pending.name)
+                    try:
+                        boot = subprocess.run(
+                            [
+                                sys.executable,
+                                "-m",
+                                "simulators.ota_device.boot_probe",
+                                "--state-dir",
+                                str(args.state_dir),
+                                "--claim",
+                                str(boot_path),
+                                "--ecu-private-key",
+                                str(args.ecu_private_key),
+                                "--trusted-keys",
+                                str(args.trusted_keys),
+                                "--max-artifact-bytes",
+                                str(args.max_artifact_bytes),
+                                *(["--fail-health-check"] if args.fail_health_check else []),
+                            ],
+                            capture_output=True,
+                            timeout=15,
+                        )
+                    finally:
+                        boot_path.unlink(missing_ok=True)
+                    healthy = boot.returncode == 0
+                    proof = InstallationProof.model_validate_json(boot.stdout) if healthy else None
+                    if proof:
+                        ECUAuth(args).key.public_key().verify(
+                            base64.b64decode(proof.signature, validate=True), proof.canonical()
+                        )
+                    if args.crash_at == "after_boot":
+                        os._exit(95)
                     verify_signature(args.trusted_keys, claim.manifest, claim.signature)
-                    store.activate(claim, healthy=healthy)
+                    store.activate(claim, healthy=healthy, proof=proof)
                     if args.crash_at == "after_install":
                         os._exit(87)
                 deliver()
@@ -254,10 +335,30 @@ def main() -> int:
         required=True,
         help="Independent ECU installation proof key; never supplied by API",
     )
+    parser.add_argument("--bootstrap-image", type=Path)
+    parser.add_argument("--bootstrap-sha256")
+    parser.add_argument("--bootstrap-version")
+    parser.add_argument("--bootstrap-security-version", type=int)
+    parser.add_argument("--max-artifact-bytes", type=int, default=32 * 1024**2)
+    parser.add_argument("--transfer-timeout", type=float, default=60)
     parser.add_argument(
-        "--crash-at", choices=("after_download", "after_install", "after_terminal_ack")
+        "--crash-at",
+        choices=(
+            "after_download",
+            "after_install",
+            "after_terminal_ack",
+            "after_stage",
+            "after_boot",
+        ),
     )
     parser.add_argument("--fail-health-check", action="store_true")
+    parser.add_argument(
+        "--reconcile",
+        action="store_true",
+        help=(
+            "Close a quarantined local claim only after authoritative observed-bank reconciliation"
+        ),
+    )
     args = parser.parse_args()
     try:
         result = run(args)

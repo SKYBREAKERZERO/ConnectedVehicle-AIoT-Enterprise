@@ -26,6 +26,7 @@ def seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             generated_at_utc=datetime.now(UTC).isoformat(),
             real_aws_verified=False,
             simulated_installation=True,
+            physical_boot_verified=False,
             device_installations=1,
             cloud_security_version=1,
             device_security_version=1,

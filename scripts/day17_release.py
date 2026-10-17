@@ -59,9 +59,32 @@ def readiness_digest() -> str:
         "docs/DAY17_OTA_FOUNDATION.md",
         "contracts/platform-v1.json",
         ".github/workflows/runtime.yml",
+        ".github/workflows/ci.yml",
+        "contracts/day17-baseline.json",
+        "tests/fixtures/day18/manifest-v2-golden.json",
     ):
         digest.update(relative.encode() + b"\0")
         digest.update((ROOT / relative).read_text(encoding="utf-8").encode())
+    # Only source-controlled IaC inputs; never Terraform state, plans or provider caches.
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "--", "scripts/iac", "infra/terraform"], cwd=ROOT, text=True
+    ).splitlines()
+    for relative in sorted(tracked):
+        path = ROOT / relative
+        if path.suffix in {
+            ".tf",
+            ".hcl",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".toml",
+            ".rego",
+            ".txt",
+            ".ini",
+            ".py",
+        }:
+            digest.update(relative.encode() + b"\0")
+            digest.update(path.read_text(encoding="utf-8").encode())
     sql_files = [
         *(ROOT / "database").glob("*.sql"),
         *(ROOT / "database/migrations/sql").glob("*.sql"),

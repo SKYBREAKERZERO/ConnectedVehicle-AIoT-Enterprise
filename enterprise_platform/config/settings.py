@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     ota_install_receipt_keys_file: str | None = None
     ota_max_artifact_bytes: int = Field(default=32 * 1024**2, ge=1, le=256 * 1024**2)
     ota_artifact_timeout_seconds: float = Field(default=20.0, ge=1, le=60)
+    ota_transfer_timeout_seconds: float = Field(default=60.0, ge=1, le=300)
     database_lock_timeout_seconds: float = Field(default=2.0, gt=0, le=60)
     database_statement_timeout_seconds: float = Field(default=10.0, gt=0, le=3600)
     database_idle_transaction_timeout_seconds: float = Field(default=30.0, gt=0, le=3600)
