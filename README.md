@@ -24,3 +24,6 @@ SLOs, canary abort/recovery, runbooks and exact-head release readiness:
 
 Tenant-scoped ECU inventory, immutable firmware metadata and durable OTA intent:
 [Day17 OTA Foundation](docs/DAY17_OTA_FOUNDATION.md).
+
+Signed, pinned firmware delivery and crash-recoverable local bank execution:
+[Day18 OTA execution](docs/DAY18_OTA_EXECUTION.md).

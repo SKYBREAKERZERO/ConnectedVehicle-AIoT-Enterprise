@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     CheckConstraint,
     DateTime,
@@ -33,8 +34,10 @@ class ECUModel(Identity, Creation, Base):
     ecu_type: Mapped[str] = mapped_column(String(64), nullable=False)
     hardware_version: Mapped[str] = mapped_column(String(64), nullable=False)
     firmware_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    security_version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     serial_number: Mapped[str] = mapped_column(String(64), nullable=False)
     __table_args__ = (
+        CheckConstraint("security_version >= 0", name="ck_ecu_security_version"),
         ForeignKeyConstraint(
             ["tenant_id", "vehicle_id"],
             ["vehicles.tenant_id", "vehicles.id"],
@@ -108,13 +111,20 @@ class JobModel(Identity, Creation, Base):
             name="fk_job_release",
         ),
         UniqueConstraint("tenant_id", "idempotency_key", name="uq_job_idempotency"),
-        CheckConstraint("status IN ('pending_verification','cancelled')", name="ck_ota_job_status"),
+        UniqueConstraint("tenant_id", "id", "release_id", name="uq_ota_job_release_binding"),
+        CheckConstraint(
+            "status IN ('pending_verification','verified','downloading','installing',"
+            "'succeeded','failed','cancelled')",
+            name="ck_ota_job_status",
+        ),
         Index(
             "uq_ota_active_ecu",
             "tenant_id",
             "ecu_id",
             unique=True,
-            postgresql_where=text("status = 'pending_verification'"),
+            postgresql_where=text(
+                "status IN ('pending_verification','verified','downloading','installing')"
+            ),
         ),
         Index("ix_ota_vehicle", "tenant_id", "vehicle_id", "ecu_id", "id"),
     )
@@ -134,4 +144,45 @@ class OTAAuditModel(Identity, Base):
         UniqueConstraint(
             "tenant_id", "resource_type", "action", "operation_key", name="uq_ota_audit_operation"
         ),
+    )
+
+
+class OTAExecutionModel(Base):
+    __tablename__ = "ota_executions"
+    tenant_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    job_id: Mapped[str] = mapped_column("id", String(36), primary_key=True)
+    release_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    verification_operation: Mapped[str] = mapped_column(String(36), nullable=False)
+    verification_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    manifest: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    signature: Mapped[str] = mapped_column(String(88), nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    device_id: Mapped[str | None] = mapped_column(String(255))
+    claim_token: Mapped[str | None] = mapped_column(String(36))
+    claim_operation: Mapped[str | None] = mapped_column(String(36))
+    report_sequence: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "release_id"],
+            ["ota_jobs.tenant_id", "ota_jobs.id", "ota_jobs.release_id"],
+            name="fk_ota_execution_job",
+        ),
+        UniqueConstraint(
+            "tenant_id", "verification_operation", name="uq_ota_verification_operation"
+        ),
+        CheckConstraint("report_sequence BETWEEN 0 AND 2", name="ck_ota_report_sequence"),
+    )
+
+
+class OTAReportModel(Identity, Base):
+    __tablename__ = "ota_execution_reports"
+    job_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "job_id"], ["ota_jobs.tenant_id", "ota_jobs.id"], name="fk_ota_report_job"
+        ),
+        UniqueConstraint("tenant_id", "job_id", "sequence", name="uq_ota_report_sequence"),
     )

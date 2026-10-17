@@ -25,6 +25,15 @@ from connected_vehicle.ota.contracts import (
     JobRequest,
     JobView,
 )
+from connected_vehicle.ota.execution_contracts import (
+    ClaimRequest,
+    ClaimResult,
+    ExecutionECUView,
+    ExecutionView,
+    OTAReport,
+    SignedManifest,
+    VerificationRequest,
+)
 from connected_vehicle.remote_command.wire_contracts import DispatchPayload, RequestedPayload
 from enterprise_platform.messaging.envelope import EventEnvelope
 
@@ -49,6 +58,13 @@ def schemas() -> dict[str, Any]:
         "ota-job-request/1.0": JobRequest.model_json_schema(),
         "ota-job/1.0": JobView.model_json_schema(),
         "ota-job-cancel/1.0": CancelJob.model_json_schema(),
+        "ota-execution/2.0": ExecutionView.model_json_schema(),
+        "ota-inventory/2.0": ExecutionECUView.model_json_schema(),
+        "ota-verification/2.0": VerificationRequest.model_json_schema(),
+        "ota-claim-request/2.0": ClaimRequest.model_json_schema(),
+        "ota-claim/2.0": ClaimResult.model_json_schema(),
+        "ota-report/2.0": OTAReport.model_json_schema(),
+        "ota-manifest/2.0": SignedManifest.model_json_schema(),
     }
 
 

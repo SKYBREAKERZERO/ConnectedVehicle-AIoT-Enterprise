@@ -14,16 +14,17 @@ from scripts.day16_demo import cleanup_owned
 from scripts.day17_release import ROOT
 
 
-def main() -> int:
+def main(*, include_day18: bool = False) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    directory = (args.output or ROOT / ".runtime-reports" / ("day17-" + uuid4().hex)).resolve()
+    prefix = "day18-" if include_day18 else "day17-"
+    directory = (args.output or ROOT / ".runtime-reports" / (prefix + uuid4().hex)).resolve()
     directory.mkdir(parents=True, exist_ok=False)
     owner = uuid4().hex
     environment = dict(
         os.environ,
-        DAY16_EVIDENCE_RUN_ID="day17-" + uuid4().hex,
+        DAY16_EVIDENCE_RUN_ID=prefix + uuid4().hex,
         RUNTIME_EVIDENCE_DIR=str(directory),
         DAY16_DEMO_OWNER=owner,
         DAY16_DEMO_CASE="all",
@@ -36,14 +37,16 @@ def main() -> int:
         flags = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         flags = 0
+    targets = ["tests/integration/day16", "tests/integration/day17"]
+    if include_day18:
+        targets.append("tests/integration/day18")
     try:
         process = subprocess.Popen(
             [
                 sys.executable,
                 "-m",
                 "pytest",
-                "tests/integration/day16",
-                "tests/integration/day17",
+                *targets,
                 "-q",
                 "-s",
                 "--tb=short",
@@ -60,7 +63,7 @@ def main() -> int:
             [
                 sys.executable,
                 "-m",
-                "scripts.day17_release",
+                "scripts.day18_evidence" if include_day18 else "scripts.day17_release",
                 "--directory",
                 str(directory),
                 "--check-existing",

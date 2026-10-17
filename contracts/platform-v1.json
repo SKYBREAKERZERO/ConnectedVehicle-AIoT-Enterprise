@@ -411,6 +411,225 @@
     "title": "DispatchPayload",
     "type": "object"
   },
+  "ota-claim-request/2.0": {
+    "additionalProperties": false,
+    "properties": {
+      "operation_id": {
+        "format": "uuid",
+        "title": "Operation Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "operation_id"
+    ],
+    "title": "ClaimRequest",
+    "type": "object"
+  },
+  "ota-claim/2.0": {
+    "$defs": {
+      "ExecutionView": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "ecu_id": {
+            "format": "uuid",
+            "title": "Ecu Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "release_id": {
+            "format": "uuid",
+            "title": "Release Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/OTAState"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "vehicle_id": {
+            "format": "uuid",
+            "title": "Vehicle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "vehicle_id",
+          "ecu_id",
+          "release_id",
+          "status",
+          "created_at",
+          "updated_at",
+          "created_by"
+        ],
+        "title": "ExecutionView",
+        "type": "object"
+      },
+      "OTAState": {
+        "enum": [
+          "pending_verification",
+          "verified",
+          "downloading",
+          "installing",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ],
+        "title": "OTAState",
+        "type": "string"
+      },
+      "SignedManifest": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_bucket": {
+            "maxLength": 63,
+            "minLength": 3,
+            "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$",
+            "title": "Artifact Bucket",
+            "type": "string"
+          },
+          "artifact_key": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Artifact Key",
+            "type": "string"
+          },
+          "artifact_version": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Artifact Version",
+            "type": "string"
+          },
+          "ecu_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Ecu Type",
+            "type": "string"
+          },
+          "hardware_version": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Hardware Version",
+            "type": "string"
+          },
+          "key_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Key Id",
+            "type": "string"
+          },
+          "protocol": {
+            "const": "cv-ota/2",
+            "default": "cv-ota/2",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "release_id": {
+            "format": "uuid",
+            "title": "Release Id",
+            "type": "string"
+          },
+          "security_version": {
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "title": "Security Version",
+            "type": "integer"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "exclusiveMinimum": 0,
+            "maximum": 4294967296,
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "tenant_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "version": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ecu_type",
+          "hardware_version",
+          "version",
+          "artifact_bucket",
+          "artifact_key",
+          "artifact_version",
+          "sha256",
+          "size_bytes",
+          "tenant_id",
+          "release_id",
+          "security_version",
+          "key_id"
+        ],
+        "title": "SignedManifest",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "claim_token": {
+        "format": "uuid",
+        "title": "Claim Token",
+        "type": "string"
+      },
+      "device_id": {
+        "title": "Device Id",
+        "type": "string"
+      },
+      "job": {
+        "$ref": "#/$defs/ExecutionView"
+      },
+      "manifest": {
+        "$ref": "#/$defs/SignedManifest"
+      },
+      "signature": {
+        "title": "Signature",
+        "type": "string"
+      }
+    },
+    "required": [
+      "job",
+      "device_id",
+      "claim_token",
+      "manifest",
+      "signature"
+    ],
+    "title": "ClaimResult",
+    "type": "object"
+  },
   "ota-ecu-registration/1.0": {
     "additionalProperties": false,
     "properties": {
@@ -514,6 +733,75 @@
       "created_by"
     ],
     "title": "ECUView",
+    "type": "object"
+  },
+  "ota-execution/2.0": {
+    "$defs": {
+      "OTAState": {
+        "enum": [
+          "pending_verification",
+          "verified",
+          "downloading",
+          "installing",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ],
+        "title": "OTAState",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "created_by": {
+        "title": "Created By",
+        "type": "string"
+      },
+      "ecu_id": {
+        "format": "uuid",
+        "title": "Ecu Id",
+        "type": "string"
+      },
+      "id": {
+        "format": "uuid",
+        "title": "Id",
+        "type": "string"
+      },
+      "release_id": {
+        "format": "uuid",
+        "title": "Release Id",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/OTAState"
+      },
+      "updated_at": {
+        "format": "date-time",
+        "title": "Updated At",
+        "type": "string"
+      },
+      "vehicle_id": {
+        "format": "uuid",
+        "title": "Vehicle Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "vehicle_id",
+      "ecu_id",
+      "release_id",
+      "status",
+      "created_at",
+      "updated_at",
+      "created_by"
+    ],
+    "title": "ExecutionView",
     "type": "object"
   },
   "ota-firmware-registration/1.0": {
@@ -675,6 +963,76 @@
     "title": "FirmwareView",
     "type": "object"
   },
+  "ota-inventory/2.0": {
+    "additionalProperties": false,
+    "properties": {
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "created_by": {
+        "title": "Created By",
+        "type": "string"
+      },
+      "ecu_type": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Ecu Type",
+        "type": "string"
+      },
+      "firmware_version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Firmware Version",
+        "type": "string"
+      },
+      "hardware_version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Hardware Version",
+        "type": "string"
+      },
+      "id": {
+        "format": "uuid",
+        "title": "Id",
+        "type": "string"
+      },
+      "security_version": {
+        "minimum": 0,
+        "title": "Security Version",
+        "type": "integer"
+      },
+      "serial_number": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Serial Number",
+        "type": "string"
+      },
+      "vehicle_id": {
+        "format": "uuid",
+        "title": "Vehicle Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ecu_type",
+      "hardware_version",
+      "firmware_version",
+      "serial_number",
+      "id",
+      "vehicle_id",
+      "created_at",
+      "created_by",
+      "security_version"
+    ],
+    "title": "ExecutionECUView",
+    "type": "object"
+  },
   "ota-job-cancel/1.0": {
     "additionalProperties": false,
     "properties": {
@@ -763,6 +1121,219 @@
       "created_by"
     ],
     "title": "JobView",
+    "type": "object"
+  },
+  "ota-manifest/2.0": {
+    "additionalProperties": false,
+    "properties": {
+      "artifact_bucket": {
+        "maxLength": 63,
+        "minLength": 3,
+        "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$",
+        "title": "Artifact Bucket",
+        "type": "string"
+      },
+      "artifact_key": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "title": "Artifact Key",
+        "type": "string"
+      },
+      "artifact_version": {
+        "maxLength": 255,
+        "minLength": 1,
+        "title": "Artifact Version",
+        "type": "string"
+      },
+      "ecu_type": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Ecu Type",
+        "type": "string"
+      },
+      "hardware_version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Hardware Version",
+        "type": "string"
+      },
+      "key_id": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Key Id",
+        "type": "string"
+      },
+      "protocol": {
+        "const": "cv-ota/2",
+        "default": "cv-ota/2",
+        "title": "Protocol",
+        "type": "string"
+      },
+      "release_id": {
+        "format": "uuid",
+        "title": "Release Id",
+        "type": "string"
+      },
+      "security_version": {
+        "maximum": 9223372036854775807,
+        "minimum": 1,
+        "title": "Security Version",
+        "type": "integer"
+      },
+      "sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Sha256",
+        "type": "string"
+      },
+      "size_bytes": {
+        "exclusiveMinimum": 0,
+        "maximum": 4294967296,
+        "title": "Size Bytes",
+        "type": "integer"
+      },
+      "tenant_id": {
+        "maxLength": 255,
+        "minLength": 1,
+        "title": "Tenant Id",
+        "type": "string"
+      },
+      "version": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Version",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ecu_type",
+      "hardware_version",
+      "version",
+      "artifact_bucket",
+      "artifact_key",
+      "artifact_version",
+      "sha256",
+      "size_bytes",
+      "tenant_id",
+      "release_id",
+      "security_version",
+      "key_id"
+    ],
+    "title": "SignedManifest",
+    "type": "object"
+  },
+  "ota-report/2.0": {
+    "additionalProperties": false,
+    "properties": {
+      "claim_token": {
+        "format": "uuid",
+        "title": "Claim Token",
+        "type": "string"
+      },
+      "event_id": {
+        "format": "uuid",
+        "title": "Event Id",
+        "type": "string"
+      },
+      "failure_code": {
+        "anyOf": [
+          {
+            "enum": [
+              "download_failed",
+              "integrity_failed",
+              "health_failed"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Failure Code"
+      },
+      "observed_sha256": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Observed Sha256"
+      },
+      "occurred_at": {
+        "format": "date-time",
+        "title": "Occurred At",
+        "type": "string"
+      },
+      "sequence": {
+        "maximum": 2,
+        "minimum": 1,
+        "title": "Sequence",
+        "type": "integer"
+      },
+      "status": {
+        "enum": [
+          "installing",
+          "succeeded",
+          "failed"
+        ],
+        "title": "Status",
+        "type": "string"
+      }
+    },
+    "required": [
+      "event_id",
+      "claim_token",
+      "sequence",
+      "status",
+      "occurred_at"
+    ],
+    "title": "OTAReport",
+    "type": "object"
+  },
+  "ota-verification/2.0": {
+    "additionalProperties": false,
+    "properties": {
+      "key_id": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Key Id",
+        "type": "string"
+      },
+      "operation_id": {
+        "format": "uuid",
+        "title": "Operation Id",
+        "type": "string"
+      },
+      "security_version": {
+        "maximum": 9223372036854775807,
+        "minimum": 1,
+        "title": "Security Version",
+        "type": "integer"
+      },
+      "signature": {
+        "maxLength": 88,
+        "minLength": 88,
+        "title": "Signature",
+        "type": "string"
+      }
+    },
+    "required": [
+      "operation_id",
+      "key_id",
+      "security_version",
+      "signature"
+    ],
+    "title": "VerificationRequest",
     "type": "object"
   },
   "telemetry/1.0": {

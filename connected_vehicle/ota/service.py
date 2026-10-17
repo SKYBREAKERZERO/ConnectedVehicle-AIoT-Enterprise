@@ -21,6 +21,7 @@ from connected_vehicle.ota.contracts import (
     JobResult,
     JobView,
 )
+from connected_vehicle.ota.execution_contracts import ACTIVE_STATES
 from connected_vehicle.ota.models import ECUModel, FirmwareModel, JobModel, OTAAuditModel
 from connected_vehicle.vehicle.persistence.models import VehicleModel
 from enterprise_platform.database.tenant import set_tenant_scope
@@ -44,6 +45,12 @@ def operation_key(value: str) -> str:
             "A nonempty Idempotency-Key of at most 255 characters is required."
         )
     return value
+
+
+def legacy_job(row: JobModel) -> JobView:
+    if row.status not in {"pending_verification", "cancelled"}:
+        raise ConflictError("Job opted into execution v2; query /v2/ota/jobs/" + row.id)
+    return JobView.model_validate(row)
 
 
 class OTAService:
@@ -272,7 +279,7 @@ class OTAService:
                     release,
                 ):
                     raise ConflictError("Idempotency-Key belongs to a different OTA job.")
-                return JobResult(created=False, job=JobView.model_validate(previous))
+                return JobResult(created=False, job=legacy_job(previous))
             if (target.ecu_type, target.hardware_version) != (
                 firmware.ecu_type,
                 firmware.hardware_version,
@@ -287,7 +294,7 @@ class OTAService:
                 select(JobModel.id).where(
                     JobModel.tenant_id == tenant,
                     JobModel.ecu_id == ecu,
-                    JobModel.status == "pending_verification",
+                    JobModel.status.in_(ACTIVE_STATES),
                 )
             )
             if active is not None:
@@ -327,7 +334,7 @@ class OTAService:
             row = await session.get(JobModel, (tenant, job))
             if row is None:
                 raise ResourceNotFoundError()
-            return JobView.model_validate(row)
+            return legacy_job(row)
 
     async def list_jobs(
         self,
@@ -347,6 +354,7 @@ class OTAService:
                         JobModel.vehicle_id == vehicle,
                         JobModel.ecu_id == ecu,
                         JobModel.id > after,
+                        JobModel.status.in_(("pending_verification", "cancelled")),
                     )
                     .order_by(JobModel.id)
                     .limit(limit)

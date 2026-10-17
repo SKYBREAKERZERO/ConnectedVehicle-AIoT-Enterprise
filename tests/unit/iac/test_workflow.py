@@ -58,6 +58,8 @@ def test_runtime_gate_cannot_skip_contracts_or_quality_checks() -> None:
         "tests/integration/day17",
         "scripts.day17_rules",
         "scripts.day17_release --check-existing",
+        "tests/integration/day18",
+        "scripts.day18_evidence --check-existing",
         "tests/integration/security/test_database_runtime_permissions.py",
         "tests/integration/reliability/test_redis_idempotency.py",
         "tests/integration/remote_command/test_remote_command_sqs_worker_integration.py",

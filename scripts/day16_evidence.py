@@ -71,7 +71,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def source_digest() -> str:
     digest = hashlib.sha256()
-    for directory in ("enterprise_platform", "connected_vehicle", "database", "scripts", "tests"):
+    for directory in (
+        "enterprise_platform",
+        "connected_vehicle",
+        "database",
+        "scripts",
+        "tests",
+        "apps",
+        "simulators",
+    ):
         for path in sorted((ROOT / directory).rglob("*.py")):
             digest.update(path.relative_to(ROOT).as_posix().encode() + b"\0")
             digest.update(path.read_bytes())

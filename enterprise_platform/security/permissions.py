@@ -20,6 +20,7 @@ class Permission(StrEnum):
 
     OTA_READ = "ota:read"
     OTA_MANAGE = "ota:manage"
+    OTA_EXECUTE = "ota:execute"
 
 
 ALL_PERMISSIONS: Final[frozenset[Permission]] = frozenset(Permission)

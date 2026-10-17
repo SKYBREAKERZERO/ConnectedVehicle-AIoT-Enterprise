@@ -36,6 +36,13 @@ DO $$ BEGIN
     GRANT UPDATE (status,updated_at) ON public.ota_jobs TO app_user;
   END IF;
 END $$;
+DO $$ BEGIN
+  IF to_regclass('public.ota_executions') IS NOT NULL THEN
+    GRANT SELECT,INSERT ON public.ota_executions,public.ota_execution_reports TO app_user;
+    GRANT UPDATE (device_id,claim_token,claim_operation,report_sequence) ON public.ota_executions TO app_user;
+    GRANT UPDATE (firmware_version,security_version) ON public.ecu_inventory TO app_user;
+  END IF;
+END $$;
 -- New migration-owned tables never automatically become accessible to runtimes.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC, app_user, outbox_worker, remote_command_worker;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC, app_user, outbox_worker, remote_command_worker;

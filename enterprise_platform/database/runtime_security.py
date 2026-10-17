@@ -7,7 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from enterprise_platform.database.credentials import DatabaseRuntime, runtime_database_user
 
-OTA_TABLES = ("ecu_inventory", "firmware_releases", "ota_jobs", "ota_audit_events")
+OTA_TABLES = (
+    "ecu_inventory",
+    "firmware_releases",
+    "ota_jobs",
+    "ota_audit_events",
+    "ota_executions",
+    "ota_execution_reports",
+)
 
 
 async def verify_runtime_database_security(
@@ -119,7 +126,8 @@ async def verify_runtime_database_security(
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname='public' AND c.relname IN
               ('vehicles','remote_commands','command_reports','telemetry_samples','outbox_events',
-               'ecu_inventory','firmware_releases','ota_jobs','ota_audit_events')
+               'ecu_inventory','firmware_releases','ota_jobs','ota_audit_events',
+               'ota_executions','ota_execution_reports')
         """)
                 )
             )
@@ -133,10 +141,12 @@ async def verify_runtime_database_security(
             WHERE n.nspname='public'
               AND c.relname IN ('vehicles','remote_commands','command_reports',
                                 'telemetry_samples','outbox_events','ecu_inventory',
-                                'firmware_releases','ota_jobs','ota_audit_events')
+                                'firmware_releases','ota_jobs','ota_audit_events',
+                                'ota_executions','ota_execution_reports')
               AND c.relrowsecurity AND pg_get_userbyid(c.relowner) <> current_user
               AND (c.relname NOT IN ('ecu_inventory','firmware_releases','ota_jobs',
-                                    'ota_audit_events') OR c.relforcerowsecurity)
+                                    'ota_audit_events','ota_executions','ota_execution_reports')
+                   OR c.relforcerowsecurity)
               AND EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid
                           AND p.polname='tenant_guard' AND NOT p.polpermissive)
               AND EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid
@@ -161,7 +171,7 @@ async def verify_runtime_database_security(
                   AND a.attname='dispatch_order' AND a.attidentity='a' AND NOT a.attisdropped""")
         )
         # Catalogs reveal structure without granting workers access to other runtimes' tables.
-        if protected != 9 or generated_tenant != 1 or dispatch_order != 1:
+        if protected != 11 or generated_tenant != 1 or dispatch_order != 1:
             raise RuntimeError("Unsafe runtime database schema; apply tenant RLS migrations")
         for table in OTA_TABLES:
             privileges = (
@@ -186,7 +196,7 @@ async def verify_runtime_database_security(
                 insert=allowed,
                 excess=False,
                 broad_update=False,
-                any_update=allowed and table == "ota_jobs",
+                any_update=allowed and table in {"ota_jobs", "ecu_inventory", "ota_executions"},
             ):
                 raise RuntimeError("Unsafe OTA runtime privilege contract")
         immutable_job_columns = (
@@ -207,6 +217,69 @@ async def verify_runtime_database_security(
                 {"column": column},
             ):
                 raise RuntimeError("Unsafe OTA immutable job privileges")
+        for table, columns in {
+            "ecu_inventory": (
+                "tenant_id",
+                "id",
+                "vehicle_id",
+                "ecu_type",
+                "hardware_version",
+                "serial_number",
+                "created_at",
+                "created_by",
+            ),
+            "ota_executions": (
+                "tenant_id",
+                "id",
+                "release_id",
+                "verification_operation",
+                "verification_sha256",
+                "manifest",
+                "signature",
+                "verified_at",
+            ),
+        }.items():
+            for column in columns:
+                if await connection.scalar(
+                    text("SELECT has_column_privilege(:table,:column,'UPDATE')"),
+                    {"table": table, "column": column},
+                ):
+                    raise RuntimeError("Unsafe OTA execution immutable privileges")
+        guards = (
+            (
+                await connection.execute(
+                    text("""SELECT p.prosrc,p.prosecdef,p.proconfig,
+            pg_get_userbyid(p.proowner) AS owner,t.tgenabled::text AS tgenabled,
+            t.tgtype,t.tgattr::text AS guard_columns,t.tgqual,t.tgconstraint
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+            JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname='public' AND c.relname='ecu_inventory'
+              AND t.tgname='ota_monotonic_version' AND NOT t.tgisinternal""")
+                )
+            )
+            .mappings()
+            .all()
+        )
+        body = (
+            "BEGIN IF NEW.security_version < OLD.security_version OR "
+            "(NEW.firmware_version IS DISTINCT FROM OLD.firmware_version AND "
+            "NEW.security_version <= OLD.security_version) THEN "
+            "RAISE EXCEPTION 'OTA security counter cannot regress' USING ERRCODE='23514'; "
+            "END IF; RETURN NEW; END;"
+        )
+        if len(guards) != 1 or any(
+            " ".join(row["prosrc"].split()) != body
+            or row["prosecdef"]
+            or row["proconfig"] != ["search_path=pg_catalog"]
+            or row["tgenabled"] != "O"
+            or row["tgtype"] != 19
+            or row["guard_columns"] != ""
+            or row["tgqual"] is not None
+            or row["tgconstraint"] != 0
+            or row["owner"] == role["username"]
+            for row in guards
+        ):
+            raise RuntimeError("Unsafe OTA monotonic security counter guard")
 
 
 def validate_policy_contract(policies: list[dict[str, Any]]) -> None:
@@ -227,7 +300,7 @@ def validate_policy_contract(policies: list[dict[str, Any]]) -> None:
         )
     }
     expected["outbox_events"] = f"((CURRENT_USER = 'outbox_worker'::name) OR {guard})"
-    if len(policies) != 18:
+    if len(policies) != 22:
         raise RuntimeError("Unsafe runtime policy contract: unexpected policy count")
     seen: set[tuple[str, str]] = set()
     for policy in policies:

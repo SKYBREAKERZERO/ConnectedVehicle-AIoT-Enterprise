@@ -26,7 +26,12 @@ def local_environment() -> Iterator[Settings]:
     try:
         for name, port, image, arguments in (
             (prefix + "-db", 5432, "postgres:16-alpine", ["-e", "POSTGRES_PASSWORD=test-admin"]),
-            (prefix + "-aws", 4566, LOCALSTACK, ["-e", "SERVICES=iam,kms,secretsmanager,sts,sqs"]),
+            (
+                prefix + "-aws",
+                4566,
+                LOCALSTACK,
+                ["-e", "SERVICES=iam,kms,secretsmanager,sts,sqs,s3"],
+            ),
         ):
             labels = (
                 ["--label", "cv.day16.run=" + os.environ["DAY16_DEMO_OWNER"]]

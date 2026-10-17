@@ -14,6 +14,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "aiomqtt==2.5.1",
     "PyJWT[crypto]>=2.10,<3.0",
+    "cryptography>=44.0",
     "prometheus-client>=0.21,<1.0",
     "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
     "fastapi>=0.115,<1.0",
@@ -41,6 +42,7 @@ vehicle-remote-command = "apps.remote_command.__main__:main"
 vehicle-device-simulator = "simulators.vehicle_device.__main__:main"
 vehicle-body-ecu = "simulators.body_ecu.__main__:main"
 vehicle-gateway = "simulators.gateway.__main__:main"
+vehicle-ota-simulator = "simulators.ota_device.__main__:main"
 
 
 [project.optional-dependencies]
