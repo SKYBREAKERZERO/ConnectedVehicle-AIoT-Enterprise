@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from enterprise_platform.database.models.outbox import (
@@ -147,6 +147,8 @@ class SQLAlchemyOutboxRepository:
                 OutboxEventModel.id == normalized_outbox_id,
                 OutboxEventModel.status == OutboxStatus.PROCESSING.value,
                 OutboxEventModel.claim_token == normalized_claim_token,
+                OutboxEventModel.lease_expires_at > resolved_published_at,
+                OutboxEventModel.lease_expires_at > func.clock_timestamp(),
             )
             .values(
                 status=OutboxStatus.PUBLISHED.value,
@@ -186,6 +188,7 @@ class SQLAlchemyOutboxRepository:
                 OutboxEventModel.id == normalized_outbox_id,
                 OutboxEventModel.status == OutboxStatus.PROCESSING.value,
                 OutboxEventModel.claim_token == normalized_claim_token,
+                OutboxEventModel.lease_expires_at > func.clock_timestamp(),
             )
             .values(
                 status=OutboxStatus.PENDING.value,
@@ -220,6 +223,8 @@ class SQLAlchemyOutboxRepository:
                 OutboxEventModel.id == outbox_id,
                 OutboxEventModel.status == OutboxStatus.PROCESSING.value,
                 OutboxEventModel.claim_token == claim_token,
+                OutboxEventModel.lease_expires_at > failed_at,
+                OutboxEventModel.lease_expires_at > func.clock_timestamp(),
             )
             .values(
                 status=OutboxStatus.FAILED.value,

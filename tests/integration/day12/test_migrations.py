@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from enterprise_platform.database.engine import build_database_url, create_database_engine
 from enterprise_platform.database.migration_guard import MIGRATION_LOCK_KEY
+from enterprise_platform.database.runtime_security import OTA_TABLES
 from tests.e2e.test_independent_runtimes import ROOT, docker
 from tests.integration.day12.conftest import evidence
 from tests.integration.day12.migration_support import (
@@ -105,12 +106,20 @@ async def test_released_backup_and_fresh_database_security_converge(rehearsal: H
         assert [
             row
             for row in after["catalog"]["indexes"]
-            if row["tablename"] != "runtime_tenant_bindings"
+            if row["tablename"] not in {"runtime_tenant_bindings", *OTA_TABLES}
+            and row["indexname"] != "uq_vehicles_tenant_id"
         ] == before["catalog"]["indexes"]
         for section in ("tables", "columns", "constraints", "table_grants", "column_grants"):
             original = [row for row in before["catalog"][section] if row["relname"] in TABLES]
-            current = [row for row in after["catalog"][section] if row["relname"] in TABLES]
+            current = [
+                row
+                for row in after["catalog"][section]
+                if row["relname"] in TABLES and row.get("conname") != "uq_vehicles_tenant_id"
+            ]
             assert original == current
+        assert any(
+            row["conname"] == "uq_vehicles_tenant_id" for row in after["catalog"]["constraints"]
+        )
         for section in ("functions", "function_grants"):
             assert [
                 row for row in after["catalog"][section] if row["proname"] == "outbox_event_tenant"

@@ -82,7 +82,11 @@ class OIDCVerifier:
             p for p in Permission if self.settings.oidc_scope_prefix + p.value in scope.split()
         }
         if kind is PrincipalType.DEVICE:
-            allowed &= {Permission.TELEMETRY_PUBLISH, Permission.COMMAND_REPORT}
+            allowed &= {
+                Permission.TELEMETRY_PUBLISH,
+                Permission.COMMAND_REPORT,
+                Permission.OTA_EXECUTE,
+            }
         return SecurityContext(
             Principal(subject, kind, tenant_id=tenant, device_vehicle_id=vehicle),
             granted_permissions=frozenset(allowed),

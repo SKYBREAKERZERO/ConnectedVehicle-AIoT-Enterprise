@@ -1,0 +1,23 @@
+groups:
+- name: local-readiness-slo
+  rules:
+  - record: vehicle:readiness_error_ratio:5m
+    expr: (sum(rate(vehicle_http_requests_total{route="/health/ready",status!="200"}[5m])) or vector(0)) / clamp_min(sum(rate(vehicle_http_requests_total{route="/health/ready"}[5m])),
+      0.001)
+  - alert: VehicleReadinessBudgetBurn
+    expr: vehicle:readiness_error_ratio:5m > 0.02
+    for: 2m
+    labels:
+      severity: warning
+      profile: local_drill
+    annotations:
+      summary: Readiness error budget is burning
+      runbook_url: https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/blob/main/docs/DAY17_OPERATIONS.md#readiness-budget-burn
+  - alert: VehicleRecoveryEscalated
+    expr: sum(increase(vehicle_recovery_transitions_total{state=~"ESCALATED|QUARANTINE"}[5m])) > 0
+    labels:
+      severity: critical
+      profile: local_drill
+    annotations:
+      summary: Recovery requires reconciliation
+      runbook_url: https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/blob/main/docs/DAY17_OPERATIONS.md#recovery-escalated

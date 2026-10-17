@@ -23,6 +23,7 @@ class MemorySecrets:
             raise RuntimeError("simulated network failure; sensitive-candidate-do-not-log")
 
     def create_secret(self, *, Name: str) -> dict[str, str]:
+        self.fault("create_secret")
         self.values[Name], self.labels[Name] = {}, {}
         return {"ARN": Name}
 
@@ -30,7 +31,7 @@ class MemorySecrets:
         self.fault("describe_secret")
         if SecretId not in self.values:
             raise ClientError({"Error": {"Code": "ResourceNotFoundException"}}, "DescribeSecret")
-        return {"VersionIdsToStages": self.labels[SecretId]}
+        return {"Name": SecretId, "VersionIdsToStages": self.labels[SecretId]}
 
     def put_secret_value(
         self,
@@ -67,6 +68,11 @@ class MemorySecrets:
         self.fault("update_secret_version_stage")
         if RemoveFromVersionId is not None:
             self.labels[SecretId][RemoveFromVersionId].remove(VersionStage)
+            if VersionStage == "AWSCURRENT" and RemoveFromVersionId != MoveToVersionId:
+                for stages in self.labels[SecretId].values():
+                    if "AWSPREVIOUS" in stages:
+                        stages.remove("AWSPREVIOUS")
+                self.labels[SecretId][RemoveFromVersionId].append("AWSPREVIOUS")
         if MoveToVersionId is not None:
             self.labels[SecretId][MoveToVersionId].append(VersionStage)
 

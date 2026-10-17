@@ -26,5 +26,14 @@ def create_database_engine(settings: Settings) -> AsyncEngine:
         pool_timeout=settings.database_pool_timeout_seconds,
         connect_args={
             "timeout": settings.database_connect_timeout_seconds,
+            "server_settings": {
+                "lock_timeout": str(max(1, int(settings.database_lock_timeout_seconds * 1000))),
+                "statement_timeout": str(
+                    max(1, int(settings.database_statement_timeout_seconds * 1000))
+                ),
+                "idle_in_transaction_session_timeout": str(
+                    max(1, int(settings.database_idle_transaction_timeout_seconds * 1000))
+                ),
+            },
         },
     )

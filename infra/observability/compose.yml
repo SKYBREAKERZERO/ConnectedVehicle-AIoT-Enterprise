@@ -23,6 +23,7 @@ services:
     volumes:
       - ./local-prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./day17-slo.yml:/etc/prometheus/day17-slo.yml:ro
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
   alertmanager:

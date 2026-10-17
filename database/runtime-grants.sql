@@ -27,6 +27,43 @@ GRANT UPDATE (status, updated_at) ON public.remote_commands TO remote_command_wo
 -- New API device ingress has only append/read ledger privileges and status updates.
 GRANT SELECT, INSERT ON public.command_reports, public.telemetry_samples TO app_user;
 GRANT UPDATE (status, updated_at) ON public.remote_commands TO app_user;
+-- OTA foundation: immutable inventory/releases, append-only audit, job status only.
+-- The conditional also permits pre-OTA backup rehearsals to reset legacy grants.
+DO $$ BEGIN
+  IF to_regclass('public.ecu_inventory') IS NOT NULL THEN
+    GRANT SELECT,INSERT ON public.ecu_inventory,public.firmware_releases,
+      public.ota_jobs,public.ota_audit_events TO app_user;
+    GRANT UPDATE (status,updated_at) ON public.ota_jobs TO app_user;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF to_regclass('public.ota_executions') IS NOT NULL THEN
+    GRANT SELECT,INSERT ON public.ota_executions,public.ota_execution_reports TO app_user;
+    GRANT UPDATE (device_id,claim_token,claim_operation,report_sequence) ON public.ota_executions TO app_user;
+    -- Legacy revision grants are removed by the forward security migration.
+    REVOKE UPDATE (firmware_version,security_version) ON public.ecu_inventory FROM app_user;
+    IF to_regprocedure('public.ota_apply_installation(text,text)') IS NOT NULL THEN
+      REVOKE INSERT ON public.ecu_inventory FROM app_user;
+      GRANT INSERT (tenant_id,id,vehicle_id,ecu_type,hardware_version,firmware_version,
+                    serial_number,created_at,created_by) ON public.ecu_inventory TO app_user;
+      GRANT EXECUTE ON FUNCTION public.ota_apply_installation(text,text),
+        public.ota_accept_device_nonce(text,text,uuid) TO app_user;
+    END IF;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF to_regprocedure('public.ota_transition(text,text)') IS NOT NULL THEN
+    REVOKE UPDATE (status,updated_at) ON public.ota_jobs FROM app_user;
+    REVOKE UPDATE (device_id,claim_token,claim_operation,report_sequence)
+      ON public.ota_executions FROM app_user;
+    REVOKE INSERT ON public.ota_executions,public.ota_execution_reports,public.ota_audit_events
+      FROM app_user;
+    REVOKE EXECUTE ON FUNCTION public.ota_apply_installation(text,text) FROM app_user;
+    GRANT EXECUTE ON FUNCTION public.ota_claim_resolution(text,text,text),public.ota_transition(text,text),public.ota_execution_ready(text,text),
+      public.ota_publisher_trusted(text,text),public.ota_cancel_pending(text,text,text,text,text,text,text),
+      public.ota_append_intent_audit(text,text,text,text,text,text,text,text,text) TO app_user;
+  END IF;
+END $$;
 -- New migration-owned tables never automatically become accessible to runtimes.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC, app_user, outbox_worker, remote_command_worker;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC, app_user, outbox_worker, remote_command_worker;

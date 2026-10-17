@@ -185,6 +185,9 @@ async def test_five_real_metric_alerts_firing_webhook_resolved(
                     ":/etc/prometheus/prometheus.yml:ro",
                     "-v",
                     f"{ROOT / 'infra/observability/alerts.yml'}:/etc/prometheus/alerts.yml:ro",
+                    "-v",
+                    f"{ROOT / 'infra/observability/day17-slo.yml'}"
+                    ":/etc/prometheus/day17-slo.yml:ro",
                 ]
             docker(
                 "run",

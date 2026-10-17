@@ -33,6 +33,10 @@ STAGES = (
     "migration-scale-locks",
     "migration-guards",
     "credential-rotation",
+    "credential-recovery-hardening",
+    "credential-lifecycle",
+    "credential-version-competition",
+    "credential-cloud-lifecycle",
 )
 CATALOG_SECTIONS = {
     "tables",
@@ -52,7 +56,7 @@ CATALOG_SECTIONS = {
     "sequences",
 }
 LEGACY = "a37e610c952d"
-HEAD = "b48f720da63e"
+HEAD = "f94d016b238a"
 
 
 def source_commit() -> str:
@@ -341,6 +345,114 @@ def validate(
         )
     ):
         raise ValueError("Credential rotation recovery evidence incomplete")
+    hardening = reports["credential-recovery-hardening"]
+    required_cases = {
+        "legacy-version",
+        "invalid-candidate",
+        "unknown-candidate",
+        "bootstrap-role",
+        "migration-role",
+        "foreign-secret",
+        "wrong-host",
+        "wrong-port",
+        "wrong-database",
+        "wrong-environment",
+        "wrong-tenant",
+        "wrong-region",
+        "wrong-endpoint",
+        "unknown-phase",
+        "duplicate-entry",
+        "missing-runtime",
+        "foreign-version-payload",
+    }
+    if (
+        hardening["scope"] != "localstack-and-postgresql"
+        or type(hardening["journal_version"]) is not int
+        or hardening["journal_version"] != 2
+        or set(hardening["invalid_cases"]) != required_cases
+        or len(hardening["invalid_cases"]) != len(required_cases)
+        or hardening["iam_enforcement_verified"] is not False
+        or any(
+            hardening[key] is not True
+            for key in (
+                "invalid_journal_no_side_effects",
+                "missing_secret_not_created",
+                "missing_secret_no_password_changes",
+                "compensation_failure_observed",
+                "explicit_recovery_succeeded",
+                "repeated_recovery_no_side_effects",
+            )
+        )
+    ):
+        raise ValueError("Credential recovery hardening evidence incomplete")
+    lifecycle = reports["credential-lifecycle"]
+    if (
+        lifecycle.get("scope") != "localstack-and-postgresql"
+        or type(lifecycle.get("postgres_major")) is not int
+        or lifecycle.get("postgres_major") != 16
+        or lifecycle.get("iam_enforcement_verified") is not False
+        or any(
+            lifecycle.get(key) is not True
+            for key in (
+                "terminal_checkpoint_failure_verified",
+                "rollback_failure_metadata_verified",
+                "lock_failure_no_side_effects",
+                "legacy_terminal_retirement_verified",
+                "audit_archive_verified",
+                "cancelled_request_lock_verified",
+                "foreign_pending_no_side_effects",
+                "scheduled_deletion_no_side_effects",
+                "partial_retirement_recovered",
+                "rollback_retirement_recovered",
+                "retirement_passwords_unchanged",
+                "previous_version_retained",
+                "pending_retired",
+                "recovery_idempotent",
+                "advisory_lock_verified",
+                "concurrent_rotations_serialized",
+                "old_completed_operation_isolated",
+                "audit_secret_free",
+            )
+        )
+    ):
+        raise ValueError("Credential lifecycle evidence incomplete")
+    competition = reports["credential-version-competition"]
+    if (
+        competition.get("scope") != "localstack-and-postgresql"
+        or competition.get("iam_enforcement_verified") is not False
+        or len(competition.get("cases", [])) != 2
+        or {row.get("case") for row in competition["cases"]}
+        != {"prepare-pending", "promotion-current"}
+        or any(
+            row.get(key) is not True
+            for row in competition["cases"]
+            for key in (
+                "database_unchanged_after_barrier",
+                "foreign_version_preserved",
+                "unresolved_operation_recorded",
+            )
+        )
+    ):
+        raise ValueError("Credential version competition evidence incomplete")
+    cloud = reports["credential-cloud-lifecycle"]
+    if (
+        cloud.get("scope") != "localstack-only"
+        or cloud.get("iam_enforcement_verified") is not False
+        or cloud.get("stages") != ["created", "rotated", "recovered", "retired"]
+        or any(
+            cloud.get(key) is not True
+            for key in (
+                "configuration_preserved",
+                "kms_context_verified",
+                "disabled_key_rejected",
+                "disabled_rotation_rejected",
+                "pending_key_deletion_rejected",
+                "revoked_iam_policy_rejected",
+                "wildcard_policy_rejected",
+            )
+        )
+    ):
+        raise ValueError("Credential cloud lifecycle evidence incomplete")
     rls = reports["12a-rls"]
     if (
         rls["dedicated_roles"] != 6
