@@ -299,6 +299,14 @@ class OTAService:
             )
             if active is not None:
                 raise ConflictError("ECU already has an outstanding OTA job.")
+            if await session.scalar(
+                text("""SELECT EXISTS(SELECT FROM ota_campaign_targets t
+              JOIN ota_campaigns c ON c.tenant_id=t.tenant_id AND c.id=t.campaign_id
+              WHERE t.tenant_id=:tenant AND t.ecu_id=:ecu
+                AND c.status IN ('frozen','running','paused'))"""),
+                dict(tenant=tenant, ecu=ecu),
+            ):
+                raise ConflictError("ECU is reserved by a frozen campaign; use campaign controls.")
             now = datetime.now(UTC)
             row = JobModel(
                 tenant_id=tenant,

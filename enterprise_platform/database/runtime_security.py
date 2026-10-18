@@ -7,6 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from enterprise_platform.database.credentials import DatabaseRuntime, runtime_database_user
 from enterprise_platform.database.ota_authority_contract import FUNCTIONS
+from enterprise_platform.database.ota_campaign_contract import (
+    CAMPAIGN_READY,
+)
+from enterprise_platform.database.ota_campaign_contract import (
+    FUNCTIONS as CAMPAIGN_FUNCTIONS,
+)
+from enterprise_platform.database.ota_campaign_contract import TABLES as CAMPAIGN_TABLES
 from enterprise_platform.database.ota_lifecycle_contract import FUNCTIONS as LIFECYCLE_FUNCTIONS
 from enterprise_platform.database.ota_lifecycle_contract import INITIAL_BODY
 
@@ -17,6 +24,9 @@ OTA_TABLES = (
     "ota_audit_events",
     "ota_executions",
     "ota_execution_reports",
+    "ota_campaigns",
+    "ota_campaign_targets",
+    "ota_campaign_events",
 )
 
 
@@ -130,7 +140,8 @@ async def verify_runtime_database_security(
             WHERE n.nspname='public' AND c.relname IN
               ('vehicles','remote_commands','command_reports','telemetry_samples','outbox_events',
                'ecu_inventory','firmware_releases','ota_jobs','ota_audit_events',
-               'ota_executions','ota_execution_reports')
+               'ota_executions','ota_execution_reports',
+               'ota_campaigns','ota_campaign_targets','ota_campaign_events')
         """)
                 )
             )
@@ -145,10 +156,12 @@ async def verify_runtime_database_security(
               AND c.relname IN ('vehicles','remote_commands','command_reports',
                                 'telemetry_samples','outbox_events','ecu_inventory',
                                 'firmware_releases','ota_jobs','ota_audit_events',
-                                'ota_executions','ota_execution_reports')
+                                'ota_executions','ota_execution_reports',
+               'ota_campaigns','ota_campaign_targets','ota_campaign_events')
               AND c.relrowsecurity AND pg_get_userbyid(c.relowner) <> current_user
               AND (c.relname NOT IN ('ecu_inventory','firmware_releases','ota_jobs',
-                                    'ota_audit_events','ota_executions','ota_execution_reports')
+                                    'ota_audit_events','ota_executions','ota_execution_reports',
+               'ota_campaigns','ota_campaign_targets','ota_campaign_events')
                    OR c.relforcerowsecurity)
               AND EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid
                           AND p.polname='tenant_guard' AND NOT p.polpermissive)
@@ -174,7 +187,7 @@ async def verify_runtime_database_security(
                   AND a.attname='dispatch_order' AND a.attidentity='a' AND NOT a.attisdropped""")
         )
         # Catalogs reveal structure without granting workers access to other runtimes' tables.
-        if protected != 11 or generated_tenant != 1 or dispatch_order != 1:
+        if protected != 5 + len(OTA_TABLES) or generated_tenant != 1 or dispatch_order != 1:
             raise RuntimeError("Unsafe runtime database schema; apply tenant RLS migrations")
         for table in OTA_TABLES:
             privileges = (
@@ -300,9 +313,10 @@ async def verify_runtime_database_security(
             **FUNCTIONS,
             **{
                 name: (arguments, body)
-                for name, (arguments, _, body) in LIFECYCLE_FUNCTIONS.items()
+                for name, (arguments, _, body) in (LIFECYCLE_FUNCTIONS | CAMPAIGN_FUNCTIONS).items()
             },
         }
+        contracts["ota_execution_ready"] = ("p_tenant text,p_job text", CAMPAIGN_READY)
         for name, (_, expected_body) in contracts.items():
             rows = (
                 (
@@ -373,7 +387,10 @@ def validate_policy_contract(policies: list[dict[str, Any]]) -> None:
         )
     }
     expected["outbox_events"] = f"((CURRENT_USER = 'outbox_worker'::name) OR {guard})"
-    if len(policies) != 22:
+    expected.update(
+        {table: "((tenant_id)::text = runtime_tenant_binding())" for table in CAMPAIGN_TABLES}
+    )
+    if len(policies) != 2 * len(expected):
         raise RuntimeError("Unsafe runtime policy contract: unexpected policy count")
     seen: set[tuple[str, str]] = set()
     for policy in policies:

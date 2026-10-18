@@ -45,6 +45,8 @@ def test_missing_day17_contract_is_rejected_even_if_main_did_not_have_ota(
         "scripts/iac/checkov.yaml",
         "scripts/iac/scan_exceptions.json",
         "scripts/iac/requirements.txt",
+        "pyproject.toml",
+        "alembic.ini",
     ],
 )
 def test_iac_gate_inputs_participate_in_evidence_digest(

@@ -58,9 +58,12 @@ def readiness_digest() -> str:
         "docs/DAY17_OPERATIONS.md",
         "docs/DAY17_OTA_FOUNDATION.md",
         "contracts/platform-v1.json",
+        "pyproject.toml",
+        "alembic.ini",
         ".github/workflows/runtime.yml",
         ".github/workflows/ci.yml",
         "contracts/day17-baseline.json",
+        "contracts/day18-baseline.json",
         "tests/fixtures/day18/manifest-v2-golden.json",
     ):
         digest.update(relative.encode() + b"\0")

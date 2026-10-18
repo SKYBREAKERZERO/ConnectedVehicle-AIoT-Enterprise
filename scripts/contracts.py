@@ -18,6 +18,13 @@ from apps.api.contracts import (
     IssueRemoteCommandResponse,
 )
 from connected_vehicle.device_data import CommandReport, TelemetrySample
+from connected_vehicle.ota.campaign_contracts import (
+    CampaignAction,
+    CampaignCreate,
+    CampaignFreeze,
+    CampaignTarget,
+    CampaignView,
+)
 from connected_vehicle.ota.contracts import (
     CancelJob,
     ECURegistration,
@@ -43,11 +50,18 @@ from enterprise_platform.messaging.envelope import EventEnvelope
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path("contracts/platform-v1.json")
 DAY17 = "cf08e437c79aaa041d25aa49dd572cfb15075048"
+DAY18 = "d336c8a1be301ea08c79374c173ce0a4c8ef4f13"
+DAY18_HASH = "b64860da4564846d2a60e81af929d130cc62cc06002f8091fd3fdeca92997083"
 DAY17_HASH = "4b6c4c2baa1fbbb35a0aac277448cfa3725f39fb50ce88307dccb6aec401e06f"
 
 
 def schemas() -> dict[str, Any]:
     return {
+        "ota-campaign-create/1.0": CampaignCreate.model_json_schema(),
+        "ota-campaign-freeze/1.0": CampaignFreeze.model_json_schema(),
+        "ota-campaign-action/1.0": CampaignAction.model_json_schema(),
+        "ota-campaign/1.0": CampaignView.model_json_schema(),
+        "ota-campaign-target/1.0": CampaignTarget.model_json_schema(),
         "ota-boot-proof/1.0": InstallationProof.model_json_schema(),
         "command-report/1.0": CommandReport.model_json_schema(),
         "telemetry/1.0": TelemetrySample.model_json_schema(),
@@ -153,6 +167,14 @@ def check(root: Path, baseline: Path | None = None) -> list[str]:
                 errors.append(f"{name}: pinned Day17 OTA contract removed")
             else:
                 errors.extend(compatible(schema, expected[name], name))
+    fixed18 = json.loads((ROOT / "contracts/day18-baseline.json").read_text(encoding="utf-8"))
+    if fixed18["commit"] != DAY18 or fixed18["sha256"] != DAY18_HASH:
+        errors.append("Pinned Day18 contract identity changed")
+    for name, schema in fixed18["contracts"].items():
+        if name not in expected:
+            errors.append(f"{name}: pinned Day18 contract removed")
+        else:
+            errors.extend(compatible(schema, expected[name], name))
     committed = json.loads((root / MANIFEST).read_text(encoding="utf-8"))
     if committed != expected:
         errors.append("Contract snapshot does not match runtime models; regenerate and review.")
@@ -171,7 +193,17 @@ def main() -> int:
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--require-day17", action="store_true")
+    parser.add_argument("--require-day18", action="store_true")
     args = parser.parse_args()
+    if args.require_day18:
+        raw18 = subprocess.check_output(
+            ["git", "show", DAY18 + ":contracts/platform-v1.json"], cwd=ROOT
+        )
+        fixed18 = json.loads((ROOT / "contracts/day18-baseline.json").read_text(encoding="utf-8"))
+        if hashlib.sha256(raw18).hexdigest() != DAY18_HASH or fixed18["contracts"] != json.loads(
+            raw18
+        ):
+            raise ValueError("Frozen Day18 contracts differ from pinned source")
     if args.require_day17:
         raw = subprocess.check_output(
             ["git", "show", DAY17 + ":contracts/platform-v1.json"], cwd=ROOT

@@ -37,6 +37,7 @@ dependencies = [
 
 [project.scripts]
 vehicle-api = "apps.api.__main__:main"
+vehicle-campaign = "apps.campaign.__main__:main"
 vehicle-outbox = "apps.outbox.__main__:main"
 vehicle-remote-command = "apps.remote_command.__main__:main"
 vehicle-device-simulator = "simulators.vehicle_device.__main__:main"

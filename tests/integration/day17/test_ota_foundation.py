@@ -37,7 +37,8 @@ async def state(engine: AsyncEngine) -> dict[str, list[str]]:
                 (
                     await connection.scalars(
                         text(
-                            f"SELECT to_jsonb(t)::text FROM public.{table} t ORDER BY tenant_id,id"
+                            f"SELECT to_jsonb(t)::text FROM public.{table} t "
+                            "ORDER BY to_jsonb(t)::text"
                         )
                     )
                 ).all()

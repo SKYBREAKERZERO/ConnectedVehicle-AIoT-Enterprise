@@ -65,5 +65,14 @@ DO $$ BEGIN
   END IF;
 END $$;
 -- New migration-owned tables never automatically become accessible to runtimes.
+DO $$ BEGIN
+  IF to_regprocedure('public.ota_campaign_command(text,text)') IS NOT NULL THEN
+    GRANT SELECT ON public.ota_campaigns,public.ota_campaign_targets,public.ota_campaign_events
+      TO app_user;
+    GRANT EXECUTE ON FUNCTION public.ota_campaign_command(text,text),
+      public.ota_campaign_summary(text,text),public.ota_campaign_job_allowed(text,text)
+      TO app_user;
+  END IF;
+END $$;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC, app_user, outbox_worker, remote_command_worker;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC, app_user, outbox_worker, remote_command_worker;

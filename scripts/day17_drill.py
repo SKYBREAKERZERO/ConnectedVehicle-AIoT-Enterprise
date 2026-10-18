@@ -14,11 +14,11 @@ from scripts.day16_demo import cleanup_owned
 from scripts.day17_release import ROOT
 
 
-def main(*, include_day18: bool = False) -> int:
+def main(*, include_day18: bool = False, include_day19: bool = False) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    prefix = "day18-" if include_day18 else "day17-"
+    prefix = "day19-" if include_day19 else ("day18-" if include_day18 else "day17-")
     directory = (args.output or ROOT / ".runtime-reports" / (prefix + uuid4().hex)).resolve()
     directory.mkdir(parents=True, exist_ok=False)
     owner = uuid4().hex
@@ -40,6 +40,8 @@ def main(*, include_day18: bool = False) -> int:
     targets = ["tests/integration/day16", "tests/integration/day17"]
     if include_day18:
         targets.append("tests/integration/day18")
+    if include_day19:
+        targets.append("tests/integration/day19")
     try:
         process = subprocess.Popen(
             [
@@ -63,7 +65,9 @@ def main(*, include_day18: bool = False) -> int:
             [
                 sys.executable,
                 "-m",
-                "scripts.day18_evidence" if include_day18 else "scripts.day17_release",
+                "scripts.day19_evidence"
+                if include_day19
+                else ("scripts.day18_evidence" if include_day18 else "scripts.day17_release"),
                 "--directory",
                 str(directory),
                 "--check-existing",

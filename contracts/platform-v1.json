@@ -536,6 +536,338 @@
     "title": "InstallationProof",
     "type": "object"
   },
+  "ota-campaign-action/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "operation_id": {
+        "format": "uuid",
+        "title": "Operation Id",
+        "type": "string"
+      },
+      "reason": {
+        "maxLength": 500,
+        "minLength": 1,
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "operation_id",
+      "reason"
+    ],
+    "title": "CampaignAction",
+    "type": "object"
+  },
+  "ota-campaign-create/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "canary_size": {
+        "maximum": 100,
+        "minimum": 1,
+        "title": "Canary Size",
+        "type": "integer"
+      },
+      "key_id": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "title": "Key Id",
+        "type": "string"
+      },
+      "max_failures": {
+        "default": 0,
+        "maximum": 99,
+        "minimum": 0,
+        "title": "Max Failures",
+        "type": "integer"
+      },
+      "name": {
+        "maxLength": 128,
+        "minLength": 1,
+        "title": "Name",
+        "type": "string"
+      },
+      "observation_seconds": {
+        "default": 30,
+        "maximum": 3600,
+        "minimum": 0,
+        "title": "Observation Seconds",
+        "type": "integer"
+      },
+      "operation_id": {
+        "format": "uuid",
+        "title": "Operation Id",
+        "type": "string"
+      },
+      "release_id": {
+        "format": "uuid",
+        "title": "Release Id",
+        "type": "string"
+      },
+      "security_version": {
+        "maximum": 9223372036854775807,
+        "minimum": 1,
+        "title": "Security Version",
+        "type": "integer"
+      },
+      "signature": {
+        "maxLength": 88,
+        "minLength": 88,
+        "title": "Signature",
+        "type": "string"
+      },
+      "wave_size": {
+        "maximum": 100,
+        "minimum": 1,
+        "title": "Wave Size",
+        "type": "integer"
+      },
+      "wave_timeout_seconds": {
+        "default": 900,
+        "maximum": 86400,
+        "minimum": 30,
+        "title": "Wave Timeout Seconds",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "operation_id",
+      "name",
+      "release_id",
+      "security_version",
+      "key_id",
+      "signature",
+      "canary_size",
+      "wave_size"
+    ],
+    "title": "CampaignCreate",
+    "type": "object"
+  },
+  "ota-campaign-freeze/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "ecu_ids": {
+        "items": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "maxItems": 1000,
+        "minItems": 1,
+        "title": "Ecu Ids",
+        "type": "array"
+      },
+      "operation_id": {
+        "format": "uuid",
+        "title": "Operation Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "operation_id",
+      "ecu_ids"
+    ],
+    "title": "CampaignFreeze",
+    "type": "object"
+  },
+  "ota-campaign-target/1.0": {
+    "additionalProperties": false,
+    "properties": {
+      "dispatched": {
+        "title": "Dispatched",
+        "type": "boolean"
+      },
+      "ecu_id": {
+        "format": "uuid",
+        "title": "Ecu Id",
+        "type": "string"
+      },
+      "firmware_version": {
+        "title": "Firmware Version",
+        "type": "string"
+      },
+      "job_id": {
+        "format": "uuid",
+        "title": "Job Id",
+        "type": "string"
+      },
+      "job_status": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Job Status"
+      },
+      "security_version": {
+        "title": "Security Version",
+        "type": "integer"
+      },
+      "vehicle_id": {
+        "format": "uuid",
+        "title": "Vehicle Id",
+        "type": "string"
+      },
+      "wave": {
+        "title": "Wave",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "ecu_id",
+      "vehicle_id",
+      "wave",
+      "job_id",
+      "dispatched",
+      "firmware_version",
+      "security_version",
+      "job_status"
+    ],
+    "title": "CampaignTarget",
+    "type": "object"
+  },
+  "ota-campaign/1.0": {
+    "$defs": {
+      "CampaignState": {
+        "enum": [
+          "draft",
+          "frozen",
+          "running",
+          "paused",
+          "completed",
+          "cancelled"
+        ],
+        "title": "CampaignState",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "canary_size": {
+        "title": "Canary Size",
+        "type": "integer"
+      },
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "created_by": {
+        "title": "Created By",
+        "type": "string"
+      },
+      "current_wave": {
+        "title": "Current Wave",
+        "type": "integer"
+      },
+      "failed": {
+        "title": "Failed",
+        "type": "integer"
+      },
+      "id": {
+        "format": "uuid",
+        "title": "Id",
+        "type": "string"
+      },
+      "job_count": {
+        "title": "Job Count",
+        "type": "integer"
+      },
+      "max_failures": {
+        "title": "Max Failures",
+        "type": "integer"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "observation_seconds": {
+        "title": "Observation Seconds",
+        "type": "integer"
+      },
+      "pause_reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Pause Reason"
+      },
+      "publisher_key_id": {
+        "title": "Publisher Key Id",
+        "type": "string"
+      },
+      "release_id": {
+        "format": "uuid",
+        "title": "Release Id",
+        "type": "string"
+      },
+      "snapshot_sha256": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Snapshot Sha256"
+      },
+      "status": {
+        "$ref": "#/$defs/CampaignState"
+      },
+      "succeeded": {
+        "title": "Succeeded",
+        "type": "integer"
+      },
+      "target_count": {
+        "title": "Target Count",
+        "type": "integer"
+      },
+      "updated_at": {
+        "format": "date-time",
+        "title": "Updated At",
+        "type": "string"
+      },
+      "wave_size": {
+        "title": "Wave Size",
+        "type": "integer"
+      },
+      "wave_timeout_seconds": {
+        "title": "Wave Timeout Seconds",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "release_id",
+      "created_by",
+      "canary_size",
+      "wave_size",
+      "max_failures",
+      "observation_seconds",
+      "wave_timeout_seconds",
+      "publisher_key_id",
+      "status",
+      "current_wave",
+      "snapshot_sha256",
+      "target_count",
+      "job_count",
+      "succeeded",
+      "failed",
+      "pause_reason",
+      "created_at",
+      "updated_at"
+    ],
+    "title": "CampaignView",
+    "type": "object"
+  },
   "ota-claim-request/2.0": {
     "additionalProperties": false,
     "properties": {

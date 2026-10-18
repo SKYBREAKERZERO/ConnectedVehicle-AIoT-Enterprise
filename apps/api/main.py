@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from apps.api.routers.device_data import router as device_data_router
 from apps.api.routers.ota import router as ota_router
+from apps.api.routers.ota_campaign import router as ota_campaign_router
 from apps.api.routers.ota_execution import router as ota_execution_router
 from apps.api.routers.remote_command import (
     router as remote_command_router,
@@ -84,6 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(device_data_router)
     app.include_router(ota_router)
     app.include_router(ota_execution_router)
+    app.include_router(ota_campaign_router)
 
     @app.get(
         "/health/live",
