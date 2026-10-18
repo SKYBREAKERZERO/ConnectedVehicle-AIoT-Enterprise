@@ -101,6 +101,11 @@ publisher revocation with a stale registry, and cancellation. Assertions inspect
 PostgreSQL inventory, report/audit rows and immutable target/job identities, beyond
 HTTP status codes. Day18 still proves signed boot/A-B persistence separately.
 
+The HTTP fault harness uses fresh connections: an intentionally unhandled audit
+failure returns 500 and Uvicorn closes that connection. Reusing it can race the
+close on Linux. Opening a new connection preserves the original rollback and
+idempotency assertions without retrying writes or ignoring transport failures.
+
 Runtime CI runs Day16/17/18 prerequisites and Day19 tests, then requires fresh
 source/run-bound evidence and uploads `day19-local-campaign`. Missing, altered,
 stale, mixed-run or falsely hardware/AWS-verified evidence fails the gate. The

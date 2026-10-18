@@ -306,7 +306,12 @@ async def test_campaign_real_process_rollout_isolation_gates_and_recovery(
             creationflags=PROCESS_FLAGS,
         )
         async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{port}", timeout=40, trust_env=False
+            base_url=f"http://127.0.0.1:{port}",
+            timeout=40,
+            trust_env=False,
+            # An intentionally unhandled 500 closes Uvicorn's connection. On Linux the
+            # close can race the next pooled request; use fresh connections, no retries.
+            limits=httpx.Limits(max_keepalive_connections=0),
         ) as client:
             deadline = time.monotonic() + 40
             while True:
