@@ -11,6 +11,12 @@ Runtime/IaC 检查和 `day12-local-acceptance` 产物为准。
 | 12C | 从真实 SQLite/PostgreSQL 收集指标，五类告警分别观察 Prometheus FIRING、Webhook firing、恢复后的 Webhook resolved，并关联同一次告警。 | day12-12c-alert-lifecycle.json |
 | 12D | 备份 SHA256、完整性校验、恢复前摘要比对、设备归属、命令去重、ACK 前置顺序、事件重放审计和恢复操作审计；审计失败时恢复文件不发布。 | day12-12d-restore.json |
 | 12E | Ruff、格式、mypy、pytest、迁移、Terraform 验证、安全扫描、模块测试和计划策略全部通过；两条必需 CI 通过后合并 PR，再核对 main。 | day12-acceptance.json、iac-gate-summary、GitHub 检查 |
+| Day14 补充 | 缺失 Secret 拒绝；v2 日志配置绑定；非法目标、版本及重复恢复的无副作用检查。 | day12-credential-recovery-hardening.json |
+| Day15 专项 | 真实服务版本争用；KMS/IAM 创建、轮换、恢复、退役配置及负向契约。 | day12-credential-version-competition.json、day12-credential-cloud-lifecycle.json |
+| Day15 补充 | Pending 冲突、资源状态、版本退役、旧日志显式退役、锁失败无副作用、分段审计和取消时管理锁保护。 | day12-credential-lifecycle.json |
+
+Day14 的格式兼容、操作范围与详细断言见 [DAY14_CREDENTIAL_RECOVERY.md](DAY14_CREDENTIAL_RECOVERY.md)。
+Day15 详见 [DAY15_CREDENTIAL_LIFECYCLE.md](DAY15_CREDENTIAL_LIFECYCLE.md)。当前 Gate 检查同一提交与批次的 13 份阶段证据。
 
 所有运行证据、私有备份、SQLite 文件和 Terraform state 放在被 Git 忽略的目录。
 CI 上传的 JSON 不包含数据库密码、Token、SecretString 或 Terraform state。

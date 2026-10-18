@@ -1,0 +1,20 @@
+{
+  "canonical_sha256": "689638b34bf90608905e45c5bce1258f92af94adb5e62f16ac392a27d2000a7a",
+  "manifest": {
+    "artifact_bucket": "local-firmware",
+    "artifact_key": "images/firmware.bin",
+    "artifact_version": "version-1",
+    "ecu_type": "body",
+    "hardware_version": "hw-1",
+    "key_id": "manufacturer-1",
+    "protocol": "cv-ota/2",
+    "release_id": "00000000-0000-4000-8000-000000000001",
+    "security_version": 7,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size_bytes": 4096,
+    "tenant_id": "tenant-a",
+    "version": "2.0"
+  },
+  "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "signature": "PHxbnnOViXM65BF+fgAWNj9nxV7zHxUEwqmejVzVmV7KRYkzi90XM2APwROL75+luzFTp19i3nk+1W/5d32gCg=="
+}

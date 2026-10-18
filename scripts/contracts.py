@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -16,15 +18,51 @@ from apps.api.contracts import (
     IssueRemoteCommandResponse,
 )
 from connected_vehicle.device_data import CommandReport, TelemetrySample
+from connected_vehicle.ota.campaign_contracts import (
+    CampaignAction,
+    CampaignCreate,
+    CampaignFreeze,
+    CampaignTarget,
+    CampaignView,
+)
+from connected_vehicle.ota.contracts import (
+    CancelJob,
+    ECURegistration,
+    ECUView,
+    FirmwareRegistration,
+    FirmwareView,
+    JobRequest,
+    JobView,
+)
+from connected_vehicle.ota.execution_contracts import (
+    ClaimRequest,
+    ClaimResult,
+    ExecutionECUView,
+    ExecutionView,
+    InstallationProof,
+    OTAReport,
+    SignedManifest,
+    VerificationRequest,
+)
 from connected_vehicle.remote_command.wire_contracts import DispatchPayload, RequestedPayload
 from enterprise_platform.messaging.envelope import EventEnvelope
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path("contracts/platform-v1.json")
+DAY17 = "cf08e437c79aaa041d25aa49dd572cfb15075048"
+DAY18 = "d336c8a1be301ea08c79374c173ce0a4c8ef4f13"
+DAY18_HASH = "b64860da4564846d2a60e81af929d130cc62cc06002f8091fd3fdeca92997083"
+DAY17_HASH = "4b6c4c2baa1fbbb35a0aac277448cfa3725f39fb50ce88307dccb6aec401e06f"
 
 
 def schemas() -> dict[str, Any]:
     return {
+        "ota-campaign-create/1.0": CampaignCreate.model_json_schema(),
+        "ota-campaign-freeze/1.0": CampaignFreeze.model_json_schema(),
+        "ota-campaign-action/1.0": CampaignAction.model_json_schema(),
+        "ota-campaign/1.0": CampaignView.model_json_schema(),
+        "ota-campaign-target/1.0": CampaignTarget.model_json_schema(),
+        "ota-boot-proof/1.0": InstallationProof.model_json_schema(),
         "command-report/1.0": CommandReport.model_json_schema(),
         "telemetry/1.0": TelemetrySample.model_json_schema(),
         "mqtt-dispatch/1.0": DispatchPayload.model_json_schema(),
@@ -33,6 +71,20 @@ def schemas() -> dict[str, Any]:
         "api-issue-request/1.0": IssueRemoteCommandRequest.model_json_schema(),
         "api-issue-response/1.0": IssueRemoteCommandResponse.model_json_schema(),
         "api-error/1.0": ErrorResponseContract.model_json_schema(),
+        "ota-ecu-registration/1.0": ECURegistration.model_json_schema(),
+        "ota-ecu/1.0": ECUView.model_json_schema(),
+        "ota-firmware-registration/1.0": FirmwareRegistration.model_json_schema(),
+        "ota-firmware/1.0": FirmwareView.model_json_schema(),
+        "ota-job-request/1.0": JobRequest.model_json_schema(),
+        "ota-job/1.0": JobView.model_json_schema(),
+        "ota-job-cancel/1.0": CancelJob.model_json_schema(),
+        "ota-execution/2.0": ExecutionView.model_json_schema(),
+        "ota-inventory/2.0": ExecutionECUView.model_json_schema(),
+        "ota-verification/2.0": VerificationRequest.model_json_schema(),
+        "ota-claim-request/2.0": ClaimRequest.model_json_schema(),
+        "ota-claim/2.0": ClaimResult.model_json_schema(),
+        "ota-report/2.0": OTAReport.model_json_schema(),
+        "ota-manifest/2.0": SignedManifest.model_json_schema(),
     }
 
 
@@ -106,6 +158,23 @@ def compatible(old: Any, new: Any, path: str = "schema") -> list[str]:
 def check(root: Path, baseline: Path | None = None) -> list[str]:
     errors = boundaries(root)
     expected = schemas()
+    fixed = json.loads((ROOT / "contracts/day17-baseline.json").read_text(encoding="utf-8"))
+    if fixed["commit"] != DAY17 or fixed["sha256"] != DAY17_HASH:
+        errors.append("Pinned Day17 contract identity changed")
+    for name, schema in fixed["contracts"].items():
+        if name.startswith("ota-"):
+            if name not in expected:
+                errors.append(f"{name}: pinned Day17 OTA contract removed")
+            else:
+                errors.extend(compatible(schema, expected[name], name))
+    fixed18 = json.loads((ROOT / "contracts/day18-baseline.json").read_text(encoding="utf-8"))
+    if fixed18["commit"] != DAY18 or fixed18["sha256"] != DAY18_HASH:
+        errors.append("Pinned Day18 contract identity changed")
+    for name, schema in fixed18["contracts"].items():
+        if name not in expected:
+            errors.append(f"{name}: pinned Day18 contract removed")
+        else:
+            errors.extend(compatible(schema, expected[name], name))
     committed = json.loads((root / MANIFEST).read_text(encoding="utf-8"))
     if committed != expected:
         errors.append("Contract snapshot does not match runtime models; regenerate and review.")
@@ -123,7 +192,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--write", action="store_true")
+    parser.add_argument("--require-day17", action="store_true")
+    parser.add_argument("--require-day18", action="store_true")
     args = parser.parse_args()
+    if args.require_day18:
+        raw18 = subprocess.check_output(
+            ["git", "show", DAY18 + ":contracts/platform-v1.json"], cwd=ROOT
+        )
+        fixed18 = json.loads((ROOT / "contracts/day18-baseline.json").read_text(encoding="utf-8"))
+        if hashlib.sha256(raw18).hexdigest() != DAY18_HASH or fixed18["contracts"] != json.loads(
+            raw18
+        ):
+            raise ValueError("Frozen Day18 contracts differ from pinned source")
+    if args.require_day17:
+        raw = subprocess.check_output(
+            ["git", "show", DAY17 + ":contracts/platform-v1.json"], cwd=ROOT
+        )
+        fixed = json.loads((ROOT / "contracts/day17-baseline.json").read_text(encoding="utf-8"))
+        if hashlib.sha256(raw).hexdigest() != DAY17_HASH or fixed["contracts"] != json.loads(raw):
+            raise ValueError("Frozen Day17 contracts differ from the pinned published commit")
     if args.write:
         (ROOT / MANIFEST).parent.mkdir(parents=True, exist_ok=True)
         (ROOT / MANIFEST).write_text(

@@ -2,6 +2,8 @@
 
 本次自动验收只运行本地 PostgreSQL 与免费 LocalStack。真实 AWS 工具已提供，未联网执行，
 本地报告始终保留 `iam_enforcement_verified=false`。
+Day14 的 Secret 缺失拒绝、v2 日志格式和无副作用回归见
+[DAY14_CREDENTIAL_RECOVERY.md](DAY14_CREDENTIAL_RECOVERY.md)。旧 v1 日志不能自动恢复。
 
 ## 身份边界
 
@@ -56,6 +58,7 @@ PostgreSQL 单用户只有一个密码，因此当前采用维护窗口协议，
 恢复失败则日志标记 `recovery_required`，不能启动 Runtime，也不能把失败当作成功。
 恢复日志位于被 Git 忽略的 `.runtime-reports/credential-operations/<UUID>.json`，
 只含身份、端点、版本 ID、阶段及异常类别，不含密码、Token 或 SecretString。
+v2 日志还绑定当前环境及身份范围；非法输入在修改密码前拒绝，日志不能选择任意角色或 Secret。
 将该目录作为受控运维资料保存，限制访问并防止误改；旧版本 Secret 在恢复完成前不能删除。
 
 ```powershell
@@ -99,3 +102,16 @@ python -m scripts.aws_runtime_probe --target <目标JSON> --report <新的报告
 API 语义参见 [AssumeRole](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html)
 和 [Decrypt](https://docs.aws.amazon.com/kms/latest/APIReference/API_Decrypt.html)。
 报告采用新文件创建，拒绝覆盖输入或历史报告。当前只运行模拟客户端测试，不执行真实 AWS 请求。
+
+## Day15 lifecycle constraints
+
+Existing AWSPENDING or scheduled Secret deletion blocks a new rotation. Completion and compensation
+retire only this operation's Pending label, preserving Current/Previous. Retirement recovery verifies
+passwords without rewriting them. See [Day15](DAY15_CREDENTIAL_LIFECYCLE.md).
+
+Existing terminal Day14 journals with retained Pending can be explicitly reconciled using
+`python -m database.provision_runtime_credentials --retire <journal.json> --scope runtimes`
+in maintenance mode. The tool validates Current and database logins before removing owned labels;
+it never resets a password. Preserve the journal and adjacent `audit/` segments together.
+Lock acquisition failures preserve the journal. Soft cancellation drains in-flight cloud calls
+before releasing the session lock. These checks do not assert physical power-loss durability.

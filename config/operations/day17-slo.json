@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "profile": "local_drill",
+  "readiness_availability": 0.99,
+  "readiness_p95_seconds": 1.0,
+  "recovery_seconds": 30.0,
+  "minimum_requests": 100,
+  "maximum_evidence_age_seconds": 900
+}

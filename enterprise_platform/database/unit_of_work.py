@@ -5,6 +5,7 @@ from types import TracebackType
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from enterprise_platform.database.exceptions import UnitOfWorkNotStartedError
+from enterprise_platform.database.recovery import CommitOutcomeUnknown, connection_lost
 
 
 class SQLAlchemyUnitOfWork:
@@ -47,15 +48,30 @@ class SQLAlchemyUnitOfWork:
 
         try:
             if not self._finished:
-                await session.rollback()
+                try:
+                    await session.rollback()
+                except Exception:
+                    if exc_value is None:
+                        raise
         finally:
-            await session.close()
-            self._session = None
-            self._finished = False
+            try:
+                try:
+                    await session.close()
+                except Exception:
+                    if exc_value is None:
+                        raise
+            finally:
+                self._session = None
+                self._finished = False
 
     async def commit(self) -> None:
         session = self.session
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as exc:
+            if connection_lost(exc):
+                raise CommitOutcomeUnknown("Database commit acknowledgement lost") from exc
+            raise
         self._finished = True
 
     async def rollback(self) -> None:

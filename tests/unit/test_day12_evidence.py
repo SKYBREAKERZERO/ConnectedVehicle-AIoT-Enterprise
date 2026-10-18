@@ -55,8 +55,8 @@ def reports() -> dict[str, Any]:
         }
         for name, revision, state in (
             ("restored", "a37e610c952d", catalog),
-            ("upgraded", "b48f720da63e", new),
-            ("repeat", "b48f720da63e", new),
+            ("upgraded", "a05e127c349b", new),
+            ("repeat", "a05e127c349b", new),
         )
     ]
     summaries: list[dict[str, Any]] = []
@@ -151,7 +151,7 @@ def reports() -> dict[str, Any]:
             "data_after_failure": data,
             "revision_before": "a37e610c952d",
             "revision_after_failure": "a37e610c952d",
-            "retry_revision": "b48f720da63e",
+            "retry_revision": "a05e127c349b",
         },
         "migration-scale-locks": {
             "postgres_lock_wait_observed": True,
@@ -195,6 +195,89 @@ def reports() -> dict[str, Any]:
             "explicit_recovery": True,
             "retry_succeeded": True,
             "journals_secret_free": True,
+        },
+        "credential-version-competition": {
+            "scope": "localstack-and-postgresql",
+            "iam_enforcement_verified": False,
+            "cases": [
+                {
+                    "case": case,
+                    "database_unchanged_after_barrier": True,
+                    "foreign_version_preserved": True,
+                    "unresolved_operation_recorded": True,
+                }
+                for case in ("prepare-pending", "promotion-current")
+            ],
+        },
+        "credential-cloud-lifecycle": {
+            "scope": "localstack-only",
+            "iam_enforcement_verified": False,
+            "stages": ["created", "rotated", "recovered", "retired"],
+            "configuration_preserved": True,
+            "kms_context_verified": True,
+            "disabled_key_rejected": True,
+            "disabled_rotation_rejected": True,
+            "pending_key_deletion_rejected": True,
+            "revoked_iam_policy_rejected": True,
+            "wildcard_policy_rejected": True,
+        },
+        "credential-lifecycle": {
+            "terminal_checkpoint_failure_verified": True,
+            "rollback_failure_metadata_verified": True,
+            "lock_failure_no_side_effects": True,
+            "legacy_terminal_retirement_verified": True,
+            "audit_archive_verified": True,
+            "cancelled_request_lock_verified": True,
+            "scope": "localstack-and-postgresql",
+            "postgres_major": 16,
+            "foreign_pending_no_side_effects": True,
+            "scheduled_deletion_no_side_effects": True,
+            "partial_retirement_recovered": True,
+            "rollback_retirement_recovered": True,
+            "retirement_passwords_unchanged": True,
+            "previous_version_retained": True,
+            "pending_retired": True,
+            "recovery_idempotent": True,
+            "advisory_lock_verified": True,
+            "concurrent_rotations_serialized": True,
+            "old_completed_operation_isolated": True,
+            "audit_secret_free": True,
+            "iam_enforcement_verified": False,
+        },
+        "credential-recovery-hardening": {
+            "scope": "localstack-and-postgresql",
+            "journal_version": 2,
+            "invalid_cases": [
+                "legacy-version",
+                "invalid-candidate",
+                "unknown-candidate",
+                "bootstrap-role",
+                "migration-role",
+                "foreign-secret",
+                "wrong-host",
+                "wrong-port",
+                "wrong-database",
+                "wrong-environment",
+                "wrong-tenant",
+                "wrong-region",
+                "wrong-endpoint",
+                "unknown-phase",
+                "duplicate-entry",
+                "missing-runtime",
+                "foreign-version-payload",
+            ],
+            "iam_enforcement_verified": False,
+            **dict.fromkeys(
+                (
+                    "invalid_journal_no_side_effects",
+                    "missing_secret_not_created",
+                    "missing_secret_no_password_changes",
+                    "compensation_failure_observed",
+                    "explicit_recovery_succeeded",
+                    "repeated_recovery_no_side_effects",
+                ),
+                True,
+            ),
         },
         "12b-identity-matrix": {
             "configuration_matrix": matrix,
@@ -335,3 +418,66 @@ def test_writer_records_actual_commit_and_batch(
     assert record["_provenance"]["commit"] == COMMIT
     assert record["_provenance"]["run_id"] == RUN
     assert not list(tmp_path.glob(".day12-evidence-*"))
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "terminal_checkpoint_failure_verified",
+        "rollback_failure_metadata_verified",
+        "lock_failure_no_side_effects",
+        "legacy_terminal_retirement_verified",
+        "audit_archive_verified",
+        "cancelled_request_lock_verified",
+        "foreign_pending_no_side_effects",
+        "scheduled_deletion_no_side_effects",
+        "partial_retirement_recovered",
+        "rollback_retirement_recovered",
+        "retirement_passwords_unchanged",
+        "previous_version_retained",
+        "pending_retired",
+        "recovery_idempotent",
+        "advisory_lock_verified",
+        "concurrent_rotations_serialized",
+        "old_completed_operation_isolated",
+        "audit_secret_free",
+    ],
+)
+def test_lifecycle_evidence_cannot_skip_a_security_assertion(tmp_path: Path, key: str) -> None:
+    values = reports()
+    values["credential-lifecycle"][key] = False
+    save(tmp_path, values)
+    with pytest.raises(ValueError, match="lifecycle"):
+        check(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing-race",
+        "duplicate-race",
+        "unsafe-race",
+        "missing-cloud-stage",
+        "claimed-iam",
+        "missed-revocation",
+    ],
+)
+def test_competition_and_cloud_lifecycle_evidence_is_required(tmp_path: Path, case: str) -> None:
+    values = reports()
+    race = values["credential-version-competition"]
+    cloud = values["credential-cloud-lifecycle"]
+    if case == "missing-race":
+        race["cases"].pop()
+    elif case == "duplicate-race":
+        race["cases"][1] = deepcopy(race["cases"][0])
+    elif case == "unsafe-race":
+        race["cases"][0]["foreign_version_preserved"] = False
+    elif case == "missing-cloud-stage":
+        cloud["stages"].pop()
+    elif case == "claimed-iam":
+        cloud["iam_enforcement_verified"] = True
+    else:
+        cloud["revoked_iam_policy_rejected"] = False
+    save(tmp_path, values)
+    with pytest.raises(ValueError):
+        check(tmp_path)

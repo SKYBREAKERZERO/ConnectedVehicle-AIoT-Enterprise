@@ -139,6 +139,14 @@ async def provision_tenant(settings: Settings, tenant: str) -> dict[str, object]
             await asyncio.to_thread(client.create_secret, Name=name)
     cloud = await asyncio.to_thread(provision_local_cloud_identity, settings, secrets, roles)
     targets = [Target(runtime, role, secrets[runtime], tenant) for runtime, role in roles.items()]
+    settings = settings.model_copy(
+        update={
+            "database_tenant_id": tenant,
+            "application_database_secret_id": secrets["application"],
+            "outbox_database_secret_id": secrets["outbox"],
+            "remote_command_database_secret_id": secrets["remote-command"],
+        }
+    )
     async with password_manager(settings, targets) as backend:
         await rotate(
             settings,
@@ -231,6 +239,10 @@ async def provision_monitor(settings: Settings) -> dict[str, object]:
         aws_secret_access_key="test",
     )
     name = f"{settings.database_secret_prefix}/local/database/observability"
+    # This explicit LocalStack example owns resource creation. Rotation and
+    # recovery only operate on existing containers, as in the Terraform path.
+    with suppress(client.exceptions.ResourceExistsException):
+        await asyncio.to_thread(client.create_secret, Name=name)
     target = Target("observability", "observability_reader", name)
     async with password_manager(settings, [target]) as backend:
         await rotate(settings, [target], {target.role: password}, client, backend)

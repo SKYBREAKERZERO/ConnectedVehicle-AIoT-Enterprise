@@ -6,6 +6,28 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from enterprise_platform.database.credentials import DatabaseRuntime, runtime_database_user
+from enterprise_platform.database.ota_authority_contract import FUNCTIONS
+from enterprise_platform.database.ota_campaign_contract import (
+    CAMPAIGN_READY,
+)
+from enterprise_platform.database.ota_campaign_contract import (
+    FUNCTIONS as CAMPAIGN_FUNCTIONS,
+)
+from enterprise_platform.database.ota_campaign_contract import TABLES as CAMPAIGN_TABLES
+from enterprise_platform.database.ota_lifecycle_contract import FUNCTIONS as LIFECYCLE_FUNCTIONS
+from enterprise_platform.database.ota_lifecycle_contract import INITIAL_BODY
+
+OTA_TABLES = (
+    "ecu_inventory",
+    "firmware_releases",
+    "ota_jobs",
+    "ota_audit_events",
+    "ota_executions",
+    "ota_execution_reports",
+    "ota_campaigns",
+    "ota_campaign_targets",
+    "ota_campaign_events",
+)
 
 
 async def verify_runtime_database_security(
@@ -116,7 +138,10 @@ async def verify_runtime_database_security(
             FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname='public' AND c.relname IN
-              ('vehicles','remote_commands','command_reports','telemetry_samples','outbox_events')
+              ('vehicles','remote_commands','command_reports','telemetry_samples','outbox_events',
+               'ecu_inventory','firmware_releases','ota_jobs','ota_audit_events',
+               'ota_executions','ota_execution_reports',
+               'ota_campaigns','ota_campaign_targets','ota_campaign_events')
         """)
                 )
             )
@@ -129,8 +154,15 @@ async def verify_runtime_database_security(
             SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname='public'
               AND c.relname IN ('vehicles','remote_commands','command_reports',
-                                'telemetry_samples','outbox_events')
+                                'telemetry_samples','outbox_events','ecu_inventory',
+                                'firmware_releases','ota_jobs','ota_audit_events',
+                                'ota_executions','ota_execution_reports',
+               'ota_campaigns','ota_campaign_targets','ota_campaign_events')
               AND c.relrowsecurity AND pg_get_userbyid(c.relowner) <> current_user
+              AND (c.relname NOT IN ('ecu_inventory','firmware_releases','ota_jobs',
+                                    'ota_audit_events','ota_executions','ota_execution_reports',
+               'ota_campaigns','ota_campaign_targets','ota_campaign_events')
+                   OR c.relforcerowsecurity)
               AND EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid
                           AND p.polname='tenant_guard' AND NOT p.polpermissive)
               AND EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid
@@ -155,8 +187,186 @@ async def verify_runtime_database_security(
                   AND a.attname='dispatch_order' AND a.attidentity='a' AND NOT a.attisdropped""")
         )
         # Catalogs reveal structure without granting workers access to other runtimes' tables.
-        if protected != 5 or generated_tenant != 1 or dispatch_order != 1:
+        if protected != 5 + len(OTA_TABLES) or generated_tenant != 1 or dispatch_order != 1:
             raise RuntimeError("Unsafe runtime database schema; apply tenant RLS migrations")
+        for table in OTA_TABLES:
+            privileges = (
+                (
+                    await connection.execute(
+                        text("""
+                SELECT has_table_privilege(:table,'SELECT') AS read,
+                       has_table_privilege(:table,'INSERT') AS insert,
+                       has_table_privilege(:table,'DELETE,TRUNCATE,REFERENCES,TRIGGER') AS excess,
+                       has_table_privilege(:table,'UPDATE') AS broad_update,
+                       has_any_column_privilege(:table,'UPDATE') AS any_update
+            """),
+                        {"table": "public." + table},
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            allowed = runtime == "application"
+            if dict(privileges) != dict(
+                read=allowed,
+                insert=allowed and table in {"firmware_releases", "ota_jobs"},
+                excess=False,
+                broad_update=False,
+                any_update=False,
+            ):
+                raise RuntimeError("Unsafe OTA runtime privilege contract")
+        immutable_job_columns = (
+            "tenant_id",
+            "id",
+            "vehicle_id",
+            "ecu_id",
+            "release_id",
+            "ecu_type",
+            "hardware_version",
+            "idempotency_key",
+            "created_at",
+            "created_by",
+        )
+        for column in immutable_job_columns:
+            if await connection.scalar(
+                text("SELECT has_column_privilege('public.ota_jobs',:column,'UPDATE')"),
+                {"column": column},
+            ):
+                raise RuntimeError("Unsafe OTA immutable job privileges")
+        for table, columns in {
+            "ecu_inventory": (
+                "bootstrap_confirmed",
+                "firmware_version",
+                "security_version",
+                "tenant_id",
+                "id",
+                "vehicle_id",
+                "ecu_type",
+                "hardware_version",
+                "serial_number",
+                "created_at",
+                "created_by",
+            ),
+            "ota_executions": (
+                "tenant_id",
+                "id",
+                "release_id",
+                "verification_operation",
+                "verification_sha256",
+                "manifest",
+                "signature",
+                "verified_at",
+            ),
+        }.items():
+            for column in columns:
+                if await connection.scalar(
+                    text("SELECT has_column_privilege(:table,:column,'UPDATE')"),
+                    {"table": table, "column": column},
+                ):
+                    raise RuntimeError("Unsafe OTA execution immutable privileges")
+        guards = (
+            (
+                await connection.execute(
+                    text("""SELECT p.prosrc,p.prosecdef,p.proconfig,
+            pg_get_userbyid(p.proowner) AS owner,t.tgenabled::text AS tgenabled,
+            t.tgtype,t.tgattr::text AS guard_columns,t.tgqual,t.tgconstraint
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+            JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname='public' AND c.relname='ecu_inventory'
+              AND t.tgname='ota_monotonic_version' AND NOT t.tgisinternal""")
+                )
+            )
+            .mappings()
+            .all()
+        )
+        body = (
+            "BEGIN IF NEW.security_version < OLD.security_version OR "
+            "(NEW.firmware_version IS DISTINCT FROM OLD.firmware_version AND "
+            "NEW.security_version <= OLD.security_version) THEN "
+            "RAISE EXCEPTION 'OTA security counter cannot regress' USING ERRCODE='23514'; "
+            "END IF; RETURN NEW; END;"
+        )
+        if len(guards) != 1 or any(
+            " ".join(row["prosrc"].split()) != body
+            or row["prosecdef"]
+            or row["proconfig"] != ["search_path=pg_catalog"]
+            or row["tgenabled"] != "O"
+            or row["tgtype"] != 19
+            or row["guard_columns"] != ""
+            or row["tgqual"] is not None
+            or row["tgconstraint"] != 0
+            or row["owner"] == role["username"]
+            for row in guards
+        ):
+            raise RuntimeError("Unsafe OTA monotonic security counter guard")
+        for column in ("security_version", "bootstrap_confirmed"):
+            if await connection.scalar(
+                text("SELECT has_column_privilege('public.ecu_inventory',:column,'INSERT')"),
+                {"column": column},
+            ):
+                raise RuntimeError("Unsafe OTA initial security counter privilege")
+        if await connection.scalar(
+            text("SELECT has_schema_privilege('ota_authority','USAGE,CREATE')")
+        ):
+            raise RuntimeError("Unsafe OTA private authority schema access")
+        contracts = {
+            **FUNCTIONS,
+            **{
+                name: (arguments, body)
+                for name, (arguments, _, body) in (LIFECYCLE_FUNCTIONS | CAMPAIGN_FUNCTIONS).items()
+            },
+        }
+        contracts["ota_execution_ready"] = ("p_tenant text,p_job text", CAMPAIGN_READY)
+        for name, (_, expected_body) in contracts.items():
+            rows = (
+                (
+                    await connection.execute(
+                        text("""SELECT p.prosrc,p.prosecdef,p.proconfig,
+                pg_get_userbyid(p.proowner) AS owner,
+                has_function_privilege(p.oid,'EXECUTE') AS execute,
+                EXISTS(SELECT FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
+                       WHERE a.grantee=0 AND a.privilege_type='EXECUTE') AS public_execute
+                FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                WHERE n.nspname='public' AND p.proname=:name"""),
+                        {"name": name},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            if len(rows) != 1 or any(
+                " ".join(row["prosrc"].split()) != " ".join(expected_body.split())
+                or not row["prosecdef"]
+                or row["proconfig"] != ["search_path=pg_catalog"]
+                or row["owner"] != guards[0]["owner"]
+                or row["public_execute"]
+                or row["execute"] != (runtime == "application" and name != "ota_apply_installation")
+                for row in rows
+            ):
+                raise RuntimeError("Unsafe OTA installation authority function")
+        initial = (
+            (
+                await connection.execute(
+                    text("""SELECT p.prosrc,p.prosecdef,p.proconfig,
+            pg_get_userbyid(p.proowner) AS owner,t.tgenabled::text AS enabled,t.tgtype
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_class c ON c.oid=t.tgrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'
+            AND c.relname='ota_jobs' AND t.tgname='ota_initial_intent' AND NOT t.tgisinternal""")
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if len(initial) != 1 or any(
+            " ".join(row["prosrc"].split()) != " ".join(INITIAL_BODY.split())
+            or row["prosecdef"]
+            or row["proconfig"] != ["search_path=pg_catalog"]
+            or row["owner"] != guards[0]["owner"]
+            or row["enabled"] != "O"
+            or row["tgtype"] != 7
+            for row in initial
+        ):
+            raise RuntimeError("Unsafe OTA initial intent guard")
 
 
 def validate_policy_contract(policies: list[dict[str, Any]]) -> None:
@@ -173,10 +383,14 @@ def validate_policy_contract(policies: list[dict[str, Any]]) -> None:
             "command_reports",
             "telemetry_samples",
             "outbox_events",
+            *OTA_TABLES,
         )
     }
     expected["outbox_events"] = f"((CURRENT_USER = 'outbox_worker'::name) OR {guard})"
-    if len(policies) != 10:
+    expected.update(
+        {table: "((tenant_id)::text = runtime_tenant_binding())" for table in CAMPAIGN_TABLES}
+    )
+    if len(policies) != 2 * len(expected):
         raise RuntimeError("Unsafe runtime policy contract: unexpected policy count")
     seen: set[tuple[str, str]] = set()
     for policy in policies:

@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import signal
 import sys
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager, suppress
 from typing import Any
 
+from enterprise_platform.observability.recovery import observe_recovery, recovery_scope
+
 logger = logging.getLogger(__name__)
+
+
+def report(level: int, message: str, *args: object) -> None:
+    """Telemetry transport failures must not change transaction or ACK behavior."""
+    with suppress(Exception):
+        logger.log(level, message, *args)
 
 
 @contextmanager
@@ -38,12 +47,33 @@ async def run_worker(
     shutdown_timeout: float,
     operation_timeout: float,
 ) -> None:
+    with recovery_scope("worker"):
+        await _run_worker(
+            operation,
+            stop=stop,
+            poll_interval=poll_interval,
+            error_delay=error_delay,
+            shutdown_timeout=shutdown_timeout,
+            operation_timeout=operation_timeout,
+        )
+
+
+async def _run_worker(
+    operation: Callable[[], Awaitable[object]],
+    *,
+    stop: asyncio.Event,
+    poll_interval: float,
+    error_delay: float,
+    shutdown_timeout: float,
+    operation_timeout: float,
+) -> None:
     """Stop polling on termination, drain once, then cancel without ACK."""
 
     async def one_batch() -> object:
         async with asyncio.timeout(operation_timeout):
             return await operation()
 
+    consecutive_errors = 0
     while not stop.is_set():
         batch = asyncio.create_task(one_batch())
         stopping = asyncio.create_task(stop.wait())
@@ -54,20 +84,29 @@ async def run_worker(
                 try:
                     await asyncio.wait_for(asyncio.shield(batch), timeout=shutdown_timeout)
                 except TimeoutError:
-                    logger.warning("worker_drain_timeout")
+                    report(logging.WARNING, "worker_drain_timeout")
                     batch.cancel()
                     with suppress(asyncio.CancelledError):
                         await batch
                 except Exception as exc:
-                    logger.warning("worker_drain_failed: %s", type(exc).__name__)
+                    report(logging.WARNING, "worker_drain_failed: %s", type(exc).__name__)
                 break
             try:
                 result = await batch
-                logger.info("worker_batch: %s", result)
+                if consecutive_errors:
+                    observe_recovery("VERIFY", consecutive_errors + 1)
+                    observe_recovery("RECOVERED", consecutive_errors + 1)
+                consecutive_errors = 0
+                report(logging.INFO, "worker_batch: %s", result)
             except Exception as exc:
                 # Do not log broker URLs, payloads, passwords or raw SDK errors.
-                logger.warning("worker_batch_failed: %s", type(exc).__name__)
-                delay = error_delay
+                report(logging.WARNING, "worker_batch_failed: %s", type(exc).__name__)
+                consecutive_errors += 1
+                observe_recovery("FAULT_DETECTED", consecutive_errors)
+                observe_recovery("CLASSIFIED", consecutive_errors)
+                observe_recovery("RETRY", consecutive_errors)
+                delay = min(30.0, error_delay * 2 ** min(consecutive_errors - 1, 10))
+                delay *= random.uniform(0.5, 1.0)
         finally:
             stopping.cancel()
             if not batch.done():
@@ -76,7 +115,7 @@ async def run_worker(
         if not stop.is_set():
             with suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=delay)
-    logger.info("worker_stopped")
+    report(logging.INFO, "worker_stopped")
 
 
 def run_async(main: Callable[[], Coroutine[Any, Any, None]]) -> None:

@@ -1,0 +1,820 @@
+{
+  "commit": "cf08e437c79aaa041d25aa49dd572cfb15075048",
+  "contracts": {
+    "api-error/1.0": {
+      "$defs": {
+        "ErrorBodyContract": {
+          "additionalProperties": false,
+          "description": "Stable public HTTP error payload.",
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "correlation_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Correlation Id"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "request_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Request Id"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "request_id",
+            "correlation_id"
+          ],
+          "title": "ErrorBodyContract",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Stable public HTTP error response envelope.",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorBodyContract"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "ErrorResponseContract",
+      "type": "object"
+    },
+    "api-issue-request/1.0": {
+      "$defs": {
+        "RemoteCommandTypeContract": {
+          "description": "Public HTTP command-type contract.",
+          "enum": [
+            "lock",
+            "unlock",
+            "start",
+            "stop",
+            "honk",
+            "flash_lights"
+          ],
+          "title": "RemoteCommandTypeContract",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "POST remote-command request contract.",
+      "properties": {
+        "command_type": {
+          "$ref": "#/$defs/RemoteCommandTypeContract"
+        }
+      },
+      "required": [
+        "command_type"
+      ],
+      "title": "IssueRemoteCommandRequest",
+      "type": "object"
+    },
+    "api-issue-response/1.0": {
+      "$defs": {
+        "RemoteCommandStatusContract": {
+          "description": "Public HTTP remote-command status contract.",
+          "enum": [
+            "requested",
+            "queued",
+            "dispatching",
+            "sent",
+            "acknowledged",
+            "succeeded",
+            "failed",
+            "timed_out",
+            "expired",
+            "cancelled"
+          ],
+          "title": "RemoteCommandStatusContract",
+          "type": "string"
+        },
+        "RemoteCommandTypeContract": {
+          "description": "Public HTTP command-type contract.",
+          "enum": [
+            "lock",
+            "unlock",
+            "start",
+            "stop",
+            "honk",
+            "flash_lights"
+          ],
+          "title": "RemoteCommandTypeContract",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "202 Accepted remote-command response contract.",
+      "properties": {
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "command_type": {
+          "$ref": "#/$defs/RemoteCommandTypeContract"
+        },
+        "created": {
+          "title": "Created",
+          "type": "boolean"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/RemoteCommandStatusContract"
+        },
+        "vehicle_id": {
+          "format": "uuid",
+          "title": "Vehicle Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "vehicle_id",
+        "command_type",
+        "status",
+        "created",
+        "created_at",
+        "expires_at"
+      ],
+      "title": "IssueRemoteCommandResponse",
+      "type": "object"
+    },
+    "command-report/1.0": {
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "format": "uuid",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "failure_code": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Code"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "acknowledged",
+            "succeeded",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_id",
+        "status",
+        "occurred_at"
+      ],
+      "title": "CommandReport",
+      "type": "object"
+    },
+    "command-requested/1.0": {
+      "$defs": {
+        "RemoteCommandType": {
+          "enum": [
+            "lock",
+            "unlock",
+            "start",
+            "stop",
+            "honk",
+            "flash_lights"
+          ],
+          "title": "RemoteCommandType",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "command_type": {
+          "$ref": "#/$defs/RemoteCommandType"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "status": {
+          "const": "requested",
+          "title": "Status",
+          "type": "string"
+        },
+        "tenant_id": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Tenant Id",
+          "type": "string"
+        },
+        "vehicle_id": {
+          "format": "uuid",
+          "title": "Vehicle Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "vehicle_id",
+        "tenant_id",
+        "command_type",
+        "status",
+        "created_at",
+        "expires_at"
+      ],
+      "title": "RequestedPayload",
+      "type": "object"
+    },
+    "event-envelope/1.0": {
+      "description": "Stable envelope shared by asynchronous platform events.",
+      "properties": {
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correlation Id"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "event_type": {
+          "title": "Event Type",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "schema_version": {
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "trace_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trace Id"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_type",
+        "schema_version",
+        "source",
+        "occurred_at",
+        "correlation_id",
+        "trace_id",
+        "payload"
+      ],
+      "title": "EventEnvelope",
+      "type": "object"
+    },
+    "mqtt-dispatch/1.0": {
+      "$defs": {
+        "RemoteCommandType": {
+          "enum": [
+            "lock",
+            "unlock",
+            "start",
+            "stop",
+            "honk",
+            "flash_lights"
+          ],
+          "title": "RemoteCommandType",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "command_type": {
+          "$ref": "#/$defs/RemoteCommandType"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tenant_id": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Tenant Id",
+          "type": "string"
+        },
+        "vehicle_id": {
+          "format": "uuid",
+          "title": "Vehicle Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "command_id",
+        "vehicle_id",
+        "tenant_id",
+        "command_type",
+        "created_at",
+        "expires_at"
+      ],
+      "title": "DispatchPayload",
+      "type": "object"
+    },
+    "ota-ecu-registration/1.0": {
+      "additionalProperties": false,
+      "properties": {
+        "ecu_type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Ecu Type",
+          "type": "string"
+        },
+        "firmware_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Firmware Version",
+          "type": "string"
+        },
+        "hardware_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Hardware Version",
+          "type": "string"
+        },
+        "serial_number": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Serial Number",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ecu_type",
+        "hardware_version",
+        "firmware_version",
+        "serial_number"
+      ],
+      "title": "ECURegistration",
+      "type": "object"
+    },
+    "ota-ecu/1.0": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "created_by": {
+          "title": "Created By",
+          "type": "string"
+        },
+        "ecu_type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Ecu Type",
+          "type": "string"
+        },
+        "firmware_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Firmware Version",
+          "type": "string"
+        },
+        "hardware_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Hardware Version",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "serial_number": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Serial Number",
+          "type": "string"
+        },
+        "vehicle_id": {
+          "format": "uuid",
+          "title": "Vehicle Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ecu_type",
+        "hardware_version",
+        "firmware_version",
+        "serial_number",
+        "id",
+        "vehicle_id",
+        "created_at",
+        "created_by"
+      ],
+      "title": "ECUView",
+      "type": "object"
+    },
+    "ota-firmware-registration/1.0": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_bucket": {
+          "maxLength": 63,
+          "minLength": 3,
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$",
+          "title": "Artifact Bucket",
+          "type": "string"
+        },
+        "artifact_key": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Artifact Key",
+          "type": "string"
+        },
+        "artifact_version": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Artifact Version",
+          "type": "string"
+        },
+        "ecu_type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Ecu Type",
+          "type": "string"
+        },
+        "hardware_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Hardware Version",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 4294967296,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ecu_type",
+        "hardware_version",
+        "version",
+        "artifact_bucket",
+        "artifact_key",
+        "artifact_version",
+        "sha256",
+        "size_bytes"
+      ],
+      "title": "FirmwareRegistration",
+      "type": "object"
+    },
+    "ota-firmware/1.0": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_bucket": {
+          "maxLength": 63,
+          "minLength": 3,
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$",
+          "title": "Artifact Bucket",
+          "type": "string"
+        },
+        "artifact_key": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Artifact Key",
+          "type": "string"
+        },
+        "artifact_version": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Artifact Version",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "created_by": {
+          "title": "Created By",
+          "type": "string"
+        },
+        "ecu_type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Ecu Type",
+          "type": "string"
+        },
+        "hardware_version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Hardware Version",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 4294967296,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "verification_status": {
+          "const": "unverified",
+          "default": "unverified",
+          "title": "Verification Status",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ecu_type",
+        "hardware_version",
+        "version",
+        "artifact_bucket",
+        "artifact_key",
+        "artifact_version",
+        "sha256",
+        "size_bytes",
+        "id",
+        "created_at",
+        "created_by"
+      ],
+      "title": "FirmwareView",
+      "type": "object"
+    },
+    "ota-job-cancel/1.0": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "CancelJob",
+      "type": "object"
+    },
+    "ota-job-request/1.0": {
+      "additionalProperties": false,
+      "properties": {
+        "release_id": {
+          "format": "uuid",
+          "title": "Release Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "release_id"
+      ],
+      "title": "JobRequest",
+      "type": "object"
+    },
+    "ota-job/1.0": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "created_by": {
+          "title": "Created By",
+          "type": "string"
+        },
+        "ecu_id": {
+          "format": "uuid",
+          "title": "Ecu Id",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "release_id": {
+          "format": "uuid",
+          "title": "Release Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending_verification",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "vehicle_id": {
+          "format": "uuid",
+          "title": "Vehicle Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "vehicle_id",
+        "ecu_id",
+        "release_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "created_by"
+      ],
+      "title": "JobView",
+      "type": "object"
+    },
+    "telemetry/1.0": {
+      "additionalProperties": false,
+      "properties": {
+        "battery_percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Battery Percent",
+          "type": "number"
+        },
+        "event_id": {
+          "format": "uuid",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "measured_at": {
+          "format": "date-time",
+          "title": "Measured At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "speed_kph": {
+          "maximum": 300,
+          "minimum": 0,
+          "title": "Speed Kph",
+          "type": "number"
+        },
+        "temperature_c": {
+          "maximum": 180,
+          "minimum": -80,
+          "title": "Temperature C",
+          "type": "number"
+        }
+      },
+      "required": [
+        "event_id",
+        "measured_at",
+        "speed_kph",
+        "battery_percent",
+        "temperature_c"
+      ],
+      "title": "TelemetrySample",
+      "type": "object"
+    }
+  },
+  "sha256": "4b6c4c2baa1fbbb35a0aac277448cfa3725f39fb50ce88307dccb6aec401e06f"
+}
