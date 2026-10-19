@@ -20,12 +20,12 @@ output "scp_document_json" {
 
 output "scp_policy_id" {
   description = "Terraform-managed SCP ID; null when Organizations management is disabled."
-  value       = local.organizations_enabled ? aws_organizations_policy.ota[0].id : null
+  value       = local.enforcement_enabled ? aws_organizations_policy.ota[0].id : null
 }
 
 output "scp_policy_arn" {
   description = "Terraform-managed SCP ARN; null when Organizations management is disabled."
-  value       = local.organizations_enabled ? aws_organizations_policy.ota[0].arn : null
+  value       = local.enforcement_enabled ? aws_organizations_policy.ota[0].arn : null
 }
 
 output "configured_environment_accounts" {
@@ -56,7 +56,7 @@ output "managed_ou_ids" {
 }
 
 output "scp_attachment_targets" {
-  description = "Member account IDs targeted by Terraform-managed attachments; not an authorization test result."
+  description = "OU or member account IDs targeted by Terraform-managed attachments; not an authorization test result."
 
   value = {
     for environment, attachment in aws_organizations_policy_attachment.environment :
@@ -71,4 +71,13 @@ output "protected_resources" {
     bucket_arns  = local.protected_bucket_arns
     kms_key_arns = local.protected_kms_key_arns
   }
+}
+output "governance_stage" {
+  value       = var.governance_stage
+  description = "Topology-only or enforcement stage; topology alone does not attach any policy."
+}
+
+output "attachment_scope" {
+  value       = var.attachment_scope
+  description = "OU inheritance or explicitly opted-in direct account attachment."
 }

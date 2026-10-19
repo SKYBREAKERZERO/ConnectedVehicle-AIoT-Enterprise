@@ -11,7 +11,7 @@ data "aws_organizations_organization" "current" {
 }
 
 data "aws_organizations_organizational_unit_descendant_accounts" "existing" {
-  for_each = local.organizations_enabled ? local.existing_ou_configs : {}
+  for_each = local.organizations_enabled ? local.verified_ou_configs : {}
 
   parent_id = each.value.existing_ou_id
 }
@@ -42,14 +42,14 @@ resource "terraform_data" "management_guard" {
       condition = (
         data.aws_organizations_organization.current[0].feature_set == "ALL" &&
         length(data.aws_organizations_organization.current[0].roots) > 0 &&
-        alltrue([
+        (var.governance_stage == "topology" || alltrue([
           for root in data.aws_organizations_organization.current[0].roots :
           anytrue([
             for policy_type in root.policy_types :
             policy_type.type == "SERVICE_CONTROL_POLICY" &&
             policy_type.status == "ENABLED"
           ])
-        ])
+        ]))
       )
 
       error_message = "The existing organization must have ALL features and SCPs enabled on its roots."
@@ -72,7 +72,7 @@ resource "terraform_data" "management_guard" {
 
     precondition {
       condition = alltrue([
-        for account_id in values(local.scp_target_accounts) :
+        for account_id in [for environment, config in local.environment_configs : config.account_id if !contains(var.retired_environments, environment)] :
         contains(
           [
             for account in data.aws_organizations_organization.current[0].accounts :
@@ -88,7 +88,7 @@ resource "terraform_data" "management_guard" {
 
     precondition {
       condition = alltrue([
-        for environment, config in local.existing_ou_configs :
+        for environment, config in local.verified_ou_configs :
         contains(
           [
             for account in data.aws_organizations_organizational_unit_descendant_accounts.existing[environment].accounts :
@@ -99,6 +99,14 @@ resource "terraform_data" "management_guard" {
       ])
 
       error_message = "Each configured existing OU must contain its mapped active environment account."
+    }
+
+    precondition {
+      condition = var.attachment_scope != "ou" || alltrue([
+        for environment, config in local.verified_ou_configs :
+        toset([for account in data.aws_organizations_organizational_unit_descendant_accounts.existing[environment].accounts : account.id]) == toset([config.account_id])
+      ])
+      error_message = "OU inheritance must not affect undeclared accounts; use a dedicated OU for each mapped environment."
     }
 
     precondition {
@@ -129,6 +137,10 @@ resource "aws_organizations_organizational_unit" "environment" {
 
   lifecycle {
     prevent_destroy = true
+    postcondition {
+      condition     = each.value.existing_ou_id == null || self.id == each.value.existing_ou_id
+      error_message = "The owned OU must match the configured existing OU ID; do not adopt an unrelated OU."
+    }
   }
 
   depends_on = [
@@ -137,7 +149,7 @@ resource "aws_organizations_organizational_unit" "environment" {
 }
 
 resource "aws_organizations_policy" "ota" {
-  count = local.organizations_enabled ? 1 : 0
+  count = local.enforcement_enabled ? 1 : 0
 
   name        = "${local.name_prefix}-guardrails"
   description = "OTA regional service and protected resource guardrails."
@@ -155,7 +167,7 @@ resource "aws_organizations_policy" "ota" {
 }
 
 resource "aws_organizations_policy_attachment" "environment" {
-  for_each = local.scp_target_accounts
+  for_each = local.scp_targets
 
   policy_id = aws_organizations_policy.ota[0].id
   target_id = each.value

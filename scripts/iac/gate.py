@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from scripts.iac.governance_schema import require_governance_schema
 from scripts.iac.plan_policy import evaluate
 from scripts.iac.scan_policy import audit
 
@@ -141,10 +143,31 @@ def initialize(root: Path, *, env: dict[str, str], lock: Path | None = None) -> 
         shutil.copy2(lock, root / ".terraform.lock.hcl")
     if not (root / ".terraform.lock.hcl").exists():
         raise RuntimeError(f"Missing committed provider lock for {root.name}")
-    terraform(
-        root, "init", "-backend=false", "-lockfile=readonly", "-no-color", env=env, quiet=True
-    )
+    parser = importlib.import_module("hcl2")
+    docs = []
+    if list(root.glob("*.tf.json")):
+        raise RuntimeError("JSON backend declarations need an explicit isolation review")
+    for file in root.glob("*.tf"):
+        with file.open(encoding="utf-8") as stream:
+            docs.append(parser.load(stream))
+    require_local_backends(docs)
+    # Only a validated relative local backend may be initialized in the copied root.
+    terraform(root, "init", "-lockfile=readonly", "-no-color", env=env, quiet=True)
     terraform(root, "validate", "-no-color", env=env)
+
+
+def require_local_backends(docs: list[dict[str, Any]]) -> None:
+    for doc in docs:
+        for block in doc.get("terraform", []):
+            for backend in block.get("backend", []):
+                if set(backend) != {"local"}:
+                    raise RuntimeError("Gate backend must be local and stay inside its copied root")
+                local = backend["local"]
+                if set(local) != {"path"} or local["path"] not in (
+                    "terraform.tfstate",
+                    ["terraform.tfstate"],
+                ):
+                    raise RuntimeError("Gate backend must be local and stay inside its copied root")
 
 
 def save_plan(root: Path, name: str, *, env: dict[str, str]) -> tuple[int, dict[str, Any]]:
@@ -174,7 +197,10 @@ def require_policy(plan: dict[str, Any], phase: str) -> None:
 def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python: str) -> None:
     env = sandbox_environment(work)
     cache = Path(env["TF_PLUGIN_CACHE_DIR"])
-    for source in (repo / "infra/terraform/environments").glob("*/.terraform/providers"):
+    for source in [
+        *(repo / "infra/terraform/environments").glob("*/.terraform/providers"),
+        *(repo / "infra/terraform/bootstrap").glob("*/.terraform/providers"),
+    ]:
         shutil.copytree(source, cache, dirs_exist_ok=True)
 
     candidate = work / "candidate"
@@ -195,11 +221,17 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
     lock = candidate / "environments" / "local" / ".terraform.lock.hcl"
     contract_count = 0
     contract_runs = 0
-    for root in [p for p in roots if p.is_dir()] + sorted(
-        (candidate / "modules").rglob("versions.tf")
+    bootstrap_roots = [p.parent for p in (candidate / "bootstrap").rglob("versions.tf")]
+    for root in (
+        [p for p in roots if p.is_dir()]
+        + bootstrap_roots
+        + sorted((candidate / "modules").rglob("versions.tf"))
     ):
         root = root.parent if root.is_file() else root
         initialize(root, env=env, lock=lock if "modules" in root.parts else None)
+        if root.name == "ota-governance":
+            schema = terraform(root, "providers", "schema", "-json", env=env, quiet=True)
+            require_governance_schema(json.loads(schema.stdout))
         tests = list((root / "tests").glob("*.tftest.hcl"))
         if "modules" in root.parts and not tests:
             raise RuntimeError(f"Module has no contract tests: {root.relative_to(candidate)}")
@@ -210,7 +242,7 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
                 raise RuntimeError(f"No active contract assertions for {root.name}")
             contract_runs += int(passed[1])
             contract_count += len(tests)
-        if root.parent.name == "environments" and root.name != "local":
+        if root.parent.name == "environments" and root.name not in {"local", "ota-local"}:
             # No AWS deployment/state yet; adding one must not silently bypass policy.
             _, empty = _empty_root_plan(root, env)
             if empty.get("resource_changes") or empty.get("planned_values", {}).get(
@@ -262,7 +294,7 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
                 "-p",
                 "127.0.0.1::4566",
                 "-e",
-                "SERVICES=iam,kms,secretsmanager,sqs",
+                "SERVICES=iam,kms,secretsmanager,sqs,s3,sts",
                 "-e",
                 "PERSISTENCE=0",
                 LOCALSTACK_IMAGE,
@@ -341,6 +373,10 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
         require_policy(resolved, "resolved")
         if exit_code != 0:
             raise RuntimeError("Second plan has changes; idempotency gate failed")
+        ota_verified = False
+        if (candidate / "environments/ota-local").is_dir():
+            _ota_local_acceptance(candidate, original, endpoint, env)
+            ota_verified = True
         summary = {
             "status": "passed",
             "contract_files": contract_count,
@@ -349,6 +385,9 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
             "second_plan_exit_code": exit_code,
             "security_scan": "passed",
             "resolved_plan_policy": "passed",
+            "ota_local_apply_second_plan": ota_verified,
+            "governance_acceptance": "offline-root-and-provider-schema-backed-mock-contracts",
+            "aws_organizations_enforcement_verified": False,
         }
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
@@ -363,6 +402,81 @@ def _empty_root_plan(root: Path, env: dict[str, str]) -> tuple[int, dict[str, An
     )
     shown = terraform(root, "show", "-json", "empty.tfplan", env=env, quiet=True)
     return result.returncode, json.loads(shown.stdout)
+
+
+def _ota_local_acceptance(
+    candidate: Path, original: Path, endpoint: str, env: dict[str, str]
+) -> None:
+    """Deploy isolated OTA resources; never reuse the developer's IAM, secrets or state."""
+    if not re.fullmatch(r"http://127\.0\.0\.1:[0-9]+", endpoint):
+        raise RuntimeError("OTA fixture endpoint must be the ephemeral loopback emulator")
+    role = "cv-iac-ota-tenant-api"
+    trust = json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"Service": "ecs-tasks.amazonaws.com"},
+                    "Action": "sts:AssumeRole",
+                }
+            ],
+        }
+    )
+    sdk = importlib.import_module("boto3")
+    config = importlib.import_module("botocore.config").Config(
+        connect_timeout=5, read_timeout=10, retries={"max_attempts": 2}
+    )
+    client_args = {
+        "endpoint_url": endpoint,
+        "region_name": "ap-northeast-1",
+        "aws_access_key_id": "test",
+        "aws_secret_access_key": "test",
+        "config": config,
+    }
+    sdk.client("iam", **client_args).create_role(RoleName=role, AssumeRolePolicyDocument=trust)
+    local = candidate / "environments/local"
+    platform = json.loads(terraform(local, "output", "-json", env=env, quiet=True).stdout)
+    key = platform["platform_secrets"]["value"]["database_application"]["kms_key_arn"]
+    secret = sdk.client("secretsmanager", **client_args).create_secret(
+        Name="/cv-iac/local/tenants/contract/database/application", KmsKeyId=key
+    )["ARN"]
+    variables = {
+        "project_name": "cv-iac",
+        "environment": "local",
+        "tenant_id": "iac-contract",
+        "aws_region": "ap-northeast-1",
+        "aws_endpoint_url": endpoint,
+        "api_runtime_role_name": role,
+        "application_database_secret_arn": secret,
+        "application_database_kms_key_arn": key,
+        "artifact_keys": ["firmware/body.bin"],
+    }
+    ota = candidate / "environments/ota-local"
+    previous = original / "environments/ota-local"
+    if previous.is_dir():
+        initialize(previous, env=env)
+        (previous / "ci.tfvars.json").write_text(json.dumps(variables), encoding="utf-8")
+        terraform(
+            previous,
+            "apply",
+            "-auto-approve",
+            "-input=false",
+            "-no-color",
+            "-var-file=ci.tfvars.json",
+            env=env,
+        )
+        shutil.copy2(previous / "terraform.tfstate", ota / "terraform.tfstate")
+    (ota / "ci.tfvars.json").write_text(json.dumps(variables), encoding="utf-8")
+    _, change = save_plan(ota, "ota-candidate", env=env)
+    require_policy(change, "changes")
+    terraform(
+        ota, "apply", "-input=false", "-auto-approve", "-no-color", "ota-candidate.tfplan", env=env
+    )
+    exit_code, resolved = save_plan(ota, "ota-second", env=env)
+    require_policy(resolved, "resolved")
+    if exit_code != 0:
+        raise RuntimeError("OTA second plan has changes")
 
 
 def main() -> int:

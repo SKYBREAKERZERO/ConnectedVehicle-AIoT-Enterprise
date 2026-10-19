@@ -6,7 +6,17 @@ resource "aws_kms_key" "state" {
   enable_key_rotation                = true
   deletion_window_in_days            = 30
   bypass_policy_lockout_safety_check = false
-  tags                               = local.common_tags
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "EnableLocalAccountDelegation"
+      Effect    = "Allow"
+      Principal = { AWS = "arn:aws:iam::000000000000:root" }
+      Action    = "kms:*"
+      Resource  = "*"
+    }]
+  })
+  tags = local.common_tags
 
   lifecycle {
     prevent_destroy = true
@@ -108,4 +118,13 @@ resource "aws_s3_bucket_policy" "state" {
     aws_s3_bucket_versioning.state,
     aws_s3_bucket_server_side_encryption_configuration.state,
   ]
+}
+resource "aws_s3_bucket_lifecycle_configuration" "state" {
+  bucket = aws_s3_bucket.state.id
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+    filter { prefix = "" }
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
+  }
 }

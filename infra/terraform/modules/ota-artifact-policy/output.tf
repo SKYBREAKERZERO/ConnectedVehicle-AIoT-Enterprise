@@ -4,11 +4,11 @@ output "read_policy_arn" {
 }
 
 output "read_policy_json" {
-    description = "IAM policy JSON to attach to the OTA API runtime role."
-    value       = aws_iam_policy.this.policy
+  description = "IAM policy JSON to attach to the OTA API runtime role."
+  value       = aws_iam_policy.this.policy
 }
 
 output "bucket_policy_json" {
-    description = "S3 bucket policy JSON to attach to the OTA firmware bucket."
-    value       = aws_s3_bucket_policy.this.policy
+  description = "S3 bucket policy JSON to attach to the OTA firmware bucket."
+  value       = aws_s3_bucket_policy.this.policy
 }

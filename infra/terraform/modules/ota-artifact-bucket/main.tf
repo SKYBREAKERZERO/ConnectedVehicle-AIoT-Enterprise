@@ -46,3 +46,12 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
     }
   }
 }
+resource "aws_s3_bucket_lifecycle_configuration" "this" {
+  bucket = aws_s3_bucket.this.id
+  rule {
+    id     = "abort-incomplete-uploads"
+    status = "Enabled"
+    filter { prefix = "" }
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
+  }
+}

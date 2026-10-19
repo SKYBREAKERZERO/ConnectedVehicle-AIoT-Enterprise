@@ -8,6 +8,21 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+LOCAL_OPERATIONAL_EXCEPTIONS = {
+    (check, resource, path)
+    for check in ("CKV_AWS_18", "CKV_AWS_144", "CKV2_AWS_62")
+    for resource, path in (
+        ("aws_s3_bucket.state", "bootstrap/state-backend/main.tf"),
+        ("module.artifact_bucket.aws_s3_bucket.this", "modules/ota-artifact-bucket/main.tf"),
+    )
+} | {
+    (
+        "CKV2_AWS_57",
+        "module.ota_authority.aws_secretsmanager_secret.this",
+        "modules/ota-secrets/main.tf",
+    )
+}
+
 
 def audit(report: Any, exceptions: dict[str, Any], *, today: date | None = None) -> list[str]:
     today = today or date.today()
@@ -17,7 +32,9 @@ def audit(report: Any, exceptions: dict[str, Any], *, today: date | None = None)
         if identity in allowed or not exception["reason"].strip():
             return ["Invalid or duplicate scanner exception"]
         # Exceptions apply only to the known local root's narrowly named resources.
-        if exception["check_id"] not in {"CKV_AWS_61", "CKV2_AWS_57"}:
+        if exception["check_id"] not in {"CKV_AWS_61", "CKV2_AWS_57"} and (
+            identity not in LOCAL_OPERATIONAL_EXCEPTIONS or exception.get("scope") != "local-only"
+        ):
             return ["Exceptions for dangerous-change/IAM/encryption checks are prohibited"]
         if date.fromisoformat(exception["expires"]) < today:
             return [f"Expired scanner exception: {exception['check_id']} {exception['resource']}"]
@@ -56,8 +73,13 @@ def audit(report: Any, exceptions: dict[str, Any], *, today: date | None = None)
                     "/connected-vehicle/local/database/remote-command",
                 }
             )
+            local_operational = (
+                identity in LOCAL_OPERATIONAL_EXCEPTIONS
+                and allowed.get(identity, {}).get("scope") == "local-only"
+                and finding.get("entity_tags", {}).get("Environment") == "local"
+            )
             if identity in allowed and (
-                callers.endswith("/environments/local/main.tf") or local_secret
+                callers.endswith("/environments/local/main.tf") or local_secret or local_operational
             ):
                 continue
             errors.append(f"{finding['check_id']} {finding['resource']} ({path})")

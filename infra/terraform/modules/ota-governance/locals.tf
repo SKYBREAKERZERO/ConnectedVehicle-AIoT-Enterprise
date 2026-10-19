@@ -6,6 +6,8 @@ locals {
     contains(["localstack", "aws"], var.deployment_mode)
   )
 
+  enforcement_enabled = local.organizations_enabled && var.governance_stage == "enforce"
+
   # Module-owned tags take precedence over caller-supplied tags.
   common_tags = merge(var.tags, {
     Project        = var.project_name
@@ -19,6 +21,7 @@ locals {
     environment => {
       account_id     = config.account_id
       existing_ou_id = config.existing_ou_id
+      manage_ou      = config.manage_ou
       ou_name        = "${var.project_name}-ota-${environment}"
 
       tags = merge(local.common_tags, {
@@ -34,19 +37,32 @@ locals {
     if config.existing_ou_id != null
   }
 
+  verified_ou_configs = {
+    for environment, config in local.existing_ou_configs : environment => config
+    if !contains(var.retired_environments, environment)
+  }
+
   managed_ou_configs = {
     for environment, config in local.environment_configs :
     environment => config
-    if local.organizations_enabled && config.existing_ou_id == null
+    if local.organizations_enabled && (config.manage_ou || (var.governance_stage == "topology" && config.existing_ou_id == null))
   }
 
-  # Scope policy attachments to explicitly listed member accounts.
+  # Member account expectations are separate from the actual attachment scope.
   # The organization root is never a policy target here.
   scp_target_accounts = {
     for environment, config in local.environment_configs :
     environment => config.account_id
-    if local.organizations_enabled
+    if local.enforcement_enabled
   }
+
+  scp_targets = {
+    for environment, config in local.environment_configs :
+    environment => (var.attachment_scope == "ou" ? coalesce(config.existing_ou_id, "ou-unconfigured-unconfigured") : config.account_id)
+    if local.enforcement_enabled && !contains(var.retired_environments, environment)
+  }
+
+  firmware_object_arns = [for arn in sort(tolist(var.protected_firmware_bucket_arns)) : "${arn}/firmware/*"]
 
   allowed_regions        = sort(tolist(var.allowed_regions))
   protected_bucket_arns  = sort(tolist(var.protected_bucket_arns))
@@ -107,11 +123,20 @@ locals {
           Resource = local.protected_bucket_arns
         }
       ] : [],
+      length(local.firmware_object_arns) > 0 ? [
+        {
+          Sid      = "PreventFirmwareVersionDeletion"
+          Effect   = "Deny"
+          Action   = ["s3:DeleteObject", "s3:DeleteObjectVersion"]
+          Resource = local.firmware_object_arns
+        }
+      ] : [],
       length(local.protected_kms_key_arns) > 0 ? [
         {
           Sid    = "PreventProtectedKeyRetirement"
           Effect = "Deny"
           Action = [
+            "kms:PutKeyPolicy",
             "kms:DisableKey",
             "kms:DisableKeyRotation",
             "kms:ScheduleKeyDeletion",

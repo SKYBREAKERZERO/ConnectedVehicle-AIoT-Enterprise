@@ -29,7 +29,7 @@ resource "aws_iam_policy" "this" {
 
         Condition = {
           StringEquals = {
-            "kms:ViaService"                  = local.kms_via_service
+            "kms:ViaService"                   = local.kms_via_service
             "kms:EncryptionContext:aws:s3:arn" = local.object_arns
           }
         }
@@ -102,7 +102,7 @@ resource "aws_s3_bucket_policy" "this" {
 
           Condition = {
             Bool = {
-              "aws:SecureTransport"      = "false"
+              "aws:SecureTransport"       = "false"
               "aws:PrincipalIsAWSService" = "false"
             }
           }

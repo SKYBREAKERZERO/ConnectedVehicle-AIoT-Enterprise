@@ -79,6 +79,7 @@ variable "environment_accounts" {
   type = map(object({
     account_id     = string
     existing_ou_id = optional(string)
+    manage_ou      = optional(bool, false)
   }))
 
   default  = {}
@@ -160,6 +161,14 @@ variable "protected_kms_key_arns" {
 
     error_message = "Provide explicit KMS key ARNs without aliases or wildcards."
   }
+
+  validation {
+    condition = (
+      !var.enable_organizations_management || var.governance_stage != "enforce" ||
+      length(var.protected_kms_key_arns) > 0
+    )
+    error_message = "Enforcement requires explicitly protected KMS keys."
+  }
 }
 
 variable "tags" {
@@ -179,4 +188,89 @@ variable "tags" {
 
     error_message = "Use at most 40 valid tags without the reserved aws: prefix."
   }
+}
+variable "governance_stage" {
+  description = "topology creates empty OUs; enforce requires established membership before attaching SCPs."
+  type        = string
+  default     = "enforce"
+  nullable    = false
+  validation {
+    condition     = contains(["topology", "enforce"], var.governance_stage)
+    error_message = "governance_stage must be topology or enforce."
+  }
+}
+
+variable "attachment_scope" {
+  description = "Use verified OU inheritance by default; account attachments require an explicit opt-in."
+  type        = string
+  default     = "ou"
+  nullable    = false
+  validation {
+    condition     = contains(["ou", "account"], var.attachment_scope)
+    error_message = "attachment_scope must be ou or account."
+  }
+  validation {
+    condition = (
+      !var.enable_organizations_management || var.governance_stage != "enforce" ||
+      var.attachment_scope != "ou" ||
+      alltrue([for config in values(var.environment_accounts) : config.existing_ou_id != null])
+    )
+    error_message = "OU enforcement requires existing OUs. Create topology, move accounts under an audited organization procedure, then enforce."
+  }
+}
+
+variable "protected_firmware_bucket_arns" {
+  description = "Dedicated firmware buckets whose firmware/ object versions must not be deleted. Never include state buckets."
+  type        = set(string)
+  default     = []
+  nullable    = false
+  validation {
+    condition = alltrue([
+      for arn in var.protected_firmware_bucket_arns : contains(var.protected_bucket_arns, arn)
+    ])
+    error_message = "Every firmware bucket must also be in protected_bucket_arns."
+  }
+  validation {
+    condition = (
+      !var.enable_organizations_management || var.governance_stage != "enforce" ||
+      length(var.protected_firmware_bucket_arns) > 0
+    )
+    error_message = "Enforcement requires at least one explicitly protected firmware bucket."
+  }
+}
+
+variable "protected_state_bucket_arns" {
+  description = "State buckets, protected administratively but excluded from firmware object deletion denies."
+  type        = set(string)
+  default     = []
+  nullable    = false
+  validation {
+    condition = alltrue([
+      for arn in var.protected_state_bucket_arns :
+      contains(var.protected_bucket_arns, arn) && !contains(var.protected_firmware_bucket_arns, arn)
+    ])
+    error_message = "State buckets must be protected and disjoint from firmware buckets."
+  }
+}
+
+variable "retired_environments" {
+  description = "Requested attachment retirements; prevent_destroy still requires the separately reviewed retirement procedure."
+  type        = set(string)
+  default     = []
+  nullable    = false
+  validation {
+    condition     = alltrue([for environment in var.retired_environments : contains(keys(var.environment_accounts), environment)])
+    error_message = "Retirements must name configured environments; keep topology mappings until handoff is complete."
+  }
+  validation {
+    condition     = length(var.retired_environments) == 0 || can(regex("^[0-9a-f]{32}$", var.retirement_operation_id))
+    error_message = "A retirement requires an explicit 32-character operation ID and the documented review workflow."
+  }
+}
+
+variable "retirement_operation_id" {
+  description = "Operation ID used to correlate a separately reviewed retirement manifest."
+  type        = string
+  default     = null
+  nullable    = true
 }
