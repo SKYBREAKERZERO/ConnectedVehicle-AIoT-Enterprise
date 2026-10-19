@@ -1,0 +1,112 @@
+groups:
+  - name: ota-api-recording
+    interval: 15s
+
+    rules:
+      - record: vehicle:ota_api_requests:rate5m
+        expr: |
+          sum by (job, instance) (
+            rate(vehicle_http_requests_total{
+              job="vehicle-api",
+              route=~"/v[12]/ota/.*|/v[12]/vehicles/.*/ecus(/.*)?"
+            }[5m])
+          )
+
+      - record: vehicle:ota_api_errors:rate5m
+        expr: |
+          sum by (job, instance) (
+            rate(vehicle_http_requests_total{
+              job="vehicle-api",
+              route=~"/v[12]/ota/.*|/v[12]/vehicles/.*/ecus(/.*)?",
+              status=~"5.."
+            }[5m])
+          )
+          or on (job, instance)
+          (
+            0 * vehicle:ota_api_requests:rate5m
+          )
+
+      - record: vehicle:ota_api_error_ratio:5m
+        expr: |
+          vehicle:ota_api_errors:rate5m
+          /
+          clamp_min(vehicle:ota_api_requests:rate5m, 0.001)
+
+  - name: ota-api-alerts
+    interval: 15s
+
+    rules:
+      - alert: OtaApiHighErrorRatio
+        expr: |
+          (
+            vehicle:ota_api_error_ratio:5m > 0.05
+          )
+          and on (job, instance)
+          (
+            sum by (job, instance) (
+              increase(vehicle_http_requests_total{
+                job="vehicle-api",
+                route=~"/v[12]/ota/.*|/v[12]/vehicles/.*/ecus(/.*)?"
+              }[5m])
+            ) >= 20
+          )
+        for: 5m
+        labels:
+          severity: warning
+          component: ota-api
+        annotations:
+          summary: "OTA API server error ratio is elevated"
+          description: "The five-minute error ratio exceeds 5% with at least 20 requests."
+          action: "Inspect API logs and database, artifact storage, and authority dependencies."
+
+      - alert: OtaClaimServerErrors
+        expr: |
+          sum by (job, instance) (
+            increase(vehicle_http_requests_total{
+              job="vehicle-api",
+              method="POST",
+              route=~"/v2/vehicles/.*/ecus/.*/ota-jobs/.*/claim",
+              status=~"5.."
+            }[5m])
+          ) >= 3
+        for: 1m
+        labels:
+          severity: warning
+          component: ota-claim
+        annotations:
+          summary: "OTA Claim requests repeatedly fail"
+          description: "At least three server errors occurred in the last five minutes."
+          action: "Inspect database transactions and claim processing logs before retrying."
+
+      - alert: OtaControlApiHighLatency
+        expr: |
+          (
+            histogram_quantile(
+              0.95,
+              sum by (job, instance, le) (
+                rate(vehicle_http_duration_seconds_bucket{
+                  job="vehicle-api",
+                  route=~"/v[12]/ota/.*|/v[12]/vehicles/.*/ecus(/.*)?",
+                  route!~".*/artifact"
+                }[5m])
+              )
+            ) > 2
+          )
+          and on (job, instance)
+          (
+            sum by (job, instance) (
+              increase(vehicle_http_duration_seconds_count{
+                job="vehicle-api",
+                route=~"/v[12]/ota/.*|/v[12]/vehicles/.*/ecus(/.*)?",
+                route!~".*/artifact"
+              }[5m])
+            ) >= 20
+          )
+        for: 5m
+        labels:
+          severity: warning
+          component: ota-api
+        annotations:
+          summary: "OTA control API p95 latency exceeds two seconds"
+          description: "Firmware download responses are excluded from this latency threshold."
+          action: "Inspect database lock waits, connection pools, and downstream calls."
