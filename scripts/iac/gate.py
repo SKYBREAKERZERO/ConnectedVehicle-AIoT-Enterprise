@@ -197,7 +197,6 @@ def require_policy(plan: dict[str, Any], phase: str) -> None:
 def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python: str) -> None:
     env = sandbox_environment(work)
 
-
     candidate = work / "candidate"
     original = work / "baseline"
     copy_infra(repo, candidate)
