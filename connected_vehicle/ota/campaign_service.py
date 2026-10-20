@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -21,6 +22,7 @@ from connected_vehicle.ota.campaign_contracts import (
     CampaignTarget,
     CampaignView,
 )
+from connected_vehicle.ota.campaign_retry import CampaignLeaseLost, database_retry
 from connected_vehicle.ota.execution_contracts import SignedManifest, VerificationRequest
 from connected_vehicle.ota.execution_service import OTAExecutionService
 from connected_vehicle.ota.install_receipt import load_key
@@ -74,21 +76,27 @@ class CampaignService:
             mac = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()
         except (OSError, KeyError, TypeError, ValueError) as exc:
             raise DependencyUnavailableError("Campaign authority unavailable") from exc
-        try:
-            async with self.base.transaction(tenant) as session:
-                result = await session.scalar(
-                    text("SELECT public.ota_campaign_command(:p,:m)"), dict(p=payload, m=mac)
-                )
-                return CampaignView.model_validate(result)
-        except DBAPIError as exc:
-            state = getattr(exc.orig, "sqlstate", None)
-            if state == "P0002":
-                raise ResourceNotFoundError() from exc
-            if state in {"23514", "23505", "42501", "55P03", "57014", "40P01"}:
-                raise ConflictError(
-                    "Campaign state, operation or execution policy conflicts"
-                ) from exc
-            raise
+
+        async def execute() -> CampaignView:
+            try:
+                async with self.base.transaction(tenant) as session:
+                    result = await session.scalar(
+                        text("SELECT public.ota_campaign_command(:p,:m)"), dict(p=payload, m=mac)
+                    )
+                    return CampaignView.model_validate(result)
+            except DBAPIError as exc:
+                state = getattr(exc.orig, "sqlstate", None)
+                if state == "P0002":
+                    raise ResourceNotFoundError() from exc
+                if state == "55000":
+                    raise CampaignLeaseLost("Dispatcher lease expired") from exc
+                if state in {"23514", "23505", "42501"}:
+                    raise ConflictError(
+                        "Campaign state, operation or execution policy conflicts"
+                    ) from exc
+                raise
+
+        return await database_retry(execute)
 
     async def row(self, tenant: str, identifier: str) -> dict[str, Any]:
         async with self.base.transaction(tenant) as session:
@@ -237,7 +245,15 @@ class CampaignService:
             tenant, actor, identifier, action, str(request.operation_id), {}, request.reason
         )
 
-    async def tick(self, tenant: str, actor: str, identifier: str, operation: str) -> CampaignView:
+    async def tick(
+        self,
+        tenant: str,
+        actor: str,
+        identifier: str,
+        operation: str,
+        *,
+        dispatch_owner: str | None = None,
+    ) -> CampaignView:
         row = await self.row(tenant, identifier)
         valid = False
         try:
@@ -253,27 +269,65 @@ class CampaignService:
             identifier,
             "tick",
             operation,
-            {"publisher_valid": valid},
+            {
+                "publisher_valid": valid,
+                **({"dispatch_owner": dispatch_owner} if dispatch_owner else {}),
+            },
             "Reconcile and evaluate rollout gate",
         )
 
+    async def claim(self, tenant: str, owner: str, identifier: str | None = None) -> str | None:
+        async def execute() -> str | None:
+            async with self.base.transaction(tenant) as session:
+                claimed = await session.scalar(
+                    text("SELECT public.ota_campaign_claim(:t,CAST(:o AS uuid),:c,150)"),
+                    dict(t=tenant, o=owner, c=identifier),
+                )
+                return str(claimed) if claimed is not None else None
+
+        return await database_retry(execute)
+
+    async def release(self, tenant: str, owner: str, identifier: str) -> None:
+        async def execute() -> None:
+            async with self.base.transaction(tenant) as session:
+                await session.execute(
+                    text("SELECT public.ota_campaign_release(:t,CAST(:o AS uuid),:c)"),
+                    dict(t=tenant, o=owner, c=identifier),
+                )
+
+        await database_retry(execute)
+
     async def dispatch(self, tenant: str, identifier: str) -> CampaignView:
+        owner = str(uuid4())
+        if await self.claim(tenant, owner, identifier) is None:
+            return await self.get(tenant, identifier)
+        try:
+            return await self._dispatch_claimed(tenant, identifier, owner)
+        finally:
+            await self.release(tenant, owner, identifier)
+
+    async def _dispatch_claimed(self, tenant: str, identifier: str, owner: str) -> CampaignView:
         actor = "campaign-dispatcher"
         try:
-            view = await self.tick(tenant, actor, identifier, str(uuid4()))
+            view = await self.tick(tenant, actor, identifier, str(uuid4()), dispatch_owner=owner)
+        except CampaignLeaseLost:
+            return await self.get(tenant, identifier)
         except ConflictError:
-            view = await self.get(tenant, identifier)
-            if view.status == "running":
-                return await self.action(
-                    tenant,
-                    actor,
-                    identifier,
-                    "pause",
-                    CampaignAction(
-                        operation_id=uuid4(), reason="dispatch_conflict_requires_reconciliation"
-                    ),
-                )
-            return view
+            current_view = await self.get(tenant, identifier)
+            if current_view.status == "running":
+                try:
+                    return await self.command(
+                        tenant,
+                        actor,
+                        identifier,
+                        "pause",
+                        str(uuid4()),
+                        {"dispatch_owner": owner},
+                        "dispatch_conflict_requires_reconciliation",
+                    )
+                except CampaignLeaseLost:
+                    return await self.get(tenant, identifier)
+            return current_view
         if view.status != "running":
             return view
         async with self.base.transaction(tenant) as session:
@@ -292,6 +346,14 @@ class CampaignService:
         row = await self.row(tenant, identifier)
         execution = OTAExecutionService(self.base.sessions, self.artifacts)
         for job in pending:
+            current_row = await self.row(tenant, identifier)
+            if (
+                str(current_row["dispatch_owner"]) != owner
+                or current_row["dispatch_until"] is None
+                or current_row["dispatch_until"] <= datetime.now(UTC)
+                or current_row["status"] != "running"
+            ):
+                return await self.get(tenant, identifier)
             try:
                 await execution.verify(
                     tenant,
@@ -306,16 +368,19 @@ class CampaignService:
                 )
             except (ConflictError, DependencyUnavailableError, ValueError):
                 current = await self.get(tenant, identifier)
-                if current.status == "running":
-                    return await self.action(
-                        tenant,
-                        actor,
-                        identifier,
-                        "pause",
-                        CampaignAction(
-                            operation_id=uuid4(),
-                            reason="verification_failed_requires_reconciliation",
-                        ),
-                    )
+                lease = await self.row(tenant, identifier)
+                if current.status == "running" and str(lease["dispatch_owner"]) == owner:
+                    try:
+                        return await self.command(
+                            tenant,
+                            actor,
+                            identifier,
+                            "pause",
+                            str(uuid4()),
+                            {"dispatch_owner": owner},
+                            "verification_failed_requires_reconciliation",
+                        )
+                    except CampaignLeaseLost:
+                        return await self.get(tenant, identifier)
                 return current
         return await self.get(tenant, identifier)

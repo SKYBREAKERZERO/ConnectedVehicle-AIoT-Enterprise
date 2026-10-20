@@ -99,6 +99,17 @@ jobs:
         env:
           RUNTIME_EVIDENCE_DIR: .runtime-reports
         run: pytest tests/unit tests/contract tests/e2e/test_independent_runtimes.py tests/e2e/test_device_full_chain.py tests/integration/day12 tests/integration/day16 tests/integration/day17 tests/integration/day18 tests/integration/day19 tests/integration/security/test_database_runtime_permissions.py tests/integration/reliability/test_redis_idempotency.py tests/integration/remote_command/test_remote_command_sqs_worker_integration.py -q
+      - name: Day21 real PostgreSQL dispatcher contention and recovery
+        run: pytest tests/integration/day21 -q --junitxml=.runtime-reports/day21-postgres.xml
+      - name: Upload Day21 PostgreSQL evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day21-postgres-concurrency
+          path: .runtime-reports/day21-postgres.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
       - name: Require Day16 persistent state and monitoring proof
         run: python -m scripts.day16_evidence --check-existing
       - name: Require Day17 SLO and local release readiness
