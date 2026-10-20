@@ -25,8 +25,8 @@ from scripts.iac.scan_policy import audit
 REPO = Path(__file__).resolve().parents[2]
 # Public test image verified locally; no paid token or Docker socket mount required.
 LOCALSTACK_IMAGE = (
-    "localstack/localstack:3.8.1@"
-    "sha256:b279c01f4cfb8f985a482e4014cabc1e2697b9d7a6c8c8db2e40f4d9f93687c7"
+    "localstack/localstack:4.14.0@"
+    "sha256:3ebc37595918b8accb852f8048fef2aff047d465167edd655528065b07bc364a"
 )
 TFVARS: dict[str, Any] = {
     "project_name": "cv-iac-ci",
