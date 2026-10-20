@@ -62,7 +62,9 @@ locals {
     if local.enforcement_enabled && !contains(var.retired_environments, environment)
   }
 
-  firmware_object_arns = [for arn in sort(tolist(var.protected_firmware_bucket_arns)) : "${arn}/firmware/*"]
+  protected_firmware_bucket_arns = sort(tolist(var.protected_firmware_bucket_arns))
+  protected_firmware_object_arns = [for arn in local.protected_firmware_bucket_arns : "${arn}/*"]
+  firmware_object_arns           = local.protected_firmware_object_arns
 
   allowed_regions        = sort(tolist(var.allowed_regions))
   protected_bucket_arns  = sort(tolist(var.protected_bucket_arns))

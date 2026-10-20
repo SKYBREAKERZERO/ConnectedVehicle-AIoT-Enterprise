@@ -192,7 +192,7 @@ variable "tags" {
 variable "governance_stage" {
   description = "topology creates empty OUs; enforce requires established membership before attaching SCPs."
   type        = string
-  default     = "enforce"
+  default     = "topology"
   nullable    = false
   validation {
     condition     = contains(["topology", "enforce"], var.governance_stage)
@@ -220,7 +220,7 @@ variable "attachment_scope" {
 }
 
 variable "protected_firmware_bucket_arns" {
-  description = "Dedicated firmware buckets whose firmware/ object versions must not be deleted. Never include state buckets."
+  description = "Dedicated firmware buckets whose object versions must not be deleted. Never include state buckets."
   type        = set(string)
   default     = []
   nullable    = false

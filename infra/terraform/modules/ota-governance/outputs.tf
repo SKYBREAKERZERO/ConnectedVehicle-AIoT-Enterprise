@@ -68,8 +68,11 @@ output "protected_resources" {
   description = "Configured resources included in the generated SCP; does not establish resource ownership or effective protection."
 
   value = {
-    bucket_arns  = local.protected_bucket_arns
-    kms_key_arns = local.protected_kms_key_arns
+    firmware_object_arns = local.protected_firmware_object_arns
+    firmware_bucket_arns = local.protected_firmware_bucket_arns
+    state_bucket_arns    = sort(tolist(var.protected_state_bucket_arns))
+    bucket_arns          = local.protected_bucket_arns
+    kms_key_arns         = local.protected_kms_key_arns
   }
 }
 output "governance_stage" {
@@ -80,4 +83,8 @@ output "governance_stage" {
 output "attachment_scope" {
   value       = var.attachment_scope
   description = "OU inheritance or explicitly opted-in direct account attachment."
+}
+output "enforcement_enabled" {
+  description = "Whether explicitly opted-in SCP enforcement is enabled."
+  value       = local.enforcement_enabled
 }

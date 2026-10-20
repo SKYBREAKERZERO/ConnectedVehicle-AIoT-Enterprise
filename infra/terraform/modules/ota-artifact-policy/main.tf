@@ -1,6 +1,6 @@
 resource "aws_iam_policy" "this" {
   name        = local.policy_name
-  description = "Read approved pinned firmware versions and decrypt only via S3."
+  description = "Read approved version-pinned OTA firmware objects and decrypt only via S3."
   tags        = var.tags
 
   policy = jsonencode({
@@ -8,25 +8,16 @@ resource "aws_iam_policy" "this" {
 
     Statement = [
       {
-        Sid    = "ReadPinnedFirmwareVersions"
-        Effect = "Allow"
-
-        Action = [
-          "s3:GetObjectVersion"
-        ]
-
+        Sid      = "ReadPinnedFirmwareVersions"
+        Effect   = "Allow"
+        Action   = ["s3:GetObjectVersion"]
         Resource = local.object_arns
       },
       {
-        Sid    = "DecryptApprovedFirmwareViaS3"
-        Effect = "Allow"
-
-        Action = [
-          "kms:Decrypt"
-        ]
-
+        Sid      = "DecryptApprovedFirmwareViaS3"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
         Resource = var.kms_key_arn
-
         Condition = {
           StringEquals = {
             "kms:ViaService"                   = local.kms_via_service
@@ -43,43 +34,36 @@ resource "aws_s3_bucket_policy" "this" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-
     Statement = concat(
       [
+        # Default bucket SSE-KMS encrypts PutObject requests without headers.
+        # Deny only an EXPLICIT attempt to override the default with non-KMS.
         {
-          Sid       = "DenyUploadsWithoutSseKms"
+          Sid       = "DenyExplicitWrongEncryption"
           Effect    = "Deny"
           Principal = "*"
-
-          Action = [
-            "s3:PutObject"
-          ]
-
-          Resource = [
-            "${local.bucket_arn}/*"
-          ]
-
+          Action    = ["s3:PutObject"]
+          Resource  = ["${local.bucket_arn}/*"]
           Condition = {
+            Null = {
+              "s3:x-amz-server-side-encryption" = "false"
+            }
             StringNotEquals = {
               "s3:x-amz-server-side-encryption" = "aws:kms"
             }
           }
         },
         {
-          Sid       = "DenyUploadsWithoutApprovedKey"
+          Sid       = "DenyExplicitWrongKmsKey"
           Effect    = "Deny"
           Principal = "*"
-
-          Action = [
-            "s3:PutObject"
-          ]
-
-          Resource = [
-            "${local.bucket_arn}/*"
-          ]
-
+          Action    = ["s3:PutObject"]
+          Resource  = ["${local.bucket_arn}/*"]
           Condition = {
-            ArnNotEqualsIfExists = {
+            Null = {
+              "s3:x-amz-server-side-encryption-aws-kms-key-id" = "false"
+            }
+            ArnNotEquals = {
               "s3:x-amz-server-side-encryption-aws-kms-key-id" = var.kms_key_arn
             }
           }
@@ -90,16 +74,8 @@ resource "aws_s3_bucket_policy" "this" {
           Sid       = "DenyInsecureTransport"
           Effect    = "Deny"
           Principal = "*"
-
-          Action = [
-            "s3:*"
-          ]
-
-          Resource = [
-            local.bucket_arn,
-            "${local.bucket_arn}/*"
-          ]
-
+          Action    = ["s3:*"]
+          Resource  = [local.bucket_arn, "${local.bucket_arn}/*"]
           Condition = {
             Bool = {
               "aws:SecureTransport"       = "false"

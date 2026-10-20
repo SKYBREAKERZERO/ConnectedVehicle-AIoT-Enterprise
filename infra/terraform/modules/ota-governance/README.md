@@ -1,6 +1,6 @@
 # OTA governance
 
-This module adds deny-only SCP guardrails to an existing Organization. Defaults are offline and create no Organizations resources. `environments/governance-local` is an integrated offline example; it never claims real SCP enforcement.
+This module adds deny-only SCP guardrails to an existing Organization. Defaults are offline/topology/OU and create no Organizations resources. `environments/governance-local` is an integrated offline example; it never claims real SCP enforcement.
 
 ## Provider contract
 
@@ -17,7 +17,7 @@ The installed AWS providers 6.67.0 and 6.69.1 expose `roots[].policy_types[].typ
 
 ## Protection contract
 
-Enforcement requires nonempty firmware bucket and KMS key lists. Firmware buckets must be included in `protected_bucket_arns`; state buckets must be disjoint from firmware buckets. The firmware object deny applies only to `firmware/*` in explicitly named firmware buckets and covers DeleteObject and DeleteObjectVersion. State PutObject and lock DeleteObject remain available subject to IAM and bucket policy. KMS protection includes PutKeyPolicy, DisableKey, DisableKeyRotation and ScheduleKeyDeletion.
+Enforcement requires nonempty firmware bucket and KMS key lists. Firmware buckets must be included in `protected_bucket_arns`; state buckets must be disjoint from firmware buckets. The firmware object deny applies to all object keys (`*`) in explicitly named firmware buckets and covers DeleteObject and DeleteObjectVersion. State PutObject and lock DeleteObject remain available subject to IAM and bucket policy. KMS protection includes PutKeyPolicy, DisableKey, DisableKeyRotation and ScheduleKeyDeletion.
 
 The bucket administration freeze blocks normal configuration changes too. Establish the bucket encryption, versioning, ownership, access block and safe lifecycle baseline before attaching governance. Existing lifecycle expiration rules must be removed or reconciled before enforcement; an SCP does not undo historical deletions or prove service-internal expiration safety. The baseline lifecycle only aborts incomplete multipart uploads and never expires completed versions.
 

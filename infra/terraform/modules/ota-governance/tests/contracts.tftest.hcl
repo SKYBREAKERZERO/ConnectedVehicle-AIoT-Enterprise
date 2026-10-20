@@ -24,6 +24,7 @@ mock_provider "aws" {
   }
 }
 variables {
+  governance_stage                = "enforce"
   deployment_mode                 = "localstack"
   enable_organizations_management = true
   organization_root_id            = "r-abcd"
@@ -75,7 +76,7 @@ run "explicit_account_scope" {
 run "firmware_history_and_key_policy_protected" {
   command = plan
   assert {
-    condition     = anytrue([for statement in jsondecode(output.scp_document_json).Statement : statement.Sid == "PreventFirmwareVersionDeletion" && contains(try(statement.Action, []), "s3:DeleteObjectVersion") && try(statement.Resource, []) == ["arn:aws:s3:::cv-local-firmware/firmware/*"]]) && anytrue([for statement in jsondecode(output.scp_document_json).Statement : contains(try(statement.Action, []), "kms:PutKeyPolicy")])
+    condition     = anytrue([for statement in jsondecode(output.scp_document_json).Statement : statement.Sid == "PreventFirmwareVersionDeletion" && contains(try(statement.Action, []), "s3:DeleteObjectVersion") && try(statement.Resource, []) == ["arn:aws:s3:::cv-local-firmware/*"]]) && anytrue([for statement in jsondecode(output.scp_document_json).Statement : contains(try(statement.Action, []), "kms:PutKeyPolicy")])
     error_message = "Firmware object versions and KMS key policies must be protected."
   }
   assert {
