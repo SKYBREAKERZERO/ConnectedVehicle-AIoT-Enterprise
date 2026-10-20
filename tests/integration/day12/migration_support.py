@@ -26,7 +26,7 @@ from tests.e2e.test_independent_runtimes import ROOT, docker
 
 DAY11 = "819061de39eb2adb0ce47b61d465cd0f7891a3c1"
 LEGACY = "a37e610c952d"
-HEAD = "a05e127c349b"
+HEAD = "b16f238d45ac"
 TABLES = ("vehicles", "remote_commands", "command_reports", "telemetry_samples", "outbox_events")
 RUNTIMES = ("app_user", "outbox_worker", "remote_command_worker")
 OWNER = "migration_owner"
