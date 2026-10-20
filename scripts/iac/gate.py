@@ -196,12 +196,7 @@ def require_policy(plan: dict[str, Any], phase: str) -> None:
 
 def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python: str) -> None:
     env = sandbox_environment(work)
-    cache = Path(env["TF_PLUGIN_CACHE_DIR"])
-    for source in [
-        *(repo / "infra/terraform/environments").glob("*/.terraform/providers"),
-        *(repo / "infra/terraform/bootstrap").glob("*/.terraform/providers"),
-    ]:
-        shutil.copytree(source, cache, dirs_exist_ok=True)
+
 
     candidate = work / "candidate"
     original = work / "baseline"
