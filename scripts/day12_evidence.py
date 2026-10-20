@@ -1,4 +1,4 @@
-﻿"""Check every required local acceptance artifact and publish a sanitized manifest."""
+"""Check every required local acceptance artifact and publish a sanitized manifest."""
 
 from __future__ import annotations
 
@@ -526,4 +526,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
