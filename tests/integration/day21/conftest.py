@@ -62,8 +62,11 @@ def postgres() -> Iterator[Settings]:
     try:
         port = int(docker("port", name, "5432").rsplit(":", 1)[1])
         deadline = time.monotonic() + 45
+        # The image's temporary init server accepts Unix sockets before the
+        # final server restarts. Require TCP so bootstrap cannot race that exit.
         while subprocess.run(
-            ["docker", "exec", name, "pg_isready", "-U", "postgres"], capture_output=True
+            ["docker", "exec", name, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"],
+            capture_output=True,
         ).returncode:
             if time.monotonic() > deadline:
                 raise TimeoutError("Day21 PostgreSQL did not start")
