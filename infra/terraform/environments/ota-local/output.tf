@@ -48,11 +48,15 @@ output "api_runtime_role_name" {
 }
 
 output "runtime_read_policy_arns" {
-  description = "Managed read policies used by OTA runtimes."
+  description = "Managed read policies for the API runtime (legacy output name)."
 
   value = {
     database  = module.database_read_policy.policy_arn
     authority = module.ota_authority.read_policy_arn
     artifact  = module.artifact_policy.read_policy_arn
   }
+}
+output "campaign_read_policy_arns" {
+  description = "Campaign read policies, with an isolated database credential policy."
+  value       = module.campaign_runtime.attached_policy_arns
 }

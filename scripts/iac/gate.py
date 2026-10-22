@@ -19,6 +19,7 @@ from typing import Any
 from uuid import uuid4
 
 from scripts.iac.governance_schema import require_governance_schema
+from scripts.iac.ota_database_policy import database_isolation_errors
 from scripts.iac.plan_policy import evaluate
 from scripts.iac.scan_policy import audit
 
@@ -380,6 +381,7 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
             "security_scan": "passed",
             "resolved_plan_policy": "passed",
             "ota_local_apply_second_plan": ota_verified,
+            "ota_database_credential_isolation": ota_verified,
             "governance_acceptance": "offline-root-and-provider-schema-backed-mock-contracts",
             "aws_organizations_enforcement_verified": False,
         }
@@ -435,6 +437,9 @@ def _ota_local_acceptance(
     secret = sdk.client("secretsmanager", **client_args).create_secret(
         Name="/cv-iac/local/tenants/contract/database/application", KmsKeyId=key
     )["ARN"]
+    campaign_secret = sdk.client("secretsmanager", **client_args).create_secret(
+        Name="/cv-iac/local/tenants/contract/database/campaign", KmsKeyId=key
+    )["ARN"]
     variables = {
         "project_name": "cv-iac",
         "environment": "local",
@@ -444,6 +449,8 @@ def _ota_local_acceptance(
         "api_runtime_role_name": role,
         "application_database_secret_arn": secret,
         "application_database_kms_key_arn": key,
+        "campaign_database_secret_arn": campaign_secret,
+        "campaign_database_kms_key_arn": key,
         "artifact_keys": ["firmware/body.bin"],
     }
     ota = candidate / "environments/ota-local"
@@ -471,6 +478,9 @@ def _ota_local_acceptance(
     require_policy(resolved, "resolved")
     if exit_code != 0:
         raise RuntimeError("OTA second plan has changes")
+    isolation_errors = database_isolation_errors(resolved, variables)
+    if isolation_errors:
+        raise RuntimeError("OTA database isolation: " + "; ".join(isolation_errors))
 
 
 def main() -> int:

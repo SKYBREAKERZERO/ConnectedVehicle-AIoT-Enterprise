@@ -26,3 +26,7 @@ artifact_keys = [
   "firmware/tenant-a/body-ecu/1.0.0/firmware.bin",
   "firmware/tenant-a/gateway-ecu/1.0.0/firmware.bin",
 ]
+# Dedicated Campaign credential provisioned by trusted database bootstrap.
+# Must differ from the API secret; Terraform does not create PostgreSQL users or GRANTs.
+campaign_database_secret_arn = "arn:aws:secretsmanager:ap-northeast-1:000000000000:secret:REPLACE_WITH_DEDICATED_CAMPAIGN_DATABASE_SECRET"
+campaign_database_kms_key_arn = "arn:aws:kms:ap-northeast-1:000000000000:key/REPLACE-WITH-CAMPAIGN-DATABASE-KEY-ID"

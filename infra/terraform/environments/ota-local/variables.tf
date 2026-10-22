@@ -124,6 +124,44 @@ variable "application_database_kms_key_arn" {
   }
 }
 
+variable "campaign_database_secret_arn" {
+  description = "Existing tenant-bound dedicated Campaign database secret ARN in LocalStack."
+  type        = string
+  nullable    = false
+
+  validation {
+    condition = can(
+      regex(
+        "^arn:aws:secretsmanager:${var.aws_region}:000000000000:secret:[A-Za-z0-9/_+=.@-]+$",
+        var.campaign_database_secret_arn
+      )
+    )
+
+    error_message = "Provide a LocalStack database secret ARN in the configured region and account 000000000000."
+  }
+  validation {
+    condition     = var.campaign_database_secret_arn != var.application_database_secret_arn
+    error_message = "API and Campaign must use distinct database secrets; shared credentials are prohibited."
+  }
+}
+
+variable "campaign_database_kms_key_arn" {
+  description = "Existing KMS key ARN encrypting the Campaign database secret."
+  type        = string
+  nullable    = false
+
+  validation {
+    condition = can(
+      regex(
+        "^arn:aws:kms:${var.aws_region}:000000000000:key/[A-Za-z0-9-]+$",
+        var.campaign_database_kms_key_arn
+      )
+    )
+
+    error_message = "Provide the database secret's LocalStack KMS key ARN in the configured region."
+  }
+}
+
 variable "artifact_keys" {
   description = "Exact firmware object keys approved for this tenant."
   type        = set(string)
