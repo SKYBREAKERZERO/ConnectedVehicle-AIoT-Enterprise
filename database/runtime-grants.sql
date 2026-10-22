@@ -76,3 +76,11 @@ DO $$ BEGIN
 END $$;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC, app_user, outbox_worker, remote_command_worker;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM PUBLIC, app_user, outbox_worker, remote_command_worker;
+
+-- Day21 lease authority grants no direct campaign or Job UPDATE privileges.
+DO $$ BEGIN
+  IF to_regprocedure('public.ota_campaign_claim(text,uuid,text,integer)') IS NOT NULL THEN
+    GRANT EXECUTE ON FUNCTION public.ota_campaign_claim(text,uuid,text,integer),
+      public.ota_campaign_release(text,uuid,text) TO app_user;
+  END IF;
+END $$;

@@ -1,0 +1,11 @@
+ORIGINAL PACKAGE EVIDENCE ONLY. Current local results are in DAY20_LOCAL_INSTALL_REPORT.md.
+
+Day20 offline static test record (2026-10-20)
+Python 3.13.5
+$ python -m pytest tests/unit/day20 -q
+.........                                                                [100%]
+9 passed in 0.06s
+$ python scripts/day20/verify_overlay.py
+Day20 offline source sanity: PASS (17 files checked)
+Scope: file presence, delimiter balance, conservative security checks only.
+NOT VERIFIED: Terraform fmt/validate/test, Checkov, CI, LocalStack or AWS runtime.
