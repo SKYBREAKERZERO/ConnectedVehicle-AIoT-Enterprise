@@ -80,8 +80,12 @@ The current PR baseline has no OTA root, so CI exercises creation from that base
   broad key decrypt, missing ViaService, wrong encryption context, write grants,
   extra statements, malformed evidence, and shared identity configuration.
 - The IaC gate resolves the real LocalStack deployment's second plan, checks the
-  exact two credential policy documents and exclusive owning-role attachments,
-  and fails on missing or malformed evidence. Existing scans, contracts,
+  exact two credential policy documents and all six approved runtime attachments.
+  Extra managed or inline runtime policies are rejected. Non-database policies
+  cannot grant reads of either database Secret or decryption of either database
+  key, including wildcard and mixed-case action grants. Duplicate resource
+  addresses, duplicate JSON keys, missing policy versions, unknown policy
+  documents and incorrect resource types fail closed. Existing scans, contracts,
   checksums, baseline checks and zero-change second plan remain mandatory.
 - Repository Ruff, format, Mypy and IaC pytest checks run locally. GitHub Runtime
   remains required for full Runtime and real PostgreSQL regression evidence.
@@ -93,3 +97,26 @@ The current PR baseline has no OTA root, so CI exercises creation from that base
 No production AWS apply, GitHub merge, database DDL, or provider checksum bypass
 is authorized by this work. LocalStack applies operate only in isolated gate
 fixtures with dummy credentials and copied state.
+
+## Review corrections and remaining acceptance gaps
+
+The initial Day23 validator checked only the two named database policies and
+their direct attachments. A modified artifact/authority policy could still grant
+database access while those two policies remained correct. Additional policies
+and inline grants were also outside that check. The review closes these bypasses
+with an exact attachment matrix and a scan of every other managed IAM policy in
+the OTA root. The scan deliberately rejects even context-constrained database-key
+decrypt grants outside the owning database policy; keep OTA authority/artifact
+grants separate from database credential grants.
+
+Malformed evidence is rejected rather than treated as proof of isolation. Tests
+also retain a positive explicit-Deny case so denial statements are not confused
+with permission grants. LocalStack integration and both required CI checks must
+be rerun on the correction commit; results from the preceding commit do not
+accept the corrected code.
+
+These fixes do not close the end-to-end acceptance gaps described above:
+dedicated PostgreSQL credential provisioning, Campaign runtime identity alignment,
+effective access through external IAM policies, and existing-state attachment
+migration remain unverified. They require their own implementation and evidence;
+the green IaC/Runtime checks here must not be presented as their completion.
