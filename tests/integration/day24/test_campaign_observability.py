@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import FastAPI
 from sqlalchemy import text
