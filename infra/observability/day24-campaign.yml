@@ -1,0 +1,40 @@
+groups:
+- name: ota-campaign-runtime
+  rules:
+  - alert: CampaignCollectorUnavailable
+    expr: ((vehicle_ota_collection_success{job="vehicle-api"} == 0) and on(job,instance) (vehicle_ota_enabled{job="vehicle-api"}
+      == 1)) or ((vehicle_ota_enabled{job="vehicle-api"} == 1) unless on(job,instance) vehicle_ota_collection_success{job="vehicle-api"})
+      or (up{job="vehicle-api"} == 0)
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: Campaign state collection is unavailable
+      runbook_url: https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/blob/main/docs/DAY24_CAMPAIGN_OBSERVABILITY.md#collector-unavailable
+  - alert: CampaignWaveOverdue
+    expr: sum by(job,instance) (vehicle_ota_waves{job="vehicle-api",state="overdue"}) > 0 and on(job,instance) (vehicle_ota_collection_success{job="vehicle-api"}
+      == 1)
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: Campaign wave exceeded its configured timeout
+      runbook_url: https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/blob/main/docs/DAY24_CAMPAIGN_OBSERVABILITY.md#wave-overdue
+  - alert: CampaignClaimExpired
+    expr: sum by(job,instance) (vehicle_ota_claims{job="vehicle-api",state="expired"}) > 0 and on(job,instance)
+      (vehicle_ota_collection_success{job="vehicle-api"} == 1)
+    for: 1m
+    labels:
+      severity: warning
+    annotations:
+      summary: Campaign dispatcher lease requires recovery
+      runbook_url: https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/blob/main/docs/DAY24_CAMPAIGN_OBSERVABILITY.md#claim-expired
+  - alert: CampaignJobsFailed
+    expr: sum by(job,instance) (vehicle_ota_job_failures{job="vehicle-api",state="recent"}) > 0 and on(job,instance)
+      (vehicle_ota_collection_success{job="vehicle-api"} == 1)
+    for: 1m
+    labels:
+      severity: warning
+    annotations:
+      summary: Campaign jobs failed within the last five minutes
+      runbook_url: https://github.com/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/blob/main/docs/DAY24_CAMPAIGN_OBSERVABILITY.md#jobs-failed

@@ -7,6 +7,22 @@ from typing import Any, cast
 import yaml
 
 
+def test_day24_runtime_evidence_cannot_be_skipped_or_detached_from_run() -> None:
+    workflow = yaml.load(Path(".github/workflows/runtime.yml").read_text(), Loader=yaml.BaseLoader)
+    job = workflow["jobs"]["runtime"]
+    assert job["env"]["DAY24_EVIDENCE_RUN_ID"] == "${{ github.run_id }}:${{ github.run_attempt }}"
+    step = next(s for s in job["steps"] if "tests/integration/day24" in s.get("run", ""))
+    assert "if" not in step and "continue-on-error" not in step
+    assert "--junitxml=.runtime-reports/day24-postgres-alerts.xml" in step["run"]
+    assert "python -m scripts.day24_evidence --check-existing" in step["run"]
+    artifact = next(
+        s for s in job["steps"] if s.get("with", {}).get("name") == "day24-campaign-observability"
+    )
+    assert artifact["with"]["if-no-files-found"] == "error"
+    assert ".runtime-reports/day24-postgres-alerts.xml" in artifact["with"]["path"]
+    assert ".runtime-reports/day24-acceptance.json" in artifact["with"]["path"]
+
+
 def test_ci_cannot_skip_merge_checks_or_receive_production_secrets() -> None:
     text = Path(".github/workflows/ci.yml").read_text()
     workflow = cast(dict[str, Any], yaml.load(text, Loader=yaml.BaseLoader))

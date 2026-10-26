@@ -1,4 +1,16 @@
 services:
+  campaign-prometheus:
+    profiles: [campaign]
+    image: prom/prometheus:v3.5.0
+    ports: ["127.0.0.1:19094:9090"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./day24-campaign.yml:/etc/prometheus/day24-campaign.yml:ro
+      - ${CAMPAIGN_METRICS_TOKEN_FILE:-../../.runtime-reports/observability/metrics_token}:/run/secrets/metrics_token:ro
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   exporter:
     image: python:3.12-alpine
     command: [python, /app/monitor.py, exporter, --directory, /state]

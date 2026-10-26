@@ -20,6 +20,7 @@ jobs:
       CLOUD_RUNTIME: localstack
       DAY12_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
       DAY16_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+      DAY24_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
       APP_ENV: local
       AWS_ENDPOINT_URL: http://127.0.0.1:14566
       AWS_ACCESS_KEY_ID: test
@@ -101,6 +102,22 @@ jobs:
         run: pytest tests/unit tests/contract tests/e2e/test_independent_runtimes.py tests/e2e/test_device_full_chain.py tests/integration/day12 tests/integration/day16 tests/integration/day17 tests/integration/day18 tests/integration/day19 tests/integration/security/test_database_runtime_permissions.py tests/integration/reliability/test_redis_idempotency.py tests/integration/remote_command/test_remote_command_sqs_worker_integration.py -q
       - name: Day21 real PostgreSQL dispatcher contention and recovery
         run: pytest tests/integration/day21 -q --junitxml=.runtime-reports/day21-postgres.xml
+      - name: Day24 PostgreSQL campaign metrics and Prometheus fault scenarios
+        run: |
+          pytest tests/integration/day24 -q --junitxml=.runtime-reports/day24-postgres-alerts.xml
+          python -m scripts.day24_evidence
+          python -m scripts.day24_evidence --check-existing
+      - name: Upload Day24 campaign observability evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day24-campaign-observability
+          path: |
+            .runtime-reports/day24-postgres-alerts.xml
+            .runtime-reports/day24-acceptance.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload Day21 PostgreSQL evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
