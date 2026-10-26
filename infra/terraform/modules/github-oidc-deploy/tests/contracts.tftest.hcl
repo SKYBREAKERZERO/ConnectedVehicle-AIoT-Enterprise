@@ -28,7 +28,9 @@ run "exact_repository_environment_audience_and_account_trust" {
     condition = (
       aws_iam_role.this.permissions_boundary == aws_iam_policy.boundary.arn &&
       aws_iam_role.this.max_session_duration == 3600 &&
-      aws_iam_role_policy.preview.policy == aws_iam_policy.boundary.policy &&
+      jsondecode(output.preview_policy_json).Version == "2012-10-17" &&
+      jsondecode(output.preview_policy_json).Statement[0].Effect == "Allow" &&
+      jsondecode(aws_iam_role_policy.preview.policy).Statement[0] == jsondecode(aws_iam_policy.boundary.policy).Statement[0] &&
       toset(jsondecode(output.preview_policy_json).Statement[0].Action) == toset([
         "s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"
       ]) &&
@@ -36,6 +38,26 @@ run "exact_repository_environment_audience_and_account_trust" {
       jsondecode(output.preview_policy_json).Statement[0].Condition.StringEquals["aws:ResourceAccount"] == var.aws_account_id
     )
     error_message = "Identity and boundary must grant only exact account-owned metadata reads, never Apply privileges."
+  }
+  assert {
+    condition = (
+      length(jsondecode(output.boundary_policy_json).Statement) == 4 &&
+      jsondecode(output.boundary_policy_json).Version == "2012-10-17" &&
+      keys(jsondecode(output.boundary_policy_json).Statement[1]) == ["Effect", "NotAction", "Resource", "Sid"] &&
+      keys(jsondecode(output.boundary_policy_json).Statement[2]) == ["Action", "Effect", "NotResource", "Sid"] &&
+      keys(jsondecode(output.boundary_policy_json).Statement[3]) == ["Action", "Condition", "Effect", "Resource", "Sid"] &&
+      jsondecode(output.boundary_policy_json).Statement[1].Effect == "Deny" &&
+      toset(jsondecode(output.boundary_policy_json).Statement[1].NotAction) == toset(jsondecode(output.preview_policy_json).Statement[0].Action) &&
+      jsondecode(output.boundary_policy_json).Statement[1].Resource == "*" &&
+      jsondecode(output.boundary_policy_json).Statement[2].Effect == "Deny" &&
+      toset(jsondecode(output.boundary_policy_json).Statement[2].NotResource) == var.artifact_bucket_arns &&
+      toset(jsondecode(output.boundary_policy_json).Statement[2].Action) == toset(jsondecode(output.preview_policy_json).Statement[0].Action) &&
+      jsondecode(output.boundary_policy_json).Statement[3].Effect == "Deny" &&
+      jsondecode(output.boundary_policy_json).Statement[3].Resource == "*" &&
+      toset(jsondecode(output.boundary_policy_json).Statement[3].Action) == toset(jsondecode(output.preview_policy_json).Statement[0].Action) &&
+      jsondecode(output.boundary_policy_json).Statement[3].Condition == { StringNotEquals = { "aws:ResourceAccount" = var.aws_account_id } }
+    )
+    error_message = "Boundary must explicitly deny other actions, resources and accounts; implicit deny alone is insufficient for session grants."
   }
 }
 

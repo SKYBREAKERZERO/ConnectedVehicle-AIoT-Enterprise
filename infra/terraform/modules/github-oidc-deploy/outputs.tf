@@ -10,5 +10,10 @@ output "trust_policy_json" {
 
 output "preview_policy_json" {
   value       = local.preview_policy
-  description = "Read-only permissions and permissions-boundary document."
+  description = "Read-only identity permissions; explicit boundary guardrails are exposed separately."
+}
+
+output "boundary_policy_json" {
+  value       = local.boundary_policy
+  description = "Explicit non-preview action/resource/account denies, including session grants."
 }

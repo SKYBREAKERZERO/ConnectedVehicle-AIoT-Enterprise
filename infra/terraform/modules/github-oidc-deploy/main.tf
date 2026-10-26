@@ -1,27 +1,54 @@
 locals {
   # Repository and environment are reviewed constants, not caller-controlled scope.
   subject = "repo:SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise:environment:production"
+  preview_actions = [
+    "s3:GetBucketLocation",
+    "s3:GetBucketVersioning",
+    "s3:GetEncryptionConfiguration",
+    "s3:GetBucketPublicAccessBlock",
+  ]
+  preview_statement = {
+    Sid       = "ReadExactArtifactProtectionMetadata"
+    Effect    = "Allow"
+    Action    = local.preview_actions
+    Resource  = sort(tolist(var.artifact_bucket_arns))
+    Condition = { StringEquals = { "aws:ResourceAccount" = var.aws_account_id } }
+  }
   preview_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [local.preview_statement]
+  })
+  boundary_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid    = "ReadExactArtifactProtectionMetadata"
-      Effect = "Allow"
-      Action = [
-        "s3:GetBucketLocation",
-        "s3:GetBucketVersioning",
-        "s3:GetEncryptionConfiguration",
-        "s3:GetBucketPublicAccessBlock",
-      ]
-      Resource  = sort(tolist(var.artifact_bucket_arns))
-      Condition = { StringEquals = { "aws:ResourceAccount" = var.aws_account_id } }
-    }]
+    Statement = [
+      local.preview_statement,
+      {
+        Sid       = "DenyNonPreviewOperations"
+        Effect    = "Deny"
+        NotAction = local.preview_actions
+        Resource  = "*"
+      },
+      {
+        Sid         = "DenyOtherResources"
+        Effect      = "Deny"
+        Action      = local.preview_actions
+        NotResource = sort(tolist(var.artifact_bucket_arns))
+      },
+      {
+        Sid       = "DenyForeignOrMissingResourceAccount"
+        Effect    = "Deny"
+        Action    = local.preview_actions
+        Resource  = "*"
+        Condition = { StringNotEquals = { "aws:ResourceAccount" = var.aws_account_id } }
+      },
+    ]
   })
 }
 
 resource "aws_iam_policy" "boundary" {
   name        = "${var.role_name}-boundary"
   description = "Day25 preview boundary: exact bucket metadata reads only; no deployment writes."
-  policy      = local.preview_policy
+  policy      = local.boundary_policy
   tags        = var.tags
   lifecycle {
     prevent_destroy = true

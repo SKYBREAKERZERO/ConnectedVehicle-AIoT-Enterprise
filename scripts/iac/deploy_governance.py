@@ -44,6 +44,7 @@ REQUIRED_TESTS = {
     "test_workflow_privilege_escalation_rejected",
     "test_latest_quality_failure_cannot_reuse_older_success",
     "test_ci_does_not_hold_deployment_identity",
+    "test_missing_or_weakened_explicit_boundary_denies_rejected",
 }
 GOVERNANCE_TESTS = REQUIRED_TESTS | {
     "test_reviewed_preview_contract_passes",
@@ -135,6 +136,48 @@ def environment_errors(environment: dict[str, Any], branches: dict[str, Any]) ->
     except (KeyError, TypeError):
         return ["Production Environment evidence is incomplete"]
     return []
+
+
+def boundary_policy_errors(policy: dict[str, Any], account: str, buckets: set[str]) -> list[str]:
+    """Explicit denies also constrain resource-based grants directly to role sessions."""
+    try:
+        statements = policy["Statement"]
+        if len(statements) != 4:
+            return ["Preview boundary is missing explicit deny guardrails"]
+        errors = preview_policy_errors(
+            {"Version": policy["Version"], "Statement": [statements[0]]}, account, buckets
+        )
+        expected = [
+            {
+                "Sid": "DenyNonPreviewOperations",
+                "Effect": "Deny",
+                "NotAction": sorted(READ_ACTIONS),
+                "Resource": "*",
+            },
+            {
+                "Sid": "DenyOtherResources",
+                "Effect": "Deny",
+                "Action": sorted(READ_ACTIONS),
+                "NotResource": sorted(buckets),
+            },
+            {
+                "Sid": "DenyForeignOrMissingResourceAccount",
+                "Effect": "Deny",
+                "Action": sorted(READ_ACTIONS),
+                "Resource": "*",
+                "Condition": {"StringNotEquals": {"aws:ResourceAccount": account}},
+            },
+        ]
+        for actual, wanted in zip(statements[1:], expected, strict=True):
+            normalized = dict(actual)
+            for field in ("Action", "NotAction", "NotResource"):
+                if field in normalized:
+                    normalized[field] = sorted(normalized[field])
+            if normalized != wanted:
+                errors.append("Preview boundary explicit deny was removed, conditioned or widened")
+        return errors
+    except (KeyError, TypeError, ValueError):
+        return ["Malformed preview permissions boundary"]
 
 
 def deployment_context_errors(context: dict[str, Any]) -> list[str]:

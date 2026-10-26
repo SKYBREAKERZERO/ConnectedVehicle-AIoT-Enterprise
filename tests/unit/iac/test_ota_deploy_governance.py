@@ -18,6 +18,7 @@ from scripts.iac.deploy_governance import (
     REPOSITORY,
     ROOT,
     SUBJECT,
+    boundary_policy_errors,
     deployment_context_errors,
     environment_errors,
     load_workflow,
@@ -97,6 +98,34 @@ def policy() -> dict[str, Any]:
     }
 
 
+def boundary() -> dict[str, Any]:
+    document = policy()
+    document["Statement"].extend(
+        [
+            {
+                "Sid": "DenyNonPreviewOperations",
+                "Effect": "Deny",
+                "NotAction": sorted(READ_ACTIONS),
+                "Resource": "*",
+            },
+            {
+                "Sid": "DenyOtherResources",
+                "Effect": "Deny",
+                "Action": sorted(READ_ACTIONS),
+                "NotResource": sorted(BUCKETS),
+            },
+            {
+                "Sid": "DenyForeignOrMissingResourceAccount",
+                "Effect": "Deny",
+                "Action": sorted(READ_ACTIONS),
+                "Resource": "*",
+                "Condition": {"StringNotEquals": {"aws:ResourceAccount": ACCOUNT}},
+            },
+        ]
+    )
+    return document
+
+
 def runs() -> list[dict[str, Any]]:
     return [
         {
@@ -120,6 +149,7 @@ def test_reviewed_preview_contract_passes() -> None:
     assert not deployment_context_errors(context())
     assert not environment_errors(*environment())
     assert not preview_policy_errors(policy(), ACCOUNT, BUCKETS)
+    assert not boundary_policy_errors(boundary(), ACCOUNT, BUCKETS)
     assert not quality_errors(runs(), "a" * 40)
     assert not oidc_claim_errors(
         {
@@ -248,6 +278,30 @@ def test_dangerous_identity_permissions_rejected(violation: str) -> None:
     else:
         document["Statement"].append(deepcopy(statement))
     assert preview_policy_errors(document, ACCOUNT, BUCKETS)
+
+
+@pytest.mark.parametrize(
+    "violation", ("missing", "allow", "conditioned", "resource", "account", "extra_action")
+)
+def test_missing_or_weakened_explicit_boundary_denies_rejected(violation: str) -> None:
+    document = boundary()
+    if violation == "missing":
+        document["Statement"].pop()
+    elif violation == "allow":
+        document["Statement"][1]["Effect"] = "Allow"
+    elif violation == "conditioned":
+        document["Statement"][1]["Condition"] = {
+            "StringEquals": {"aws:RequestedRegion": "us-east-1"}
+        }
+    elif violation == "resource":
+        document["Statement"][2]["NotResource"] = ["*"]
+    elif violation == "account":
+        document["Statement"][3]["Condition"]["StringNotEquals"]["aws:ResourceAccount"] = (
+            "999999999999"
+        )
+    else:
+        document["Statement"][1]["NotAction"].append("iam:PassRole")
+    assert boundary_policy_errors(document, ACCOUNT, BUCKETS)
 
 
 @pytest.mark.parametrize("actions", (["delete"], ["delete", "create"], ["forget"]))

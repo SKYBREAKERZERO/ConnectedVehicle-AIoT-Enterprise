@@ -68,8 +68,10 @@ reads on exact bucket ARNs, with `aws:ResourceAccount` equal to the configured
 account: `s3:GetBucketLocation`, `s3:GetBucketVersioning`,
 `s3:GetEncryptionConfiguration`, `s3:GetBucketPublicAccessBlock`. There is no object
 read/write, Secret read, IAM mutation, `iam:PassRole`, `sts:AssumeRole` or wildcard
-Allow. The boundary's implicit deny caps additional grants to the same read-only
-scope. This preview identity is intentionally **not sufficient for Terraform
+Allow. The boundary explicitly denies other operations, reads of other resources
+and reads with a foreign/missing resource account. Implicit deny alone is not used
+as a session-grant boundary: resource policies can grant directly to a Role Session.
+This preview identity is intentionally **not sufficient for Terraform
 production Plan/Apply or remote-state access**. Role max-session duration is one
 hour; a future approved OIDC session should request a shorter bounded duration.
 Role and boundary deletion remain protected by `prevent_destroy`.
@@ -155,3 +157,4 @@ this work. No AWS production Apply, GitHub merge or database migration is perfor
 - [GitHub: deployment environments and protection rules](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
 - [GitHub: environment REST API](https://docs.github.com/en/rest/deployments/environments)
 - [GitHub: branch/tag deployment policies](https://docs.github.com/en/rest/deployments/branch-policies)
+- [AWS: policy evaluation for role/session principals and explicit deny](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic_policy-eval-denyallow.html)
