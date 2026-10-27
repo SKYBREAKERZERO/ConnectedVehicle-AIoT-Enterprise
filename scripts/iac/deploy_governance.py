@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 from xml.etree import ElementTree
 
+from scripts.iac.plan_admission import ruleset_errors
 from scripts.iac.plan_policy import policy_errors
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +62,7 @@ def source_digest() -> str:
             ".github/workflows/runtime.yml",
             ".github/workflows/ota-aws-deploy.yml",
             "scripts/iac/deploy_governance.py",
+            "scripts/iac/plan_admission.py",
             "tests/unit/iac/test_ota_deploy_governance.py",
         )
     ]
@@ -355,6 +357,7 @@ def preflight(commit: str, mode: str) -> dict[str, Any]:
     environment = gh(base + "/environments/production")
     branches = gh(base + "/environments/production/deployment-branch-policies")
     errors.extend(environment_errors(environment, branches))
+    errors.extend(ruleset_errors(gh(base + "/rulesets/24828733")))
     branch = gh(base + "/branches/main")
     if branch.get("protected") is not True or branch.get("commit", {}).get("sha") != commit:
         errors.append("Main protection or current release revision changed")
@@ -377,6 +380,7 @@ def preflight(commit: str, mode: str) -> dict[str, Any]:
         "run_id": run_identity(),
         "environment": "production",
         "environment_settings_verified": True,
+        "main_review_rules_verified": True,
         "production_apply_enabled": False,
         "aws_credentials_requested": False,
         "aws_sts_verified": False,

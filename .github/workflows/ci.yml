@@ -67,6 +67,7 @@ jobs:
           mypy scripts/iac
           pytest -c scripts/iac/pytest.ini tests/unit/iac -q --junitxml=.iac-reports/day25-security.xml
           python -m scripts.iac.deploy_governance
+          python -m scripts.iac.day26_evidence
       - name: Validate, scan, contract-test and check baseline plan
         working-directory: candidate
         run: python -m scripts.iac.gate --baseline ../baseline
@@ -76,6 +77,17 @@ jobs:
         with:
           name: iac-gate-summary
           path: candidate/.iac-reports/summary.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload Day26 offline state and plan governance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day26-state-plan-governance
+          path: |
+            candidate/.iac-reports/day26-governance.json
+            candidate/.iac-reports/day25-security.xml
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
       - name: Upload Day25 deployment governance evidence

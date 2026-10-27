@@ -22,6 +22,7 @@ from scripts.iac.governance_schema import require_governance_schema
 from scripts.iac.ota_database_policy import database_isolation_errors
 from scripts.iac.plan_policy import evaluate
 from scripts.iac.scan_policy import audit
+from scripts.iac.state_lock_probe import probe as state_lock_probe
 
 REPO = Path(__file__).resolve().parents[2]
 # Public test image verified locally; no paid token or Docker socket mount required.
@@ -313,6 +314,7 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
                 time.sleep(0.5)
         else:
             raise RuntimeError("LocalStack readiness timed out")
+        state_lock = state_lock_probe(work / "day26-lock-probe", endpoint, env)
         variables = {**TFVARS, "aws_endpoint_url": endpoint}
         for root in (base_local, local):
             (root / "ci.tfvars.json").write_text(json.dumps(variables), encoding="utf-8")
@@ -374,6 +376,7 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
             ota_verified = True
         summary = {
             "status": "passed",
+            "day26_s3_lock_probe": state_lock,
             "contract_files": contract_count,
             "contract_runs": contract_runs,
             "destroy_actions": 0,
