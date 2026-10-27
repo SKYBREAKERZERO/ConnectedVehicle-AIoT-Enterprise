@@ -44,13 +44,11 @@ def canonical_digest(value: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def admission_errors(
+def plan_errors(
     manifest: dict[str, Any],
     *,
     plan: bytes,
     expected: dict[str, Any],
-    approval: dict[str, Any],
-    actor: str,
     now: datetime,
 ) -> list[str]:
     """Validate an offline model; success does not authorize a production deployment."""
@@ -117,6 +115,25 @@ def admission_errors(
             or not timedelta(0) < expires - created <= TTL
         ):
             raise ValueError("plan expired, future-dated or outside bounded UTC lifetime")
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+        return [str(exc)]
+    return []
+
+
+def admission_errors(
+    manifest: dict[str, Any],
+    *,
+    plan: bytes,
+    expected: dict[str, Any],
+    approval: dict[str, Any],
+    actor: str,
+    now: datetime,
+) -> list[str]:
+    errors = plan_errors(manifest, plan=plan, expected=expected, now=now)
+    if errors:
+        return errors
+    try:
+        created = datetime.fromisoformat(manifest["created_at"])
         if set(approval) != {"manifest_sha256", "reviewer", "approved_at"} or approval[
             "manifest_sha256"
         ] != canonical_digest(manifest):

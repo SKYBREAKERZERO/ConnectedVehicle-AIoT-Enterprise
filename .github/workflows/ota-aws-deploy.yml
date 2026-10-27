@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       mode:
-        description: Day25 does not authorize AWS credentials or Apply
+        description: Day27 admission and recovery remain dry run only, without AWS credentials or Apply
         required: true
         default: dry-run
         type: choice

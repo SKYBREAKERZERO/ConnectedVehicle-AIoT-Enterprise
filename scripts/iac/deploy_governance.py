@@ -381,6 +381,8 @@ def preflight(commit: str, mode: str) -> dict[str, Any]:
         "environment": "production",
         "environment_settings_verified": True,
         "main_review_rules_verified": True,
+        "release_admission_state": "NOT_REQUESTED",
+        "automatic_recovery_enabled": False,
         "production_apply_enabled": False,
         "aws_credentials_requested": False,
         "aws_sts_verified": False,

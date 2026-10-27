@@ -315,6 +315,30 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
         else:
             raise RuntimeError("LocalStack readiness timed out")
         state_lock = state_lock_probe(work / "day26-lock-probe", endpoint, env)
+        fault_env = {
+            **env,
+            "DAY27_LOCK_ENDPOINT": endpoint,
+            "DAY27_LOCK_REPORT": str(report.parent / "day27-lock.json"),
+        }
+        # Only non-secret provenance crosses into the isolated test subprocess.
+        for key in ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
+            if key in os.environ:
+                fault_env[key] = os.environ[key]
+        run(
+            [
+                scanner_python,
+                "-m",
+                "pytest",
+                "-c",
+                "scripts/iac/pytest.ini",
+                "tests/integration/iac/test_state_lock_contention.py",
+                "-q",
+                f"--junitxml={report.parent / 'day27-lock.xml'}",
+            ],
+            cwd=repo,
+            env=fault_env,
+        )
+        state_fault = json.loads((report.parent / "day27-lock.json").read_text(encoding="utf-8"))
         variables = {**TFVARS, "aws_endpoint_url": endpoint}
         for root in (base_local, local):
             (root / "ci.tfvars.json").write_text(json.dumps(variables), encoding="utf-8")
@@ -377,6 +401,7 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
         summary = {
             "status": "passed",
             "day26_s3_lock_probe": state_lock,
+            "day27_s3_failure_probe": state_fault,
             "contract_files": contract_count,
             "contract_runs": contract_runs,
             "destroy_actions": 0,

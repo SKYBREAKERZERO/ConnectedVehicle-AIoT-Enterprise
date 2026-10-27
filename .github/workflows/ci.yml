@@ -68,9 +68,13 @@ jobs:
           pytest -c scripts/iac/pytest.ini tests/unit/iac -q --junitxml=.iac-reports/day25-security.xml
           python -m scripts.iac.deploy_governance
           python -m scripts.iac.day26_evidence
+          python -m scripts.iac.day27_evidence
       - name: Validate, scan, contract-test and check baseline plan
         working-directory: candidate
         run: python -m scripts.iac.gate --baseline ../baseline
+      - name: Verify Day27 native lock interruption evidence
+        working-directory: candidate
+        run: python -m scripts.iac.day27_evidence --with-fault
       - name: Upload sanitized success summary
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -98,6 +102,19 @@ jobs:
           path: |
             candidate/.iac-reports/day25-governance.json
             candidate/.iac-reports/day25-security.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload Day27 release recovery evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day27-release-recovery
+          path: |
+            candidate/.iac-reports/day27-governance.json
+            candidate/.iac-reports/day25-security.xml
+            candidate/.iac-reports/day27-lock.xml
+            candidate/.iac-reports/day27-lock.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
