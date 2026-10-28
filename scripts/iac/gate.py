@@ -398,10 +398,32 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
         if (candidate / "environments/ota-local").is_dir():
             _ota_local_acceptance(candidate, original, endpoint, env)
             ota_verified = True
+        dr_env = {
+            **env,
+            "DAY28_PROVIDER_CACHE": env["TF_PLUGIN_CACHE_DIR"],
+            "DAY28_DR_ENDPOINT": endpoint,
+            "DAY28_DR_REPORT": str(report.parent / "day28-dr.json"),
+        }
+        run(
+            [
+                scanner_python,
+                "-m",
+                "pytest",
+                "-c",
+                "scripts/iac/pytest.ini",
+                "tests/integration/iac/test_state_disaster_recovery.py",
+                "-q",
+                f"--junitxml={report.parent / 'day28-dr.xml'}",
+            ],
+            cwd=repo,
+            env=dr_env,
+        )
+        state_dr = json.loads((report.parent / "day28-dr.json").read_text(encoding="utf-8"))
         summary = {
             "status": "passed",
             "day26_s3_lock_probe": state_lock,
             "day27_s3_failure_probe": state_fault,
+            "day28_state_disaster_recovery": state_dr,
             "contract_files": contract_count,
             "contract_runs": contract_runs,
             "destroy_actions": 0,

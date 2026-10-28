@@ -62,8 +62,8 @@ jobs:
       - name: Test policy regressions and gate code
         working-directory: candidate
         run: |
-          ruff check scripts/iac tests/unit/iac
-          ruff format --check scripts/iac tests/unit/iac
+          ruff check scripts/iac tests/unit/iac tests/integration/iac
+          ruff format --check scripts/iac tests/unit/iac tests/integration/iac
           mypy scripts/iac
           pytest -c scripts/iac/pytest.ini tests/unit/iac -q --junitxml=.iac-reports/day25-security.xml
           python -m scripts.iac.deploy_governance
@@ -75,6 +75,9 @@ jobs:
       - name: Verify Day27 native lock interruption evidence
         working-directory: candidate
         run: python -m scripts.iac.day27_evidence --with-fault
+      - name: Verify Day28 recovery and evidence
+        working-directory: candidate
+        run: python -m scripts.iac.day28_evidence --verify
       - name: Upload sanitized success summary
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -115,6 +118,19 @@ jobs:
             candidate/.iac-reports/day25-security.xml
             candidate/.iac-reports/day27-lock.xml
             candidate/.iac-reports/day27-lock.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload Day28 disaster recovery and drift evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day28-state-drift-recovery
+          path: |
+            candidate/.iac-reports/day28-governance.json
+            candidate/.iac-reports/day25-security.xml
+            candidate/.iac-reports/day28-dr.xml
+            candidate/.iac-reports/day28-dr.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
