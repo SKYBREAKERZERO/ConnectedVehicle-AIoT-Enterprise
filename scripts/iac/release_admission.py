@@ -68,8 +68,9 @@ class ReleaseStore:
     Filesystem/database administrators are outside this model's trust boundary.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, localstack_rehearsal: bool = False):
         self.path = path
+        self.localstack_rehearsal = localstack_rehearsal
         with self._connect() as connection:
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS releases (
@@ -159,7 +160,13 @@ class ReleaseStore:
             try:
                 if canonical_digest(json.loads(stored)) != canonical_digest(binding):
                     raise ValueError("request binding changed; new verification required")
-                errors = plan_errors(manifest, plan=plan, expected=expected, now=now)
+                errors = plan_errors(
+                    manifest,
+                    plan=plan,
+                    expected=expected,
+                    now=now,
+                    localstack_rehearsal=self.localstack_rehearsal,
+                )
                 errors += evidence_errors(manifest, evidence, source, now, request_id)
                 if errors:
                     raise ValueError("; ".join(errors))
@@ -211,6 +218,7 @@ class ReleaseStore:
                         approval=receipt,
                         actor=actor,
                         now=now,
+                        localstack_rehearsal=self.localstack_rehearsal,
                     )
                     if errors:
                         raise ValueError("; ".join(errors))

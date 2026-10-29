@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,13 @@ from scripts.iac.plan_admission import canonical_digest
 from scripts.iac.state_integrity import recovery_errors, state_errors
 
 
-def probe(work: Path, endpoint: str, env: dict[str, str], lockfile: Path) -> dict[str, Any]:
+def probe(
+    work: Path,
+    endpoint: str,
+    env: dict[str, str],
+    lockfile: Path,
+    observer: Callable[[str, dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     if (
         re.fullmatch(r"http://127\.0\.0\.1:[0-9]+", endpoint) is None
         or env.get("AWS_ACCESS_KEY_ID") != "test"
@@ -280,6 +287,23 @@ def probe(work: Path, endpoint: str, env: dict[str, str], lockfile: Path) -> dic
         raise RuntimeError("Old lock policy bypassed")
     if recovery_errors(**args, lock_present=False):
         raise RuntimeError("Isolated model recovery rejected")
+    context = {
+        "source_raw": raw,
+        "source_record": record,
+        "source": source,
+        "restored": restored,
+        "target_bucket": target_bucket,
+        "resource_bucket": resource_bucket,
+        "key": key,
+        "client": client,
+        "tf": tf,
+        "plans": plans,
+        "source_started_at": datetime.fromtimestamp(
+            (source / "clean-normal.tfplan").stat().st_mtime, UTC
+        ),
+    }
+    if observer is not None:
+        observer("before-copy", context)
     copied = client.copy_object(
         Bucket=target_bucket,
         Key=key,
@@ -309,6 +333,11 @@ def probe(work: Path, endpoint: str, env: dict[str, str], lockfile: Path) -> dic
     listed = client.list_objects_v2(Bucket=target_bucket).get("Contents", [])
     if any(item["Key"].endswith(".tflock") for item in listed):
         raise RuntimeError("Recovery copied an old lock")
+    if observer is not None:
+        observer(
+            "after-copy",
+            {**context, "target_record": target_record, "target_raw": restored_raw, "after": after},
+        )
     return {
         "status": "passed",
         "scope": "localstack-only",

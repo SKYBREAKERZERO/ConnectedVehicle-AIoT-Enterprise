@@ -35,12 +35,14 @@ def clear_plan() -> dict[str, Any]:
     }
 
 
-def setup_revalidation(path: Path) -> tuple[ReleaseRevalidator, dict[str, Any], Any]:
+def setup_revalidation(
+    path: Path, *, target_run: str = "222:1"
+) -> tuple[ReleaseRevalidator, dict[str, Any], Any]:
     approvals, clock, _, _ = setup_approval(path)
     approval = approvals.approve("recovery-1", "approval-1", reviewer="reviewer")
     receipt = approvals.consume(approval, actor="requester")
     target = registry(path, TARGET)
-    raw, record = state(TARGET, version="restored-v9", commit="b" * 40, run_id="222:1")
+    raw, record = state(TARGET, version="restored-v9", commit="b" * 40, run_id=target_run)
     target.register(raw, record, actor="publisher")
     verifier = ReleaseRevalidator(
         path,
@@ -51,7 +53,8 @@ def setup_revalidation(path: Path) -> tuple[ReleaseRevalidator, dict[str, Any], 
         clock=clock,
     )
     manifest = manifest_for(record, NEW_PLAN)
-    args = {
+    manifest["created_at"] = receipt["consumed_at"]
+    args: dict[str, Any] = {
         "receipt": receipt,
         "actor": "requester",
         "raw": raw,
@@ -66,6 +69,7 @@ def setup_revalidation(path: Path) -> tuple[ReleaseRevalidator, dict[str, Any], 
         "normal_code": 0,
         "normal_plan": clear_plan(),
     }
+    args["evidence"]["created_at"] = receipt["consumed_at"]
     return verifier, args, clock
 
 

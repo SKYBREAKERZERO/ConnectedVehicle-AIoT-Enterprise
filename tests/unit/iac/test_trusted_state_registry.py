@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,9 +15,25 @@ from typing import Any
 
 import pytest
 
+from scripts.iac.deploy_governance import ROOT, run_identity
 from scripts.iac.trusted_state_registry import TrustedStateRegistry
 
 NOW = datetime(2026, 10, 29, 8, tzinfo=UTC)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def stamp_day29(record_testsuite_property: Callable[[str, object], None]) -> None:
+    from scripts.iac.day29_evidence import source_digest
+
+    for k, v in {
+        "day29_commit": os.environ.get("GITHUB_SHA")
+        or subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        "day29_run_id": run_identity(),
+        "day29_source_sha256": source_digest(),
+    }.items():
+        record_testsuite_property(k, v)
+
+
 SOURCE = {
     "account": "123456789012",
     "environment": "production",

@@ -33,6 +33,36 @@ def _trusted(authority: Authority, payload: dict[str, Any]) -> bool:
         return False
 
 
+def observation_binding(
+    release_id: str,
+    *,
+    receipt: dict[str, Any],
+    record: dict[str, Any],
+    manifest: dict[str, Any],
+    expected: dict[str, Any],
+    evidence: dict[str, Any],
+    source: str,
+    refresh_code: int,
+    refresh_plan: dict[str, Any],
+    normal_code: int,
+    normal_plan: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "release_id": release_id,
+        "receipt_sha256": receipt["receipt_sha256"],
+        "state_record_sha256": canonical_digest(record),
+        "manifest_sha256": canonical_digest(manifest),
+        "expected_sha256": canonical_digest(expected),
+        "source_sha256": source,
+        "evidence_sha256": canonical_digest(evidence),
+        "refresh_exit": refresh_code,
+        "refresh_plan_sha256": canonical_digest(refresh_plan),
+        "normal_exit": normal_code,
+        "normal_plan_sha256": canonical_digest(normal_plan),
+        "drift": drift_report(refresh_code, refresh_plan, normal_code, normal_plan),
+    }
+
+
 class ReleaseRevalidator:
     def __init__(
         self,
@@ -43,17 +73,27 @@ class ReleaseRevalidator:
         evidence_authority: Authority,
         observation_authority: Authority,
         clock: Clock,
+        localstack_rehearsal: bool = False,
     ):
         self.path = path.resolve()
         if self.path != registry.path or self.path != approvals.path:
             raise ValueError("all governance components must share one transaction database")
         self.registry, self.approvals = registry, approvals
+        if localstack_rehearsal != approvals.localstack_rehearsal or (
+            localstack_rehearsal
+            and (
+                registry.scope["account"] != "000000000000"
+                or registry.scope["environment"] != "local"
+            )
+        ):
+            raise ValueError("explicit rehearsal mode must agree with the scoped approval service")
+        self.localstack_rehearsal = localstack_rehearsal
         self._evidence_authority, self._observation_authority = (
             evidence_authority,
             observation_authority,
         )
         self._clock = clock
-        self.releases = ReleaseStore(self.path)
+        self.releases = ReleaseStore(self.path, localstack_rehearsal=localstack_rehearsal)
         with governance_db(self.path) as connection:
             connection.execute("""CREATE TABLE IF NOT EXISTS day29_revalidations (
                 release_id TEXT PRIMARY KEY, receipt_sha256 TEXT UNIQUE NOT NULL,
@@ -100,12 +140,23 @@ class ReleaseRevalidator:
             for k, v in fields.items()
         ):
             raise ValueError("fresh release is not bound to the registered recovered state")
-        if (
-            manifest["plan_sha256"] == request["previous_plan_sha256"]
-            or manifest["run_id"] == request["previous_run_id"]
+        if manifest["plan_sha256"] == request["previous_plan_sha256"] or (
+            not self.localstack_rehearsal and manifest["run_id"] == request["previous_run_id"]
         ):
-            raise ValueError("old plan or old run/attempt cannot be reused")
-        errors = plan_errors(manifest, plan=plan, expected=expected, now=utc(self._clock))
+            raise ValueError("old plan or production run cannot be reused")
+        from datetime import datetime
+
+        if datetime.fromisoformat(manifest["created_at"]) < datetime.fromisoformat(
+            receipt["consumed_at"]
+        ):
+            raise ValueError("new plan must be produced after recovery approval consumption")
+        errors = plan_errors(
+            manifest,
+            plan=plan,
+            expected=expected,
+            now=utc(self._clock),
+            localstack_rehearsal=self.localstack_rehearsal,
+        )
         if errors:
             raise ValueError("; ".join(errors))
         if (
@@ -154,20 +205,19 @@ class ReleaseRevalidator:
         request = self._check(**args)
         if release_id == request["previous_release_id"]:
             raise ValueError("interrupted/rejected request cannot be resumed")
-        observation = {
-            "release_id": release_id,
-            "receipt_sha256": receipt["receipt_sha256"],
-            "state_record_sha256": canonical_digest(record),
-            "manifest_sha256": canonical_digest(manifest),
-            "expected_sha256": canonical_digest(expected),
-            "source_sha256": source,
-            "evidence_sha256": canonical_digest(evidence),
-            "refresh_exit": refresh_code,
-            "refresh_plan_sha256": canonical_digest(refresh_plan),
-            "normal_exit": normal_code,
-            "normal_plan_sha256": canonical_digest(normal_plan),
-            "drift": drift,
-        }
+        observation = observation_binding(
+            release_id,
+            receipt=receipt,
+            record=record,
+            manifest=manifest,
+            expected=expected,
+            evidence=evidence,
+            source=source,
+            refresh_code=refresh_code,
+            refresh_plan=refresh_plan,
+            normal_code=normal_code,
+            normal_plan=normal_plan,
+        )
         if not _trusted(self._observation_authority, observation):
             raise ValueError("current state/plan/drift observation is not authenticated")
         with governance_db(self.path) as connection:

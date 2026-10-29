@@ -1,12 +1,14 @@
 # Day29 first 4h — Local registry, recovery approval and fresh verification
 
-## Today's scope
+## First-session scope (historical)
 
 This change adds three core modules and three unit suites. It does not change
 Terraform modules, PostgreSQL Runtime schemas, workflow files or production
 permissions. LocalStack faults, native Terraform joint plans and GitHub CI/Evidence
-acceptance are deliberately deferred to the next session. No push is performed
-today because that would automatically start the deferred CI workflows.
+acceptance were deferred in the first session. Commit `d6d8244` was kept local
+at that point. The resumed second-session implementation and its evidence are
+documented in `day29-integrated-recovery-acceptance.md`; the limitations below
+describe the original first-session delivery.
 
 The implementation is a **single-host local governance service**, not a deployed
 AWS/GitHub identity service. Bootstrap adapters in tests explicitly simulate

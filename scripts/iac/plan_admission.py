@@ -50,6 +50,7 @@ def plan_errors(
     plan: bytes,
     expected: dict[str, Any],
     now: datetime,
+    localstack_rehearsal: bool = False,
 ) -> list[str]:
     """Validate an offline model; success does not authorize a production deployment."""
     try:
@@ -61,12 +62,22 @@ def plan_errors(
             raise ValueError("plan differs from trusted release/state context")
         if re.fullmatch(r"[0-9a-f]{40}", manifest["commit"]) is None:
             raise ValueError("full commit required")
-        if re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", manifest["run_id"]) is None:
+        if re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", manifest["run_id"]) is None and not (
+            localstack_rehearsal and manifest["run_id"] == "local:1"
+        ):
             raise ValueError("run ID and attempt required")
         if (
-            manifest["environment"] != "production"
+            (
+                localstack_rehearsal
+                and (manifest["environment"] != "local" or manifest["account"] != "000000000000")
+            )
+            or (
+                not localstack_rehearsal
+                and (
+                    manifest["environment"] != "production" or manifest["account"] == "000000000000"
+                )
+            )
             or re.fullmatch(r"[0-9]{12}", manifest["account"]) is None
-            or manifest["account"] == "000000000000"
         ):
             raise ValueError("production account/environment required")
         roles = [manifest["plan_role"], manifest["apply_role"]]
@@ -76,18 +87,25 @@ def plan_errors(
             for role in roles
         ):
             raise ValueError("distinct account-bound plan and apply roles required")
-        if (
-            re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", manifest["state_bucket"]) is None
-            or manifest["state_key"] != "ota/production/terraform.tfstate"
+        if re.fullmatch(
+            r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", manifest["state_bucket"]
+        ) is None or manifest["state_key"] != (
+            "ota/local/terraform.tfstate"
+            if localstack_rehearsal
+            else "ota/production/terraform.tfstate"
         ):
             raise ValueError("reviewed state target required")
         if (
             manifest["state_region"] != "ap-northeast-1"
-            or re.fullmatch(
-                rf"arn:aws:kms:ap-northeast-1:{manifest['account']}:key/[0-9a-f-]{{36}}",
-                manifest["state_kms_key_arn"],
+            or (localstack_rehearsal and manifest["state_kms_key_arn"] != "localstack-aes256")
+            or (
+                not localstack_rehearsal
+                and re.fullmatch(
+                    rf"arn:aws:kms:ap-northeast-1:{manifest['account']}:key/[0-9a-f-]{{36}}",
+                    manifest["state_kms_key_arn"],
+                )
+                is None
             )
-            is None
         ):
             raise ValueError("reviewed backend region and account-owned KMS key required")
         if (
@@ -128,8 +146,11 @@ def admission_errors(
     approval: dict[str, Any],
     actor: str,
     now: datetime,
+    localstack_rehearsal: bool = False,
 ) -> list[str]:
-    errors = plan_errors(manifest, plan=plan, expected=expected, now=now)
+    errors = plan_errors(
+        manifest, plan=plan, expected=expected, now=now, localstack_rehearsal=localstack_rehearsal
+    )
     if errors:
         return errors
     try:

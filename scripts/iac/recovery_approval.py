@@ -38,11 +38,17 @@ class RecoveryApprovals:
         reviewers: frozenset[str],
         authenticate: Authenticator,
         clock: Clock,
+        localstack_rehearsal: bool = False,
     ):
         self.path = path.resolve()
         if self.path != registry.path:
             raise ValueError("registry and approvals must share the governance DB")
         self.registry, self._authenticate, self._clock = registry, authenticate, clock
+        self.localstack_rehearsal = localstack_rehearsal
+        if localstack_rehearsal and (
+            registry.scope["account"] != "000000000000" or registry.scope["environment"] != "local"
+        ):
+            raise ValueError("rehearsal mode is confined to LocalStack scope")
         self._requesters = frozenset(identity(v) for v in requesters)
         self._reviewers = frozenset(identity(v) for v in reviewers)
         self._targets = frozenset(json.dumps(backend(deepcopy(t)), sort_keys=True) for t in targets)
@@ -58,10 +64,11 @@ class RecoveryApprovals:
                     "recovery targets must be separate exact backends "
                     "in the same account/environment"
                 )
-        ReleaseStore(self.path)  # Reuse Day27 schema and terminal-origin records.
+        ReleaseStore(self.path, localstack_rehearsal=localstack_rehearsal)
         config = canonical_digest(
             {
                 "source": registry.scope,
+                "localstack_rehearsal": localstack_rehearsal,
                 "targets": sorted(self._targets),
                 "requesters": sorted(self._requesters),
                 "reviewers": sorted(self._reviewers),
@@ -370,3 +377,22 @@ class RecoveryApprovals:
                 (row[1], reviewer, canonical_digest(token)),
             )
             connection.commit()
+
+    def recover_consumed(self, envelope: dict[str, Any], *, actor: str) -> dict[str, Any]:
+        """Read-only retrieval after a committed response was lost; never consume again."""
+        envelope = deepcopy(envelope)
+        actor = identity(actor)
+        with governance_db(self.path) as connection:
+            row = connection.execute(
+                "SELECT payload,digest FROM day29_consumptions WHERE approval_id=?",
+                (envelope.get("approval_id"),),
+            ).fetchone()
+            if row is None:
+                raise ValueError("no committed consumption exists")
+            value = json.loads(row[0])
+            if value.get("approval") != envelope:
+                raise ValueError("approval envelope mismatch")
+            authenticated(self._authenticate, actor, "inspect-recovery-consumption", row[1])
+            receipt = {**value, "receipt_sha256": row[1]}
+        self.validate_consumed(receipt, actor=actor)
+        return receipt

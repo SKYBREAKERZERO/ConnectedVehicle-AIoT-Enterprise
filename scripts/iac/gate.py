@@ -419,11 +419,47 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
             env=dr_env,
         )
         state_dr = json.loads((report.parent / "day28-dr.json").read_text(encoding="utf-8"))
+        day29_env = {
+            **env,
+            "DAY29_ENDPOINT": endpoint,
+            "DAY29_PROVIDER_CACHE": env["TF_PLUGIN_CACHE_DIR"],
+            "DAY29_NATIVE_REPORT": str(report.parent / "day29-native.json"),
+        }
+        run(
+            [
+                scanner_python,
+                "-m",
+                "pytest",
+                "-c",
+                "scripts/iac/pytest.ini",
+                "tests/integration/iac/test_day29_native_recovery.py",
+                "-q",
+                f"--junitxml={report.parent / 'day29-native.xml'}",
+            ],
+            cwd=repo,
+            env=day29_env,
+        )
+        run(
+            [
+                scanner_python,
+                "-m",
+                "pytest",
+                "-c",
+                "scripts/iac/pytest.ini",
+                "tests/integration/iac/test_day29_process_faults.py",
+                "-q",
+                f"--junitxml={report.parent / 'day29-faults.xml'}",
+            ],
+            cwd=repo,
+            env=env,
+        )
+        day29_native = json.loads((report.parent / "day29-native.json").read_text(encoding="utf-8"))
         summary = {
             "status": "passed",
             "day26_s3_lock_probe": state_lock,
             "day27_s3_failure_probe": state_fault,
             "day28_state_disaster_recovery": state_dr,
+            "day29_native_governance": day29_native,
             "contract_files": contract_count,
             "contract_runs": contract_runs,
             "destroy_actions": 0,
