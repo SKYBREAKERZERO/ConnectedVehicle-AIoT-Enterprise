@@ -11,10 +11,11 @@ import re
 import sqlite3
 from collections.abc import Callable
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from scripts.iac.failure_isolation import admissible
 from scripts.iac.plan_admission import admission_errors, canonical_digest, plan_errors
 
 Authority = Callable[[dict[str, Any]], bool]
@@ -68,8 +69,15 @@ class ReleaseStore:
     Filesystem/database administrators are outside this model's trust boundary.
     """
 
-    def __init__(self, path: Path, *, localstack_rehearsal: bool = False):
+    def __init__(
+        self,
+        path: Path,
+        *,
+        localstack_rehearsal: bool = False,
+        clock: Callable[[], datetime] | None = None,
+    ):
         self.path = path
+        self._clock = clock or (lambda: datetime.now(UTC))
         self.localstack_rehearsal = localstack_rehearsal
         with self._connect() as connection:
             connection.executescript("""
@@ -109,6 +117,7 @@ class ReleaseStore:
         )
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            admissible(connection, request_id, self._clock())
             connection.execute(
                 "INSERT INTO releases VALUES (?, ?, 'REQUESTED', NULL, ?)",
                 (request_id, binding, actor),
@@ -120,6 +129,8 @@ class ReleaseStore:
 
     def state(self, request_id: str) -> str:
         with self._connect() as connection:
+            connection.execute("BEGIN")
+            admissible(connection, request_id, self._clock())
             row = connection.execute(
                 "SELECT state FROM releases WHERE id=?", (request_id,)
             ).fetchone()
@@ -147,6 +158,7 @@ class ReleaseStore:
         reason = ""
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            admissible(connection, request_id, now)
             row = connection.execute(
                 "SELECT binding,state,approval,actor FROM releases WHERE id=?", (request_id,)
             ).fetchone()
@@ -285,6 +297,7 @@ class ReleaseStore:
     def interrupt(self, request_id: str) -> None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            admissible(connection, request_id, self._clock())
             row = connection.execute(
                 "SELECT state FROM releases WHERE id=?", (request_id,)
             ).fetchone()

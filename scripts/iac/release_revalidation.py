@@ -6,13 +6,21 @@ Registry, approval and Day27 release tables must share one isolated SQLite DB.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
+from contextlib import suppress
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from scripts.iac.drift_policy import drift_report
+from scripts.iac.failure_isolation import (
+    CandidateConflict,
+    QuarantineStore,
+    admissible,
+    not_quarantined,
+)
 from scripts.iac.plan_admission import canonical_digest, plan_errors
 from scripts.iac.recovery_approval import RecoveryApprovals
 from scripts.iac.release_admission import Authority, ReleaseStore
@@ -93,13 +101,16 @@ class ReleaseRevalidator:
             observation_authority,
         )
         self._clock = clock
-        self.releases = ReleaseStore(self.path, localstack_rehearsal=localstack_rehearsal)
+        self.releases = ReleaseStore(
+            self.path, localstack_rehearsal=localstack_rehearsal, clock=clock
+        )
         with governance_db(self.path) as connection:
             connection.execute("""CREATE TABLE IF NOT EXISTS day29_revalidations (
                 release_id TEXT PRIMARY KEY, receipt_sha256 TEXT UNIQUE NOT NULL,
                 binding TEXT NOT NULL, digest TEXT NOT NULL, status TEXT NOT NULL
             )""")
             connection.commit()
+        self.isolation = QuarantineStore(self.path, clock=clock)
 
     def _check(
         self,
@@ -167,7 +178,57 @@ class ReleaseRevalidator:
             raise ValueError("drift/error prohibits release verification")
         return request
 
-    def verify(
+    def verify(self, release_id: str, **values: Any) -> dict[str, Any]:
+        release_id = identifier(release_id)
+        with governance_db(self.path) as connection:
+            connection.execute("BEGIN")
+            admissible(connection, release_id, utc(self._clock))
+        # Establish ownership before recording any preflight failure. A caller
+        # cannot quarantine somebody else's ID with a forged receipt.
+        self.approvals.validate_consumed(values["receipt"], actor=values["actor"])
+        try:
+            return self._verify(release_id, **values)
+        except (ValueError, sqlite3.Error):
+            with governance_db(self.path) as connection:
+                row = connection.execute(
+                    "SELECT receipt_sha256,status FROM day29_revalidations WHERE release_id=?",
+                    (release_id,),
+                ).fetchone()
+                existing = connection.execute(
+                    "SELECT 1 FROM releases WHERE id=?", (release_id,)
+                ).fetchone()
+            if (
+                row is not None
+                and row[0] == values["receipt"]["receipt_sha256"]
+                and row[1] in {"CLAIMED", "REJECTED"}
+            ):
+                self.isolation.quarantine(release_id)
+            elif row is None and existing is None:
+                with suppress(CandidateConflict):
+                    self.isolation.quarantine(
+                        release_id,
+                        candidate={
+                            "receipt_sha256": values["receipt"]["receipt_sha256"],
+                            "binding_sha256": canonical_digest(values["manifest"]),
+                            "reason_code": (
+                                "PLAN_SHA_MISMATCH"
+                                if hashlib.sha256(values["plan"]).hexdigest()
+                                != values["manifest"].get("plan_sha256")
+                                else "DRIFT_REVIEW_REQUIRED"
+                                if drift_report(
+                                    values["refresh_code"],
+                                    values["refresh_plan"],
+                                    values["normal_code"],
+                                    values["normal_plan"],
+                                )["decision"]
+                                != "CLEAR"
+                                else "PREFLIGHT_REJECTED"
+                            ),
+                        },
+                    )
+            raise
+
+    def _verify(
         self,
         release_id: str,
         *,
@@ -222,6 +283,7 @@ class ReleaseRevalidator:
             raise ValueError("current state/plan/drift observation is not authenticated")
         with governance_db(self.path) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            not_quarantined(connection, release_id)
             self._check(**args)
             if connection.execute("SELECT 1 FROM releases WHERE id=?", (release_id,)).fetchone():
                 raise ValueError("a fresh Day27 request ID is required")
@@ -273,14 +335,14 @@ class ReleaseRevalidator:
                 evidence_authority=admit,
             )
         except Exception:
-            with governance_db(self.path) as connection:
-                connection.execute(
-                    "UPDATE day29_revalidations SET status='REJECTED' WHERE release_id=?",
-                    (release_id,),
-                )
-                connection.commit()
+            # Never guess rollback/commit status or overwrite Day29 after a fault.
+            # Reopen, inspect durable state and quarantine this ID only.
+            self.isolation.quarantine(release_id)
             raise
         with governance_db(self.path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            not_quarantined(connection, release_id)
+            self._check(**args)
             connection.execute(
                 "UPDATE day29_revalidations SET status='VERIFIED' WHERE release_id=?", (release_id,)
             )

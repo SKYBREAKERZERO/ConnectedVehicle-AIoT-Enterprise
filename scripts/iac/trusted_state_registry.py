@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from scripts.iac.failure_isolation import DAY30_TABLES
 from scripts.iac.plan_admission import canonical_digest
 from scripts.iac.state_integrity import state_errors, validate_record
 
@@ -109,7 +110,9 @@ class TrustedStateRegistry:
             }
             release_tables = {"releases", "spent", "holders", "events"}
             existing_release = {
-                t for t in tables if not t.startswith("day29_") and t != "sqlite_sequence"
+                t
+                for t in tables
+                if not t.startswith("day29_") and t != "sqlite_sequence" and t not in DAY30_TABLES
             }
             if existing_release and existing_release != release_tables:
                 raise ValueError("use a dedicated IaC governance database, not a business DB")
@@ -136,6 +139,7 @@ class TrustedStateRegistry:
                     raise ValueError("existing governance data lacks a trusted purpose marker")
             if any(
                 not t.startswith("day29_")
+                and t not in DAY30_TABLES
                 and t not in {"releases", "spent", "holders", "events", "sqlite_sequence"}
                 for t in tables
             ):

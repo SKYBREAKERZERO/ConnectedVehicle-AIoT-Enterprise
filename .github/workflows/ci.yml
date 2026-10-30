@@ -81,6 +81,9 @@ jobs:
       - name: Verify Day29 trusted registry recovery and revalidation evidence
         working-directory: candidate
         run: python -m scripts.iac.day29_evidence --verify
+      - name: Verify Day30 failure isolation and reconciliation evidence
+        working-directory: candidate
+        run: python -m scripts.iac.day30_evidence --verify
       - name: Upload sanitized success summary
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -134,6 +137,19 @@ jobs:
             candidate/.iac-reports/day25-security.xml
             candidate/.iac-reports/day28-dr.xml
             candidate/.iac-reports/day28-dr.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload Day30 failure isolation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day30-failure-isolation
+          path: |
+            candidate/.iac-reports/day30-governance.json
+            candidate/.iac-reports/day25-security.xml
+            candidate/.iac-reports/day30-faults.xml
+            candidate/.iac-reports/day30-faults.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7

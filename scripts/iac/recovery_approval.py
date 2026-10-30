@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from scripts.iac.failure_isolation import not_quarantined, tables
 from scripts.iac.plan_admission import canonical_digest
 from scripts.iac.release_admission import ReleaseStore
 from scripts.iac.trusted_state_registry import (
@@ -64,7 +65,7 @@ class RecoveryApprovals:
                     "recovery targets must be separate exact backends "
                     "in the same account/environment"
                 )
-        ReleaseStore(self.path, localstack_rehearsal=localstack_rehearsal)
+        ReleaseStore(self.path, localstack_rehearsal=localstack_rehearsal, clock=clock)
         config = canonical_digest(
             {
                 "source": registry.scope,
@@ -111,6 +112,7 @@ class RecoveryApprovals:
         if row is None or row[3] != self.registry.scope_id:
             raise ValueError("unknown recovery request")
         value = json.loads(row[0])
+        not_quarantined(connection, value["previous_release_id"])
         if canonical_digest(value) != row[1]:
             raise ValueError("recovery request was substituted")
         if (
@@ -151,6 +153,7 @@ class RecoveryApprovals:
             raise ValueError("target backend not authorized")
         with governance_db(self.path) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            not_quarantined(connection, previous_release_id)
             if not self.registry.is_current(record):
                 raise ValueError("trusted active source version required")
             origin = connection.execute(
@@ -345,6 +348,11 @@ class RecoveryApprovals:
                 or actor != value["consumer"]
             ):
                 raise ValueError("consumption receipt substituted or belongs to another actor")
+            if "day29_revalidations" in tables(connection):
+                for linked in connection.execute(
+                    "SELECT release_id FROM day29_revalidations WHERE receipt_sha256=?", (row[1],)
+                ):
+                    not_quarantined(connection, linked[0])
             _, request = self._approval(connection, value["approval"], utc(self._clock), "CONSUMED")
             authenticated(self._authenticate, actor, "revalidate-recovery-receipt", row[1])
             return deepcopy(request)

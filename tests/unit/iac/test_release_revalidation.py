@@ -197,10 +197,15 @@ def test_revocation_between_initial_check_and_day27_commit_is_rechecked(
     monkeypatch.setattr(verifier.releases, "request", request_then_revoke)
     with pytest.raises(ValueError):
         verifier.verify("new-release", **args)
-    assert verifier.releases.state("new-release") == "REJECTED"
+    with pytest.raises(ValueError, match="QUARANTINED"):
+        verifier.releases.state("new-release")
     with sqlite3.connect(verifier.path) as connection:
         assert (
-            connection.execute("SELECT status FROM day29_revalidations").fetchone()[0] == "REJECTED"
+            connection.execute("SELECT state FROM releases WHERE id='new-release'").fetchone()[0]
+            == "REQUESTED"
+        )
+        assert (
+            connection.execute("SELECT status FROM day29_revalidations").fetchone()[0] == "CLAIMED"
         )
 
 

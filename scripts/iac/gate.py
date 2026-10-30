@@ -453,6 +453,20 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
             cwd=repo,
             env=env,
         )
+        run(
+            [
+                scanner_python,
+                "-m",
+                "pytest",
+                "-c",
+                "scripts/iac/pytest.ini",
+                "tests/integration/iac/test_day30_failure_isolation.py",
+                "-q",
+                f"--junitxml={report.parent / 'day30-faults.xml'}",
+            ],
+            cwd=repo,
+            env={**env, "DAY30_FAULT_REPORT": str(report.parent / "day30-faults.json")},
+        )
         day29_native = json.loads((report.parent / "day29-native.json").read_text(encoding="utf-8"))
         summary = {
             "status": "passed",
