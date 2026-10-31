@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import io
 import json
 import os
 import re
@@ -14,6 +15,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -129,6 +131,33 @@ def copy_infra(source: Path, target: Path) -> None:
     )
 
 
+def copy_committed_baseline(source: Path, commit: str, target: Path, work: Path) -> None:
+    """Copy immutable Git objects, never a baseline working tree modified by PR tests."""
+    from scripts.iac.ci_baseline_policy import sha
+
+    raw = subprocess.check_output(
+        ["git", "-C", str(source), "archive", "--format=zip", sha(commit), "infra/terraform"],
+        timeout=60,
+    )
+    snapshot = work / "committed-baseline"
+    snapshot.mkdir()
+    with zipfile.ZipFile(io.BytesIO(raw)) as package:
+        for item in package.infolist():
+            if item.is_dir() and item.filename == "infra/":
+                continue
+            parts = item.filename.split("/")
+            if (
+                parts[:2] != ["infra", "terraform"]
+                or ".." in parts
+                or item.filename.startswith("/")
+                or "\\" in item.filename
+                or (item.external_attr >> 16) & 0o170000 == 0o120000
+            ):
+                raise ValueError("unsafe committed baseline member")
+        package.extractall(snapshot)
+    copy_infra(snapshot, target)
+
+
 def terraform(
     root: Path,
     *args: str,
@@ -199,10 +228,12 @@ def require_policy(plan: dict[str, Any], phase: str) -> None:
 def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python: str) -> None:
     if repo.resolve() == baseline.resolve():
         raise ValueError("baseline cannot be the candidate workspace")
+    committed_baseline: str | None = None
     if os.environ.get("GITHUB_ACTIONS") == "true":
         from scripts.iac.ci_baseline_policy import current
 
         trusted = current()
+        committed_baseline = trusted["baseline_sha"]
         saved = json.loads((repo / ".iac-reports/day31-baseline.json").read_text(encoding="utf-8"))
         actual = subprocess.check_output(
             ["git", "-C", str(baseline), "rev-parse", "HEAD"], text=True
@@ -221,7 +252,10 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
     candidate = work / "candidate"
     original = work / "baseline"
     copy_infra(repo, candidate)
-    copy_infra(baseline, original)
+    if committed_baseline is not None:
+        copy_committed_baseline(baseline, committed_baseline, original, work)
+    else:
+        copy_infra(baseline, original)
     (candidate / "environments/local/terraform.tfvars.json").write_text(
         json.dumps({**TFVARS, "aws_endpoint_url": "http://127.0.0.1:4566"}), encoding="utf-8"
     )

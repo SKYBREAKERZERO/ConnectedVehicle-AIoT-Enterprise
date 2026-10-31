@@ -33,7 +33,9 @@ describes that lifecycle. The live aggregator separately checks the current API
 merge candidate and rereads it after inspection.
 
 The Terraform gate also verifies the separate baseline checkout's real HEAD and
-Git root against the event report. Passing the candidate workspace as baseline
+Git root against the event report. The gate copies the pinned commit through
+`git archive`, so modified/untracked files in the sibling baseline working tree
+cannot contaminate the comparison. Passing the candidate workspace as baseline
 fails before external tools run. Runtime archives only the validated full SHA.
 
 PR branch HEAD, PR merge candidate and a later main commit are separate identities.

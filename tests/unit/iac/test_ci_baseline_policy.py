@@ -112,3 +112,35 @@ def test_cached_pr_merge_field_cannot_override_event_git_candidate() -> None:
     args = request()
     args["event"]["pull_request"]["merge_commit_sha"] = A
     assert select_baseline(**args)["candidate_sha"] == C
+
+
+def test_baseline_snapshot_ignores_mutated_working_tree(tmp_path: Any) -> None:
+    import subprocess
+
+    from scripts.iac.gate import copy_committed_baseline
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(repo), *args], text=True, stderr=subprocess.PIPE
+        ).strip()
+
+    git("init")
+    git("config", "user.email", "fixture@example.invalid")
+    git("config", "user.name", "fixture")
+    infra = repo / "infra/terraform"
+    infra.mkdir(parents=True)
+    (infra / "main.tf").write_text("# committed baseline")
+    git("add", ".")
+    git("commit", "-m", "baseline")
+    commit = git("rev-parse", "HEAD")
+    (infra / "main.tf").write_text("# malicious working tree")
+    (infra / "injected.tf").write_text("# untracked injection")
+    work = tmp_path / "work"
+    work.mkdir()
+    target = tmp_path / "target"
+    copy_committed_baseline(repo, commit, target, work)
+    assert (target / "main.tf").read_text() == "# committed baseline"
+    assert not (target / "injected.tf").exists()
