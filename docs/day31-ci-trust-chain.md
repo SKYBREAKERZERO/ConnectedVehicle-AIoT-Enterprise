@@ -22,10 +22,15 @@ checked out. No zero-SHA fallback, HEAD fallback or symbolic baseline is accepte
 
 | Event | Required identity and history |
 |---|---|
-| PR | Exact repository/main target, PR merge ref, candidate parents equal event base/head, consistent merge SHA when supplied, distinct ancestor base |
+| PR | Exact repository/main target, PR merge ref, candidate parents equal event base/head, authoritative job SHA with matching Git parents, distinct ancestor base |
 | Push | Existing, non-forced main push; before/after/ref match event and checkout; distinct ancestor before |
 | Merge queue | Main queue ref, exact base/head SHA, ancestor base; no assumption that queue head is a single PR merge |
 | Manual | Current main checkout only, first parent baseline, no input overrides; root/self/old-main candidate denied |
+
+The cached PR payload `merge_commit_sha` cannot override the job SHA: mergeability
+is computed in the background. The [REST API documentation](https://docs.github.com/en/rest/pulls/pulls)
+describes that lifecycle. The live aggregator separately checks the current API
+merge candidate and rereads it after inspection.
 
 The Terraform gate also verifies the separate baseline checkout's real HEAD and
 Git root against the event report. Passing the candidate workspace as baseline

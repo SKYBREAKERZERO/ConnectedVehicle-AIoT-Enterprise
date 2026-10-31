@@ -50,6 +50,8 @@ def select_baseline(
     if event_name == "pull_request":
         pr = event["pull_request"]
         number = event["number"]
+        # GITHUB_SHA + actual Git parents identify this event candidate. The PR
+        # payload merge_commit_sha cache can describe an earlier background merge.
         baseline = sha(pr["base"]["sha"])
         head = sha(pr["head"]["sha"])
         if (
@@ -60,7 +62,6 @@ def select_baseline(
             or pr["base"]["ref"] != "main"
             or pr["state"] != "open"
             or parents != [baseline, head]
-            or (pr.get("merge_commit_sha") is not None and pr["merge_commit_sha"] != candidate)
         ):
             raise ValueError("PR merge identity/parents mismatch")
         result.update(pr_number=number, pr_head_sha=head)

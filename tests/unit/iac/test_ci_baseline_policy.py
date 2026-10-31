@@ -47,7 +47,8 @@ def test_baseline_attack_flows_fail_closed(flow: str) -> None:
         args.update(event_name="workflow_dispatch", ref="refs/heads/main", default_tip=C)
         args["event"]["inputs"] = {"baseline": A}
     if flow == "F04":
-        args["event"]["pull_request"]["merge_commit_sha"] = B
+        args["candidate"] = B
+        args["parents"] = [A]
     with pytest.raises(ValueError):
         select_baseline(**args)
 
@@ -105,3 +106,9 @@ def test_gate_rejects_candidate_workspace_before_external_tools(tmp_path: Any) -
             report=tmp_path / "report.json",
             scanner_python="unused",
         )
+
+
+def test_cached_pr_merge_field_cannot_override_event_git_candidate() -> None:
+    args = request()
+    args["event"]["pull_request"]["merge_commit_sha"] = A
+    assert select_baseline(**args)["candidate_sha"] == C
