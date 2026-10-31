@@ -27,6 +27,62 @@
       "file": "modules/security/secret/main.tf",
       "expires": "2027-01-01",
       "reason": "Same LocalStack-only controlled PostgreSQL rotation constraint. Not a waiver for encryption or runtime IAM scope."
+    },
+    {
+      "check_id": "CKV_AWS_18",
+      "resource": "aws_s3_bucket.state",
+      "file": "bootstrap/state-backend/main.tf",
+      "expires": "2026-11-18",
+      "reason": "The free local exercise has no deployed S3 access-log collector. Cloud deployment requires an audited log destination.",
+      "scope": "local-only"
+    },
+    {
+      "check_id": "CKV_AWS_144",
+      "resource": "aws_s3_bucket.state",
+      "file": "bootstrap/state-backend/main.tf",
+      "expires": "2026-11-18",
+      "reason": "Single-region disposable LocalStack has no cross-region replication acceptance. Replication and restore must be verified before cloud use.",
+      "scope": "local-only"
+    },
+    {
+      "check_id": "CKV2_AWS_62",
+      "resource": "aws_s3_bucket.state",
+      "file": "bootstrap/state-backend/main.tf",
+      "expires": "2026-11-18",
+      "reason": "No S3 notification consumer is deployed in this local exercise. Event delivery is a separately tracked operational integration.",
+      "scope": "local-only"
+    },
+    {
+      "check_id": "CKV_AWS_18",
+      "resource": "module.artifact_bucket.aws_s3_bucket.this",
+      "file": "modules/ota-artifact-bucket/main.tf",
+      "expires": "2026-11-18",
+      "reason": "The free local exercise has no deployed S3 access-log collector. Cloud deployment requires an audited log destination.",
+      "scope": "local-only"
+    },
+    {
+      "check_id": "CKV_AWS_144",
+      "resource": "module.artifact_bucket.aws_s3_bucket.this",
+      "file": "modules/ota-artifact-bucket/main.tf",
+      "expires": "2026-11-18",
+      "reason": "Single-region disposable LocalStack has no cross-region replication acceptance. Replication and restore must be verified before cloud use.",
+      "scope": "local-only"
+    },
+    {
+      "check_id": "CKV2_AWS_62",
+      "resource": "module.artifact_bucket.aws_s3_bucket.this",
+      "file": "modules/ota-artifact-bucket/main.tf",
+      "expires": "2026-11-18",
+      "reason": "No S3 notification consumer is deployed in this local exercise. Event delivery is a separately tracked operational integration.",
+      "scope": "local-only"
+    },
+    {
+      "check_id": "CKV2_AWS_57",
+      "resource": "module.ota_authority.aws_secretsmanager_secret.this",
+      "file": "modules/ota-secrets/main.tf",
+      "expires": "2026-11-18",
+      "scope": "local-only",
+      "reason": "Local OTA HMAC authority is provisioned separately. Automatic Lambda rotation is not implemented; key publication and retirement need a dedicated lifecycle."
     }
   ]
 }

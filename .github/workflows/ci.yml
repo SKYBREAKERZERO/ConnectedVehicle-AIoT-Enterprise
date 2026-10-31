@@ -1,79 +1,311 @@
 name: IaC quality gates
-
-on:
+'on':
   pull_request:
-    branches: [main]
+    branches:
+    - main
   push:
-    branches: [main]
-  merge_group:
-  workflow_dispatch:
-
+    branches:
+    - main
+  merge_group: null
+  workflow_dispatch: null
 permissions:
   contents: read
-
 concurrency:
   group: iac-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-
 jobs:
+  baseline:
+    name: 01 IaC baseline and candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - run: python3 -m scripts.iac.ci_baseline_policy --output .iac-reports/day31-baseline.json
+      name: Verify event-bound baseline
+    - run: python -m scripts.iac.pipeline_evidence publish --stage iac-baseline --folder .iac-reports --output .ci-bundles/iac-baseline
+      name: Seal iac-baseline candidate / attempt / hashes
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: iac-baseline-source
+        path: .ci-bundles/iac-baseline
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+  lint:
+    name: 02 IaC lint and format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-iac
+      with:
+        terraform: 'false'
+    - run: |-
+        ruff check scripts/iac tests/unit/iac tests/integration/iac
+        ruff format --check scripts/iac tests/unit/iac tests/integration/iac
+    needs:
+    - baseline
+  types:
+    name: 03 IaC type safety
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-iac
+      with:
+        terraform: 'false'
+    - run: mypy scripts/iac
+    needs:
+    - baseline
+  policy:
+    name: 04 Policy and trust contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-iac
+      with:
+        terraform: 'false'
+    - run: python3 -m scripts.iac.ci_baseline_policy --output .iac-reports/day31-baseline.json
+      name: Verify event-bound baseline
+    - run: |-
+        pytest -c scripts/iac/pytest.ini tests/unit/iac -q --junitxml=.iac-reports/day25-security.xml
+        python -m scripts.iac.deploy_governance
+        python -m scripts.iac.day26_evidence
+        python -m scripts.iac.day27_evidence
+    - run: python -m scripts.iac.pipeline_evidence publish --stage iac-policy --folder .iac-reports --output .ci-bundles/iac-policy
+      name: Seal iac-policy candidate / attempt / hashes
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: iac-policy-results
+        path: .ci-bundles/iac-policy
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    needs:
+    - lint
+    - types
+  contracts:
+    name: 05 Terraform modules (${{ matrix.contract_group }})
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        contract_group: [foundation, ota, governance, roots]
+    needs:
+    - policy
+    uses: ./.github/workflows/iac-phase.yml
+    with:
+      phase: contracts
+      contract_group: ${{ matrix.contract_group }}
+  security:
+    name: 06 Checkov and policy audit
+    needs:
+    - policy
+    uses: ./.github/workflows/iac-phase.yml
+    with:
+      phase: security
+  native:
+    name: 07 LocalStack plans and recovery
+    needs:
+    - contracts
+    - security
+    uses: ./.github/workflows/iac-phase.yml
+    with:
+      phase: native
+  evidence:
+    name: 08 IaC evidence verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Fail closed on all upstream results
+      env:
+        PIPELINE_NEEDS: ${{ toJSON(needs) }}
+      run: python -m scripts.iac.pipeline_evidence needs --expected baseline,lint,types,policy,contracts,security,native
+    - uses: ./.github/actions/setup-ci-iac
+      with:
+        terraform: 'false'
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-policy-results
+        path: .ci-inputs/iac-policy
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-contracts-foundation-results
+        path: .ci-inputs/iac-contracts-foundation
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-contracts-ota-results
+        path: .ci-inputs/iac-contracts-ota
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-contracts-governance-results
+        path: .ci-inputs/iac-contracts-governance
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-contracts-roots-results
+        path: .ci-inputs/iac-contracts-roots
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-security-results
+        path: .ci-inputs/iac-security
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-native-results
+        path: .ci-inputs/iac-native
+    - run: python -m scripts.iac.pipeline_evidence assemble-iac --folder .ci-inputs --output .iac-reports
+    - run: |-
+        python -m scripts.iac.day27_evidence --with-fault
+        python -m scripts.iac.day28_evidence --verify
+        python -m scripts.iac.day29_evidence --verify
+        python -m scripts.iac.day30_evidence --verify
+        python -m scripts.iac.day31_evidence --verify
+      name: Verify complete Day25-Day31 evidence chain
+    - run: python -m scripts.iac.pipeline_evidence publish --stage iac-evidence --folder .iac-reports --output .ci-bundles/iac-evidence
+      name: Seal iac-evidence candidate / attempt / hashes
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: iac-verified-evidence
+        path: .ci-bundles/iac-evidence
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    needs:
+    - baseline
+    - lint
+    - types
+    - policy
+    - contracts
+    - security
+    - native
+    if: ${{ always() }}
   quality:
     name: IaC quality gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
-      - name: Checkout candidate merge result
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          path: candidate
-          persist-credentials: false
-      - name: Select baseline commit
-        id: baseline
-        env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
-          PUSH_BASE: ${{ github.event.before }}
-          DEFAULT_REF: ${{ github.event.repository.default_branch }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          baseline="${PR_BASE:-${QUEUE_BASE:-${PUSH_BASE:-$DEFAULT_REF}}}"
-          if [[ "$baseline" == "0000000000000000000000000000000000000000" ]]; then
-            baseline="$GITHUB_SHA"
-          fi
-          echo "ref=$baseline" >> "$GITHUB_OUTPUT"
-      - name: Checkout baseline into separate directory
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ steps.baseline.outputs.ref }}
-          path: baseline
-          persist-credentials: false
-      - name: Install Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.12'
-      - name: Install Terraform
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
-        with:
-          terraform_version: '1.14.7'
-          terraform_wrapper: false
-      - name: Install pinned IaC tools
-        working-directory: candidate
-        run: python -m pip install --disable-pip-version-check -r scripts/iac/requirements.txt
-      - name: Test policy regressions and gate code
-        working-directory: candidate
-        run: |
-          ruff check scripts/iac tests/unit/iac
-          ruff format --check scripts/iac tests/unit/iac
-          mypy scripts/iac
-          pytest -c scripts/iac/pytest.ini tests/unit/iac -q
-      - name: Validate, scan, contract-test and check baseline plan
-        working-directory: candidate
-        run: python -m scripts.iac.gate --baseline ../baseline
-      - name: Upload sanitized success summary
-        if: success()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: iac-gate-summary
-          path: candidate/.iac-reports/summary.json
-          if-no-files-found: error
-          retention-days: 7
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Fail closed on all upstream results
+      env:
+        PIPELINE_NEEDS: ${{ toJSON(needs) }}
+      run: python -m scripts.iac.pipeline_evidence needs --expected evidence
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-verified-evidence
+        path: .ci-inputs/iac-evidence
+    - run: python -m scripts.iac.pipeline_evidence consume --stage iac-evidence --folder .ci-inputs/iac-evidence
+        --output .iac-reports
+    - name: Upload sanitized success summary
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: iac-gate-summary
+        path: .iac-reports/summary.json
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day31 candidate trust evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day31-iac-trust
+        path: |
+          .iac-reports/day31-baseline.json
+          .iac-reports/day31-governance.json
+          .iac-reports/day25-security.xml
+          .iac-reports/day31-faults.xml
+          .iac-reports/day31-faults.json
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day26 offline state and plan governance evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day26-state-plan-governance
+        path: |
+          .iac-reports/day26-governance.json
+          .iac-reports/day25-security.xml
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day25 deployment governance evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day25-deploy-governance
+        path: |
+          .iac-reports/day25-governance.json
+          .iac-reports/day25-security.xml
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day27 release recovery evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day27-release-recovery
+        path: |
+          .iac-reports/day27-governance.json
+          .iac-reports/day25-security.xml
+          .iac-reports/day27-lock.xml
+          .iac-reports/day27-lock.json
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day28 disaster recovery and drift evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day28-state-drift-recovery
+        path: |
+          .iac-reports/day28-governance.json
+          .iac-reports/day25-security.xml
+          .iac-reports/day28-dr.xml
+          .iac-reports/day28-dr.json
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day30 failure isolation evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day30-failure-isolation
+        path: |
+          .iac-reports/day30-governance.json
+          .iac-reports/day25-security.xml
+          .iac-reports/day30-faults.xml
+          .iac-reports/day30-faults.json
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day29 trusted recovery evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day29-trusted-recovery
+        path: |
+          .iac-reports/day29-governance.json
+          .iac-reports/day25-security.xml
+          .iac-reports/day29-native.xml
+          .iac-reports/day29-native.json
+          .iac-reports/day29-faults.xml
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    needs:
+    - evidence
+    if: ${{ always() }}

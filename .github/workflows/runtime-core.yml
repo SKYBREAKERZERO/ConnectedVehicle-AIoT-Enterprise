@@ -1,0 +1,166 @@
+name: Reusable Runtime integration suite
+'on':
+  workflow_call: null
+permissions:
+  contents: read
+jobs:
+  run:
+    name: Service-backed Runtime regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CLOUD_RUNTIME: localstack
+      DAY12_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+      DAY16_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+      DAY24_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+      APP_ENV: local
+      AWS_ENDPOINT_URL: http://127.0.0.1:14566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      DATABASE_HOST: 127.0.0.1
+      DATABASE_PORT: '25432'
+      DATABASE_NAME: connected_vehicle
+      DATABASE_USERNAME: app_user
+      # No password is provisioned for the implicit identity. Real runtimes load
+      # their own scoped Secrets Manager credentials; implicit DB access fails closed.
+      DATABASE_PASSWORD: ci-no-implicit-login
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '16379'
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cluster_bootstrap
+          POSTGRES_PASSWORD: ci-bootstrap-only
+          POSTGRES_DB: connected_vehicle
+        ports:
+        - 25432:5432
+        options: --health-cmd "pg_isready -U cluster_bootstrap -d connected_vehicle" --health-interval 5s --health-timeout
+          3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+        - 16379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+      localstack:
+        image: localstack/localstack:3.8.1@sha256:b279c01f4cfb8f985a482e4014cabc1e2697b9d7a6c8c8db2e40f4d9f93687c7
+        env:
+          SERVICES: sqs,secretsmanager,iam,kms,sts
+        ports:
+        - 14566:4566
+        options: --health-cmd "curl -fsS http://localhost:4566/_localstack/health" --health-interval 5s --health-timeout
+          3s --health-retries 30
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: 'false'
+        fetch-depth: '0'
+    - uses: ./.github/actions/setup-ci-runtime
+    - run: python3 -m scripts.iac.ci_baseline_policy --output .runtime-reports/day31-runtime-baseline.json
+      name: Verify event-bound baseline
+    - name: Bootstrap cluster roles with separate management identity
+      env:
+        BOOTSTRAP_DATABASE_USERNAME: cluster_bootstrap
+        BOOTSTRAP_DATABASE_PASSWORD: ci-bootstrap-only
+        MIGRATION_DATABASE_USERNAME: migration_owner
+        MIGRATION_DATABASE_PASSWORD: ci-schema-only
+      run: python -m database.bootstrap_cluster
+    - name: Apply integration schema with migration credentials
+      env:
+        MIGRATION_DATABASE_USERNAME: migration_owner
+        MIGRATION_DATABASE_PASSWORD: ci-schema-only
+      run: python -m alembic upgrade head
+    - name: Prove implicit runtime identity cannot inherit management access
+      run: python -m scripts.verify_ci_database_identity
+    - name: Unit, contract, real permissions and independent-process E2E tests
+      env:
+        RUNTIME_EVIDENCE_DIR: .runtime-reports
+      run: pytest tests/unit tests/contract tests/e2e/test_independent_runtimes.py tests/e2e/test_device_full_chain.py
+        tests/integration/day12 tests/integration/day16 tests/integration/day17 tests/integration/day18 tests/integration/day19
+        tests/integration/security/test_database_runtime_permissions.py tests/integration/reliability/test_redis_idempotency.py
+        tests/integration/remote_command/test_remote_command_sqs_worker_integration.py -q --junitxml=.runtime-reports/runtime-core.xml
+    - name: Require Day16 persistent state and monitoring proof
+      run: python -m scripts.day16_evidence --check-existing
+    - name: Require Day17 SLO and local release readiness
+      run: python -m scripts.day17_release --check-existing
+    - name: Require Day18 signed execution and durable report evidence
+      run: python -m scripts.day18_evidence --check-existing
+    - name: Require Day19 campaign rollout evidence
+      run: python -m scripts.day19_evidence --check-existing
+    - name: Upload Day19 campaign evidence
+      if: ${{ always() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day19-local-campaign
+        path: .runtime-reports/day19-*.json
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day18 OTA execution evidence
+      if: ${{ always() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day18-local-execution
+        path: .runtime-reports/day18-*.json
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day17 operational evidence
+      if: ${{ always() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day17-local-readiness
+        path: .runtime-reports/day17-*.json
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day16 recovery acceptance evidence
+      if: ${{ always() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day16-local-resilience
+        path: .runtime-reports/day16-*.json
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day11 simulation evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day11-device-chain-evidence
+        path: .runtime-reports/day11-evidence.json
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Require all Day12 acceptance records
+      run: python -m scripts.day12_evidence
+    - name: Upload sanitized Day12 acceptance evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day12-local-acceptance
+        path: |
+          .runtime-reports/day12-12a-migrations.json
+          .runtime-reports/day12-12a-rls.json
+          .runtime-reports/day12-12b-identity-matrix.json
+          .runtime-reports/day12-12c-alert-lifecycle.json
+          .runtime-reports/day12-12d-restore.json
+          .runtime-reports/day12-migration-failure-retry.json
+          .runtime-reports/day12-migration-scale-locks.json
+          .runtime-reports/day12-migration-guards.json
+          .runtime-reports/day12-credential-rotation.json
+          .runtime-reports/day12-credential-recovery-hardening.json
+          .runtime-reports/day12-credential-lifecycle.json
+          .runtime-reports/day12-credential-version-competition.json
+          .runtime-reports/day12-credential-cloud-lifecycle.json
+          .runtime-reports/day12-acceptance.json
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - run: python -m scripts.iac.pipeline_evidence publish --stage runtime-core --folder .runtime-reports --output
+        .ci-bundles/runtime-core
+      name: Seal runtime-core candidate / attempt / hashes
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: runtime-core-results
+        path: .ci-bundles/runtime-core
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
