@@ -89,7 +89,7 @@ def main() -> None:
             "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
             "historical_input_attempt": os.environ.get("FAULT_HISTORY_ATTEMPT") or None,
             "producer_attempt": needs["producer"].get("outputs", {}).get("attempt"),
-            "single_fault_isolated": scenario == "old-attempt"
+            "single_fault_isolated": scenario in {"old-attempt", "skipped"}
             or needs["producer"].get("outputs", {}).get("attempt")
             == os.environ["GITHUB_RUN_ATTEMPT"],
             "observed_needs": needs,
