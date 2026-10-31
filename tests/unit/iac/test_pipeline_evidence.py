@@ -11,6 +11,12 @@ import pytest
 from scripts.iac.pipeline_evidence import assemble_iac, consume, publish, require_needs, verify
 
 
+@pytest.fixture(autouse=True)
+def isolated_job_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Negative fixtures must not append fake failure rows to a real job summary.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+
 @pytest.mark.parametrize("result", ["failure", "cancelled", "skipped", None])
 def test_partial_or_skipped_graph_cannot_pass_final_gate(result: str | None) -> None:
     with pytest.raises(ValueError):

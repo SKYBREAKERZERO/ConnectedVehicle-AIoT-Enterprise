@@ -373,7 +373,11 @@ def gate(
     local = candidate / "environments/local"
     base_local = original / "environments/local"
     if phase == "native":
-        initialize(local, env=env)
+        # Independent runners have no backend/module initialization from contracts.
+        # Initialize every root that the native plans use, without sharing .terraform.
+        for native_root in (local, candidate / "environments/ota-local"):
+            if native_root.is_dir():
+                initialize(native_root, env=env)
     if not base_local.is_dir():
         raise RuntimeError("Missing baseline local environment; no deletion comparison possible")
     name = f"cv-iac-gate-{uuid4().hex[:12]}"

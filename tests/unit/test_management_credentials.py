@@ -32,7 +32,9 @@ def test_bootstrap_requires_independent_explicit_credentials(username: str | Non
 def test_runtime_workflow_limits_cluster_credentials_to_bootstrap_step() -> None:
     root = Path(__file__).resolve().parents[2]
     workflow = yaml.safe_load((root / ".github/workflows/runtime.yml").read_text())
-    job = workflow["jobs"]["runtime"]
+    assert workflow["jobs"]["integration"]["uses"] == "./.github/workflows/runtime-core.yml"
+    reusable = yaml.safe_load((root / ".github/workflows/runtime-core.yml").read_text())
+    job = reusable["jobs"]["run"]
     assert job["env"]["MIGRATION_DATABASE_USERNAME"] == "migration_owner"
     assert job["services"]["postgres"]["env"]["POSTGRES_USER"] == "cluster_bootstrap"
     assert not any(name.startswith("BOOTSTRAP_") for name in job["env"])

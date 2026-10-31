@@ -99,6 +99,11 @@ Commit/Run/Attempt/source digest and a SHA-256 inventory of JSON/XML reports.
 Consumers reject missing/extra files, executable files, modified bytes, another
 stage/Attempt/source, and conflicting reports. They parse data only.
 
+Use **Re-run all jobs** when repeating a complete demonstration. Rerunning only a
+failed consumer cannot authorize reuse of producer bundles from an earlier Run
+Attempt; such mixed-attempt input is intentionally rejected. Never relabel an old
+manifest or copy provider/State directories to make a partial rerun pass.
+
 The Evidence jobs use `if: always()` and explicitly inspect every preceding job's
 result from `toJSON(needs)`. The final gates also run unconditionally and require
 Evidence success plus its validated bundle. Failure, cancellation, skip or absent
