@@ -180,12 +180,12 @@ class ReleaseRevalidator:
 
     def verify(self, release_id: str, **values: Any) -> dict[str, Any]:
         release_id = identifier(release_id)
+        values = deepcopy(values)
         with governance_db(self.path) as connection:
-            connection.execute("BEGIN")
+            connection.execute("BEGIN IMMEDIATE")
             admissible(connection, release_id, utc(self._clock))
-        # Establish ownership before recording any preflight failure. A caller
-        # cannot quarantine somebody else's ID with a forged receipt.
-        self.approvals.validate_consumed(values["receipt"], actor=values["actor"])
+            # Ownership and isolation are read under the same writer lock.
+            self.approvals.validate_consumed(values["receipt"], actor=values["actor"])
         try:
             return self._verify(release_id, **values)
         except (ValueError, sqlite3.Error):

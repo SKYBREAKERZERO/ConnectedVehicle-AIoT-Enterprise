@@ -1,0 +1,77 @@
+name: Day31 trust boundary
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_run:
+    workflows: [IaC quality gates, Runtime quality gates]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Current open PR number to inspect, read-only
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  policy-contracts:
+    if: github.event_name == 'pull_request'
+    name: Day31 candidate policy contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r scripts/iac/requirements.txt
+      - name: Candidate contracts only, no protected-main authority
+        run: >-
+          python -m pytest -c scripts/iac/pytest.ini
+          tests/unit/iac/test_ci_baseline_policy.py
+          tests/unit/iac/test_workflow_evidence_binding.py
+          tests/unit/iac/test_day31_evidence.py
+          tests/integration/iac/test_day31_workflow_provenance.py -q
+
+  trusted-readonly-binding:
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Checkout trusted workflow definition commit, never PR source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Inspect current API records and parse artifact data only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_KIND: ${{ github.event_name }}
+          TRIGGER_RUN: ${{ github.event.workflow_run.id }}
+          REQUESTED_PR: ${{ inputs.pr }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_KIND" == "workflow_run" ]]; then
+            python3 -m scripts.iac.workflow_evidence_binding --trigger-run "$TRIGGER_RUN" --output .iac-reports/day31-cross-workflow.json
+          else
+            python3 -m scripts.iac.workflow_evidence_binding --pr "$REQUESTED_PR" --output .iac-reports/day31-cross-workflow.json
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day31-cross-workflow-binding
+          path: .iac-reports/day31-cross-workflow.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7

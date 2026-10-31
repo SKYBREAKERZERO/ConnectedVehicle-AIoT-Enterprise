@@ -197,6 +197,25 @@ def require_policy(plan: dict[str, Any], phase: str) -> None:
 
 
 def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python: str) -> None:
+    if repo.resolve() == baseline.resolve():
+        raise ValueError("baseline cannot be the candidate workspace")
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        from scripts.iac.ci_baseline_policy import current
+
+        trusted = current()
+        saved = json.loads((repo / ".iac-reports/day31-baseline.json").read_text(encoding="utf-8"))
+        actual = subprocess.check_output(
+            ["git", "-C", str(baseline), "rev-parse", "HEAD"], text=True
+        ).strip()
+        baseline_root = subprocess.check_output(
+            ["git", "-C", str(baseline), "rev-parse", "--show-toplevel"], text=True
+        ).strip()
+        if (
+            saved != trusted
+            or actual != trusted["baseline_sha"]
+            or Path(baseline_root).resolve() != baseline.resolve()
+        ):
+            raise ValueError("baseline checkout does not match event-bound provenance")
     env = sandbox_environment(work)
 
     candidate = work / "candidate"
@@ -466,6 +485,21 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
             ],
             cwd=repo,
             env={**env, "DAY30_FAULT_REPORT": str(report.parent / "day30-faults.json")},
+        )
+        run(
+            [
+                scanner_python,
+                "-m",
+                "pytest",
+                "-c",
+                "scripts/iac/pytest.ini",
+                "tests/integration/iac/test_day31_admission_races.py",
+                "tests/integration/iac/test_day31_workflow_provenance.py",
+                "-q",
+                f"--junitxml={report.parent / 'day31-faults.xml'}",
+            ],
+            cwd=repo,
+            env={**env, "DAY31_FAULT_REPORT": str(report.parent / "day31-faults.json")},
         )
         day29_native = json.loads((report.parent / "day29-native.json").read_text(encoding="utf-8"))
         summary = {

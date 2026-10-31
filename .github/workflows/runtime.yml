@@ -76,15 +76,11 @@ jobs:
           mypy .
           python -m scripts.day17_rules
       - name: Module boundaries and baseline schema compatibility
-        env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
-          PUSH_BASE: ${{ github.event.before }}
         shell: bash
         run: |
           set -euo pipefail
-          base="${PR_BASE:-${QUEUE_BASE:-${PUSH_BASE:-HEAD}}}"
-          if [[ "$base" == "0000000000000000000000000000000000000000" ]]; then base=HEAD; fi
+          python -m scripts.iac.ci_baseline_policy --output .runtime-reports/day31-runtime-baseline.json
+          base=$(python -c 'import json; print(json.load(open(".runtime-reports/day31-runtime-baseline.json"))["baseline_sha"])')
           baseline=$(mktemp -d)
           git archive "$base" | tar -x -C "$baseline"
           python -m scripts.contracts --baseline "$baseline"
@@ -199,6 +195,19 @@ jobs:
             .runtime-reports/day12-credential-version-competition.json
             .runtime-reports/day12-credential-cloud-lifecycle.json
             .runtime-reports/day12-acceptance.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Verify Day31 Runtime candidate provenance
+        run: python -m scripts.iac.day31_evidence --runtime
+      - name: Upload Day31 Runtime trust evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day31-runtime-trust
+          path: |
+            .runtime-reports/day31-runtime-baseline.json
+            .runtime-reports/day31-runtime.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7

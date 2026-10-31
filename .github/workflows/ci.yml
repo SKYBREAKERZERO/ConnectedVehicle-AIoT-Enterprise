@@ -26,21 +26,11 @@ jobs:
         with:
           path: candidate
           persist-credentials: false
+          fetch-depth: 0
       - name: Select baseline commit
         id: baseline
-        env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
-          PUSH_BASE: ${{ github.event.before }}
-          DEFAULT_REF: ${{ github.event.repository.default_branch }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          baseline="${PR_BASE:-${QUEUE_BASE:-${PUSH_BASE:-$DEFAULT_REF}}}"
-          if [[ "$baseline" == "0000000000000000000000000000000000000000" ]]; then
-            baseline="$GITHUB_SHA"
-          fi
-          echo "ref=$baseline" >> "$GITHUB_OUTPUT"
+        working-directory: candidate
+        run: python3 -m scripts.iac.ci_baseline_policy --output .iac-reports/day31-baseline.json
       - name: Checkout baseline into separate directory
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -84,12 +74,29 @@ jobs:
       - name: Verify Day30 failure isolation and reconciliation evidence
         working-directory: candidate
         run: python -m scripts.iac.day30_evidence --verify
+      - name: Verify Day31 event baseline and mandatory trust proof
+        working-directory: candidate
+        run: python -m scripts.iac.day31_evidence --verify
       - name: Upload sanitized success summary
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: iac-gate-summary
           path: candidate/.iac-reports/summary.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload Day31 candidate trust evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day31-iac-trust
+          path: |
+            candidate/.iac-reports/day31-baseline.json
+            candidate/.iac-reports/day31-governance.json
+            candidate/.iac-reports/day25-security.xml
+            candidate/.iac-reports/day31-faults.xml
+            candidate/.iac-reports/day31-faults.json
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
       - name: Upload Day26 offline state and plan governance evidence
