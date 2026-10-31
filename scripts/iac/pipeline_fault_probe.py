@@ -88,6 +88,10 @@ def main() -> None:
             "run_id": os.environ["GITHUB_RUN_ID"],
             "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
             "historical_input_attempt": os.environ.get("FAULT_HISTORY_ATTEMPT") or None,
+            "producer_attempt": needs["producer"].get("outputs", {}).get("attempt"),
+            "single_fault_isolated": scenario == "old-attempt"
+            or needs["producer"].get("outputs", {}).get("attempt")
+            == os.environ["GITHUB_RUN_ATTEMPT"],
             "observed_needs": needs,
             "fault_blocked": "failure" in needs["consumer"]["outputs"].values(),
             "deployment_authorized": False,

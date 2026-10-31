@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       operation: ${{ steps.produce.outcome }}
+      bundle: fault-input-${{ inputs.graph }}-${{ inputs.scenario }}-${{ github.run_attempt }}
+      attempt: ${{ github.run_attempt }}
     env:
       FAULT_GRAPH: ${{ inputs.graph }}
       FAULT_SCENARIO: ${{ inputs.scenario }}
@@ -68,7 +70,7 @@ jobs:
       - id: download
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: ${{ inputs.scenario == 'old-attempt' && github.run_attempt > 1 && format('fault-history-{0}-1', inputs.graph) || format('fault-input-{0}-{1}-{2}', inputs.graph, inputs.scenario, github.run_attempt) }}
+          name: ${{ inputs.scenario == 'old-attempt' && github.run_attempt > 1 && format('fault-history-{0}-1', inputs.graph) || needs.producer.outputs.bundle }}
           path: .fault-input
       - id: verify
         env:
