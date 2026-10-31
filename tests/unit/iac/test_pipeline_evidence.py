@@ -72,14 +72,6 @@ def test_native_phase_cannot_manufacture_contract_or_scan_success(tmp_path: Path
     inputs.mkdir()
     data: dict[str, dict[str, Any]] = {
         "iac-policy": {"unit.json": {}},
-        "iac-contracts": {
-            "contracts.json": {
-                "status": "passed",
-                "phase": "contracts",
-                "contract_files": 1,
-                "contract_runs": 0,
-            }
-        },
         "iac-security": {
             "security.json": {
                 "status": "passed",
@@ -96,6 +88,11 @@ def test_native_phase_cannot_manufacture_contract_or_scan_success(tmp_path: Path
             }
         },
     }
+    from tests.unit.iac.test_module_contracts import reports
+
+    for group, report in reports().items():
+        data[f"iac-contracts-{group}"] = {f"contracts-{group}.json": report}
+    data["iac-contracts-foundation"]["contracts-foundation.json"]["contract_runs"] = 0
     for stage, files in data.items():
         source = tmp_path / stage
         source.mkdir()
@@ -104,6 +101,47 @@ def test_native_phase_cannot_manufacture_contract_or_scan_success(tmp_path: Path
         publish(source, inputs / stage, stage)
     with pytest.raises(ValueError, match="contract evidence"):
         assemble_iac(inputs, tmp_path / "out")
+
+
+def test_independent_module_bundles_merge_without_double_counting(tmp_path: Path) -> None:
+    from scripts.iac.module_contracts import GROUPS
+    from tests.unit.iac.test_module_contracts import reports
+
+    inputs = tmp_path / "inputs"
+    payloads: dict[str, dict[str, Any]] = {
+        "iac-policy": {"policy.json": {}},
+        "iac-security": {
+            "security.json": {
+                "status": "passed",
+                "phase": "security",
+                "security_scan": "passed",
+                "scanned_sources": 2,
+            }
+        },
+        "iac-native": {
+            "summary.json": {
+                "status": "passed",
+                "phase": "native",
+                "security_scan": "separate-job-required",
+                "contract_runs": 0,
+            }
+        },
+    }
+    for group, report in reports().items():
+        payloads[f"iac-contracts-{group}"] = {f"contracts-{group}.json": report}
+    for stage, files in payloads.items():
+        source = tmp_path / stage
+        source.mkdir()
+        for name, value in files.items():
+            (source / name).write_text(json.dumps(value))
+        publish(source, inputs / stage, stage)
+    output = tmp_path / "combined"
+    assemble_iac(inputs, output)
+    summary = json.loads((output / "summary.json").read_text())
+    combined = json.loads((output / "contracts.json").read_text())
+    assert summary["contract_runs"] == sum(len(roots) for roots in GROUPS.values()) == 17
+    assert combined["contract_runs"] == summary["contract_runs"]
+    assert summary["module_contract_groups"] == list(GROUPS)
 
 
 # Read the actual declared dependency sets; every mandatory node is faulted.

@@ -26,6 +26,8 @@ WORKFLOWS = {
     ".github/workflows/runtime.yml": ("Runtime quality gate", "day31-runtime-trust"),
 }
 SOURCE_FILES = [
+    "scripts/iac/module_contracts.py",
+    "tests/unit/iac/test_module_contracts.py",
     "tests/integration/remote_command/conftest.py",
     "tests/integration/remote_command/test_remote_command_sqs_worker_integration.py",
     "scripts/iac/pipeline_fault_probe.py",

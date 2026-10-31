@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.iac.day31_evidence import provenance
+from scripts.iac.module_contracts import GROUPS, merge_reports
 
 
 def step_summary(title: str, rows: list[tuple[str, str]]) -> None:
@@ -108,9 +109,19 @@ def consume(folder: Path, stage: str, output: Path) -> None:
 
 
 def assemble_iac(inputs: Path, output: Path) -> None:
-    for stage in ("iac-policy", "iac-contracts", "iac-security", "iac-native"):
+    for stage in (
+        "iac-policy",
+        "iac-security",
+        "iac-native",
+        *(f"iac-contracts-{group}" for group in GROUPS),
+    ):
         consume(inputs / stage, stage, output)
-    contracts = json.loads((output / "contracts.json").read_text())
+    contracts = merge_reports(
+        {group: json.loads((output / f"contracts-{group}.json").read_text()) for group in GROUPS}
+    )
+    (output / "contracts.json").write_text(
+        json.dumps(contracts, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
     security = json.loads((output / "security.json").read_text())
     native = json.loads((output / "summary.json").read_text())
     if (
@@ -138,6 +149,7 @@ def assemble_iac(inputs: Path, output: Path) -> None:
         contract_runs=contracts["contract_runs"],
         security_scan=security["security_scan"],
         phase="assembled-dag",
+        module_contract_groups=list(GROUPS),
         phase_report_sha256={
             name: sha(output / name) for name in ("contracts.json", "security.json")
         },

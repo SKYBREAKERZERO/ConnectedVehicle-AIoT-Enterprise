@@ -1,6 +1,6 @@
 # Multi-file CI/CD presentation and execution graph
 
-The Runtime and IaC Actions pages now each show nine real jobs. Fan-out quality
+Runtime shows nine real jobs; IaC shows twelve, with four parallel module groups. Fan-out quality
 checks converge on integration work, then a dedicated Evidence job and the
 existing required quality gate. Expand a reusable job to inspect its engine steps.
 There are no sleeps, duplicate test loops or placeholder deployment jobs added to
@@ -45,15 +45,24 @@ flowchart LR
     B --> T[03 IaC type safety]
     L --> U[04 Policy and trust contracts]
     T --> U
-    U --> C[05 Terraform init validate test]
+    U --> C1[05 Foundation modules]
+    U --> C2[05 OTA modules]
+    U --> C3[05 OIDC and State governance]
+    U --> C4[05 Environment roots]
     U --> S[06 Checkov and policy audit]
-    C --> N[07 LocalStack plans and recovery]
+    C1 --> N[07 LocalStack plans and recovery]
+    C2 --> N
+    C3 --> N
+    C4 --> N
     S --> N
     B --> E[08 IaC evidence verification]
     L --> E
     T --> E
     U --> E
-    C --> E
+    C1 --> E
+    C2 --> E
+    C3 --> E
+    C4 --> E
     S --> E
     N --> E
     E --> G[IaC quality gate]
@@ -68,7 +77,7 @@ repeat plan, lock/failure/recovery and Day27–31 fault scenarios. No provider c
 raw Terraform State, binary Plan or credentials travel in artifacts.
 
 Native-only summaries cannot claim contracts/scanning succeeded. The Evidence
-consumer requires independently identified reports from all four producer stages,
+consumer requires independently identified reports from all seven producer stages (four module groups, policy, security and native),
 combines real contract counts and audited scan results, then verifies Day25–31.
 The final `iac-gate-summary` and existing day-specific artifacts are preserved.
 
@@ -77,7 +86,7 @@ The final `iac-gate-summary` and existing day-specific artifacts are preserved.
 | File | Responsibility |
 |---|---|
 | `.github/workflows/runtime.yml` | Nine-node Runtime DAG and mandatory gate |
-| `.github/workflows/ci.yml` | Nine-node IaC DAG and mandatory gate |
+| `.github/workflows/ci.yml` | Twelve-job IaC DAG with four module groups and mandatory gate |
 | `.github/workflows/runtime-core.yml` | Service-backed Runtime regression engine |
 | `.github/workflows/runtime-postgres.yml` | Fixed Day21/Day24 PostgreSQL suites |
 | `.github/workflows/iac-phase.yml` | Fixed contracts/security/native Terraform phases |
@@ -119,3 +128,20 @@ review/installation; a larger graph does not authorize a deployment or merge.
 Final CI and downloaded acceptance records are stored locally under
 `.runtime-reports/pipeline-dag/`. The user's separate Terraform edits and root
 `1.yml`, `2.yml`, `3.yml`, `test.tf` and module lock files are not part of this change.
+
+## Multi-module IaC execution
+
+The contract matrix has four fixed entries and max-parallel=4, fail-fast=false.
+Each uses a fresh runner, official locked providers, init -lockfile=readonly,
+validate and existing Terraform tests. The exhaustive catalog in
+scripts/iac/module_contracts.py assigns every one of the 17 Terraform roots exactly
+once. New/removed/unlisted roots fail closed, including modules missing versions.tf.
+Empty environment roots additionally undergo the existing no-resource plan check.
+
+Each contracts-GROUP.json contains actual per-root file and successful-test counts.
+Four separately sealed iac-contracts-GROUP-results bundles are required. The reducer
+checks exact group/root identities, counters, completeness and common source/Run/
+Attempt before summing; an omitted shard cannot be replaced by a fabricated total.
+Native LocalStack work starts only after all module groups and Checkov succeed.
+The original IaC quality gate name and Day25-31 artifact interfaces are retained.
+Real AWS Apply, State push and force-unlock remain disabled.

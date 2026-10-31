@@ -111,9 +111,18 @@ def test_ci_cannot_skip_merge_checks_or_receive_production_secrets() -> None:
         {"baseline", "lint", "types", "policy", "contracts", "security", "native"},
     )
     for phase in ("contracts", "security", "native"):
-        assert w["jobs"][phase]["uses"] == "./.github/workflows/iac-phase.yml" and w["jobs"][phase][
-            "with"
-        ] == {"phase": phase}
+        assert w["jobs"][phase]["uses"] == "./.github/workflows/iac-phase.yml"
+        expected = {"phase": phase}
+        if phase == "contracts":
+            expected["contract_group"] = "${{ matrix.contract_group }}"
+        assert w["jobs"][phase]["with"] == expected
+    from scripts.iac.module_contracts import GROUPS
+
+    assert w["jobs"]["contracts"]["strategy"] == {
+        "fail-fast": "false",
+        "max-parallel": "4",
+        "matrix": {"contract_group": list(GROUPS)},
+    }
     phase_workflow = read(".github/workflows/iac-phase.yml")
     assert_pinned_steps(phase_workflow)
     assert phase_workflow["jobs"]["run"]["env"]["CI_PHASE"] == "${{ inputs.phase }}"

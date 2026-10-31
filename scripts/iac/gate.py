@@ -226,10 +226,21 @@ def require_policy(plan: dict[str, Any], phase: str) -> None:
 
 
 def gate(
-    repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python: str, phase: str = "all"
+    repo: Path,
+    baseline: Path,
+    *,
+    work: Path,
+    report: Path,
+    scanner_python: str,
+    phase: str = "all",
+    contract_group: str = "all",
 ) -> None:
     if phase not in {"all", "contracts", "security", "native"}:
         raise ValueError("unknown IaC phase")
+    from scripts.iac.module_contracts import GROUPS, partition
+
+    if contract_group not in {"all", *GROUPS} or (phase != "contracts" and contract_group != "all"):
+        raise ValueError("contract groups apply only to the contracts phase")
     if repo.resolve() == baseline.resolve():
         raise ValueError("baseline cannot be the candidate workspace")
     committed_baseline: str | None = None
@@ -266,6 +277,7 @@ def gate(
     terraform(candidate, "fmt", "-check", "-recursive", "-no-color", env=env)
     contract_count = 0
     contract_runs = 0
+    checked_roots: dict[str, dict[str, int]] = {}
     lock = candidate / "environments" / "local" / ".terraform.lock.hcl"
     if phase in {"all", "contracts"}:
         roots = sorted(p for p in (candidate / "environments").iterdir() if list(p.glob("*.tf")))
@@ -283,12 +295,17 @@ def gate(
         contract_count = 0
         contract_runs = 0
         bootstrap_roots = [p.parent for p in (candidate / "bootstrap").rglob("versions.tf")]
-        for root in (
-            [p for p in roots if p.is_dir()]
-            + bootstrap_roots
-            + sorted((candidate / "modules").rglob("versions.tf"))
-        ):
-            root = root.parent if root.is_file() else root
+        discovered = [
+            p.parent if p.is_file() else p
+            for p in (
+                [p for p in roots if p.is_dir()]
+                + bootstrap_roots
+                + sorted((candidate / "modules").rglob("versions.tf"))
+            )
+        ]
+        for root in partition(discovered, candidate, contract_group):
+            name = root.relative_to(candidate).as_posix()
+            checked_roots[name] = {"files": 0, "passed": 0}
             initialize(root, env=env, lock=lock if "modules" in root.parts else None)
             if root.name == "ota-governance":
                 schema = terraform(root, "providers", "schema", "-json", env=env, quiet=True)
@@ -303,6 +320,7 @@ def gate(
                     raise RuntimeError(f"No active contract assertions for {root.name}")
                 contract_runs += int(passed[1])
                 contract_count += len(tests)
+                checked_roots[name] = {"files": len(tests), "passed": int(passed[1])}
             if root.parent.name == "environments" and root.name not in {"local", "ota-local"}:
                 # No AWS deployment/state yet; adding one must not silently bypass policy.
                 _, empty = _empty_root_plan(root, env)
@@ -321,6 +339,8 @@ def gate(
                     "phase": phase,
                     "contract_files": contract_count,
                     "contract_runs": contract_runs,
+                    "contract_group": contract_group,
+                    "checked_roots": checked_roots,
                 },
                 indent=2,
             )
@@ -711,6 +731,9 @@ def main() -> int:
         "--phase", choices=("all", "contracts", "security", "native"), default="all"
     )
     parser.add_argument("--report", type=Path, default=REPO / ".iac-reports/summary.json")
+    from scripts.iac.module_contracts import GROUPS
+
+    parser.add_argument("--contract-group", choices=("all", *GROUPS), default="all")
     args = parser.parse_args()
     report = args.report.resolve()
     report.parent.mkdir(parents=True, exist_ok=True)
@@ -728,6 +751,7 @@ def main() -> int:
                 report=args.report.resolve(),
                 scanner_python=args.scanner_python,
                 phase=args.phase,
+                contract_group=args.contract_group,
             )
         except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
             report.write_text('{"status": "failed"}\n', encoding="utf-8")

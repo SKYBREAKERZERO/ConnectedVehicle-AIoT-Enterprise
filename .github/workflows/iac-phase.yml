@@ -5,6 +5,9 @@ name: Reusable isolated Terraform phase
       phase:
         type: string
         required: true
+      contract_group:
+        type: string
+        default: all
 permissions:
   contents: read
 jobs:
@@ -14,6 +17,7 @@ jobs:
     timeout-minutes: 30
     env:
       CI_PHASE: ${{ inputs.phase }}
+      CI_CONTRACT_GROUP: ${{ inputs.contract_group }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -44,14 +48,17 @@ jobs:
         set -euo pipefail
         report="$CI_PHASE"
         if [[ "$CI_PHASE" == "native" ]]; then report=summary; fi
-        python -m scripts.iac.gate --baseline baseline --phase "$CI_PHASE" --report ".iac-reports/$report.json"
+        if [[ "$CI_PHASE" == "contracts" ]]; then report="contracts-$CI_CONTRACT_GROUP"; fi
+        python -m scripts.iac.gate --baseline baseline --phase "$CI_PHASE" --contract-group "$CI_CONTRACT_GROUP" --report ".iac-reports/$report.json"
       name: Run actual Terraform phase
-    - run: python -m scripts.iac.pipeline_evidence publish --stage "iac-$CI_PHASE" --folder .iac-reports --output
-        .ci-bundles/result
+    - run: |
+        stage="iac-$CI_PHASE"
+        if [[ "$CI_PHASE" == "contracts" ]]; then stage="$stage-$CI_CONTRACT_GROUP"; fi
+        python -m scripts.iac.pipeline_evidence publish --stage "$stage" --folder .iac-reports --output .ci-bundles/result
       name: Seal native results without State or providers
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
-        name: iac-${{ inputs.phase }}-results
+        name: iac-${{ inputs.phase }}${{ inputs.phase == 'contracts' && format('-{0}', inputs.contract_group) || '' }}-results
         path: .ci-bundles/result
         include-hidden-files: true
         if-no-files-found: error

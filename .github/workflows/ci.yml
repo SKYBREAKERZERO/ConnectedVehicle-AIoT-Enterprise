@@ -101,12 +101,18 @@ jobs:
     - lint
     - types
   contracts:
-    name: 05 Terraform init validate test
+    name: 05 Terraform modules (${{ matrix.contract_group }})
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        contract_group: [foundation, ota, governance, roots]
     needs:
     - policy
     uses: ./.github/workflows/iac-phase.yml
     with:
       phase: contracts
+      contract_group: ${{ matrix.contract_group }}
   security:
     name: 06 Checkov and policy audit
     needs:
@@ -144,8 +150,20 @@ jobs:
         path: .ci-inputs/iac-policy
     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
-        name: iac-contracts-results
-        path: .ci-inputs/iac-contracts
+        name: iac-contracts-foundation-results
+        path: .ci-inputs/iac-contracts-foundation
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-contracts-ota-results
+        path: .ci-inputs/iac-contracts-ota
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-contracts-governance-results
+        path: .ci-inputs/iac-contracts-governance
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-contracts-roots-results
+        path: .ci-inputs/iac-contracts-roots
     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
         name: iac-security-results
