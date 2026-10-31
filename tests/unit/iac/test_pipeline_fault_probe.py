@@ -12,9 +12,7 @@ from scripts.iac.pipeline_fault_probe import SCENARIOS, verify_outcomes
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_oracle_requires_failure_at_the_correct_boundary(scenario: str) -> None:
-    producer = (
-        "failure" if scenario == "failure" else "skipped" if scenario == "skipped" else "success"
-    )
+    producer = "skipped" if scenario == "skipped" else "success"
     step = (
         "guard"
         if scenario in {"failure", "skipped"}
@@ -23,14 +21,20 @@ def test_oracle_requires_failure_at_the_correct_boundary(scenario: str) -> None:
         else "verify"
     )
     needs: dict[str, Any] = {
-        "producer": {"result": producer},
-        "consumer": {"result": "failure", "outputs": {step: "failure"}},
+        "producer": {
+            "result": producer,
+            "outputs": {"operation": "failure" if scenario == "failure" else "success"},
+        },
+        "consumer": {
+            "result": "success",
+            "outputs": {"guard": "success", "download": "success", step: "failure"},
+        },
     }
     verify_outcomes(scenario, needs)
     for attack in ("unblocked", "missing-output", "wrong-producer"):
         bad = deepcopy(needs)
         if attack == "unblocked":
-            bad["consumer"]["result"] = "success"
+            bad["consumer"]["outputs"][step] = "success"
         elif attack == "missing-output":
             bad["consumer"]["outputs"] = {}
         else:

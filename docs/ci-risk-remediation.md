@@ -9,9 +9,9 @@
 
 ## Isolated Actions fault matrix
 
-`ci-fault-matrix.yml` calls `ci-fault-case.yml` for both Runtime and IaC scopes with five faults: producer failure, scheduler skip, absent artifact, changed artifact bytes and stale Attempt. Every case uses the actual production needs/bundle checker. Failure allowances exist only in this negative-test harness: the oracle independently requires the expected producer result, consumer failure and exact failing step. Oracle failure is never allowed. Production ci.yml/runtime.yml and their reusable engines retain their fail-closed policy and have no failure allowances.
+`ci-fault-matrix.yml` calls `ci-fault-case.yml` for both Runtime and IaC scopes with five faults: producer failure, scheduler skip, absent artifact, changed artifact bytes and stale Attempt. Every case uses the actual production needs/bundle checker. Failure allowances exist only in this negative-test harness: the oracle independently requires the raw scheduler result, actual producer process outcome and exact failed consumer step (allowed negative jobs can report job-level success). Oracle failure is never allowed. Production ci.yml/runtime.yml and their reusable engines retain their fail-closed policy and have no failure allowances.
 
-Result artifacts carry Commit, Run, Attempt and raw scheduler outcomes. Attempt-suffixed names retain history without replacing earlier artifacts. A rerun must produce a fresh result; old results cannot be relabeled.
+Result artifacts carry Commit, Run, Attempt and raw scheduler outcomes. Attempt-suffixed names retain history without replacing earlier artifacts. A rerun must produce a fresh result; old results cannot be relabeled. The old-attempt producer retains a valid history bundle. On Attempt 2 the consumer downloads the actual valid Attempt 1 bundle and must reject it, rather than merely editing a fixture stamp.
 
 This is representative boundary injection, not exhaustive injection into all 18 production jobs. Actual run cancellation remains a separate manual exercise: the probe has read-only permissions and cannot cancel other workflows. Unit coverage exercises cancelled results. Real AWS, production deployment interruption and cross-account failure are not certified here.
 

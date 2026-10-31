@@ -17,6 +17,8 @@ jobs:
     if: inputs.scenario != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      operation: ${{ steps.produce.outcome }}
     env:
       FAULT_GRAPH: ${{ inputs.graph }}
       FAULT_SCENARIO: ${{ inputs.scenario }}
@@ -24,7 +26,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - run: python3 -m scripts.iac.pipeline_fault_probe produce
+      - id: produce
+        run: python3 -m scripts.iac.pipeline_fault_probe produce
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.scenario == 'old-attempt'
+        with:
+          name: fault-history-${{ inputs.graph }}-${{ github.run_attempt }}
+          path: .fault-history
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: inputs.scenario != 'missing-artifact'
         with:
@@ -39,6 +50,9 @@ jobs:
     needs: [producer]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      FAULT_GRAPH: ${{ inputs.graph }}
+      FAULT_SCENARIO: ${{ inputs.scenario }}
     outputs:
       guard: ${{ steps.guard.outcome }}
       download: ${{ steps.download.outcome }}
@@ -49,12 +63,12 @@ jobs:
           persist-credentials: false
       - id: guard
         env:
-          PIPELINE_NEEDS: ${{ toJSON(needs) }}
-        run: python3 -m scripts.iac.pipeline_evidence needs --expected producer
+          FAULT_NEEDS: ${{ toJSON(needs) }}
+        run: python3 -m scripts.iac.pipeline_fault_probe guard
       - id: download
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: fault-input-${{ inputs.graph }}-${{ inputs.scenario }}-${{ github.run_attempt }}
+          name: ${{ inputs.scenario == 'old-attempt' && github.run_attempt > 1 && format('fault-history-{0}-1', inputs.graph) || format('fault-input-{0}-{1}-{2}', inputs.graph, inputs.scenario, github.run_attempt) }}
           path: .fault-input
       - id: verify
         env:
@@ -75,6 +89,7 @@ jobs:
       FAULT_GRAPH: ${{ inputs.graph }}
       FAULT_SCENARIO: ${{ inputs.scenario }}
       FAULT_NEEDS: ${{ toJSON(needs) }}
+      FAULT_HISTORY_ATTEMPT: ${{ inputs.scenario == 'old-attempt' && github.run_attempt > 1 && '1' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
