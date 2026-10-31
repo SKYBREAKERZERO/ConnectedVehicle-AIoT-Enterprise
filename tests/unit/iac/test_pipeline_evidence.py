@@ -104,3 +104,63 @@ def test_native_phase_cannot_manufacture_contract_or_scan_success(tmp_path: Path
         publish(source, inputs / stage, stage)
     with pytest.raises(ValueError, match="contract evidence"):
         assemble_iac(inputs, tmp_path / "out")
+
+
+# Read the actual declared dependency sets; every mandatory node is faulted.
+def dag_fault_cases() -> list[tuple[str, str, str | None]]:
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    return [
+        (workflow, node, outcome)
+        for workflow in ("ci.yml", "runtime.yml")
+        for node in yaml.safe_load((root / ".github/workflows" / workflow).read_text())["jobs"][
+            "evidence"
+        ]["needs"]
+        for outcome in ("failure", "cancelled", "skipped", None)
+    ]
+
+
+@pytest.mark.parametrize("workflow,node,outcome", dag_fault_cases())
+def test_every_declared_upstream_fault_blocks_evidence(
+    workflow: str, node: str, outcome: str | None
+) -> None:
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    expected = set(
+        yaml.safe_load((root / ".github/workflows" / workflow).read_text())["jobs"]["evidence"][
+            "needs"
+        ]
+    )
+    actual = {name: {"result": "success"} for name in expected}
+    if outcome is None:
+        del actual[node]
+    else:
+        actual[node]["result"] = outcome
+    with pytest.raises(ValueError):
+        require_needs(expected, actual)
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", "runtime.yml"])
+@pytest.mark.parametrize("outcome", ["failure", "cancelled", "skipped", None])
+def test_final_gate_rejects_every_non_success_evidence(workflow: str, outcome: str | None) -> None:
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    document = yaml.safe_load((root / ".github/workflows" / workflow).read_text())
+    gate = "quality" if workflow == "ci.yml" else "runtime"
+    expected = set(document["jobs"][gate]["needs"])
+    assert expected == {"evidence"}
+    with pytest.raises(ValueError):
+        require_needs(expected, {} if outcome is None else {"evidence": {"result": outcome}})
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", "runtime.yml"])
+def test_complete_actual_dependency_graph_is_accepted(workflow: str) -> None:
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    document = yaml.safe_load((root / ".github/workflows" / workflow).read_text())
+    expected = set(document["jobs"]["evidence"]["needs"])
+    require_needs(expected, {node: {"result": "success"} for node in expected})
