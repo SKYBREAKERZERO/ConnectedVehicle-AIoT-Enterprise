@@ -26,6 +26,14 @@ WORKFLOWS = {
     ".github/workflows/runtime.yml": ("Runtime quality gate", "day31-runtime-trust"),
 }
 SOURCE_FILES = [
+    "scripts/iac/pipeline_evidence.py",
+    "tests/unit/iac/test_pipeline_evidence.py",
+    "tests/unit/iac/test_workflow.py",
+    ".github/workflows/runtime-core.yml",
+    ".github/workflows/runtime-postgres.yml",
+    ".github/workflows/iac-phase.yml",
+    ".github/actions/setup-ci-runtime/action.yml",
+    ".github/actions/setup-ci-iac/action.yml",
     "scripts/iac/ci_baseline_policy.py",
     "scripts/iac/gate.py",
     "scripts/iac/trusted_state_registry.py",

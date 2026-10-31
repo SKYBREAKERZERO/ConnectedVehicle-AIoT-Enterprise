@@ -1,0 +1,70 @@
+name: Reusable PostgreSQL safety suite
+'on':
+  workflow_call:
+    inputs:
+      suite:
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  run:
+    name: Independent PostgreSQL fault suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CI_SUITE: ${{ inputs.suite }}
+      APP_ENV: local
+      CLOUD_RUNTIME: localstack
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://127.0.0.1:14566
+      AWS_EC2_METADATA_DISABLED: 'true'
+      DAY24_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - run: case "$CI_SUITE" in postgres|observability) ;; *) exit 1 ;; esac
+      name: Validate fixed suite selection
+    - name: Real dispatcher contention and recovery
+      if: inputs.suite == 'postgres'
+      run: pytest tests/integration/day21 -q --junitxml=.runtime-reports/day21-postgres.xml
+    - name: PostgreSQL metrics and real promtool fault scenarios
+      if: inputs.suite == 'observability'
+      run: |-
+        pytest tests/integration/day24 -q --junitxml=.runtime-reports/day24-postgres-alerts.xml
+        python -m scripts.day24_evidence
+        python -m scripts.day24_evidence --check-existing
+    - name: Upload Day24 campaign observability evidence
+      if: ${{ always() && inputs.suite == 'observability' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day24-campaign-observability
+        path: |
+          .runtime-reports/day24-postgres-alerts.xml
+          .runtime-reports/day24-acceptance.json
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - name: Upload Day21 PostgreSQL evidence
+      if: ${{ always() && inputs.suite == 'postgres' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day21-postgres-concurrency
+        path: .runtime-reports/day21-postgres.xml
+        include-hidden-files: 'true'
+        if-no-files-found: error
+        retention-days: '7'
+    - run: python -m scripts.iac.pipeline_evidence publish --stage "runtime-$CI_SUITE" --folder .runtime-reports
+        --output .ci-bundles/result
+      name: Seal independent database evidence
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: runtime-${{ inputs.suite }}-results
+        path: .ci-bundles/result
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7

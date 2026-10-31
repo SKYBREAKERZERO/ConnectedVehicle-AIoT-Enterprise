@@ -225,7 +225,11 @@ def require_policy(plan: dict[str, Any], phase: str) -> None:
     print(f"Plan policy ({phase}): PASS", flush=True)
 
 
-def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python: str) -> None:
+def gate(
+    repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python: str, phase: str = "all"
+) -> None:
+    if phase not in {"all", "contracts", "security", "native"}:
+        raise ValueError("unknown IaC phase")
     if repo.resolve() == baseline.resolve():
         raise ValueError("baseline cannot be the candidate workspace")
     committed_baseline: str | None = None
@@ -260,74 +264,116 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
         json.dumps({**TFVARS, "aws_endpoint_url": "http://127.0.0.1:4566"}), encoding="utf-8"
     )
     terraform(candidate, "fmt", "-check", "-recursive", "-no-color", env=env)
-    roots = sorted(p for p in (candidate / "environments").iterdir() if list(p.glob("*.tf")))
-    old_roots = {
-        p.name for p in (original / "environments").iterdir() if p.is_dir() and list(p.glob("*.tf"))
-    }
-    current_roots = {p.name for p in roots if p.is_dir() and list(p.glob("*.tf"))}
-    if old_roots - current_roots:
-        raise RuntimeError(f"Environment removal prohibited: {sorted(old_roots - current_roots)}")
-    lock = candidate / "environments" / "local" / ".terraform.lock.hcl"
     contract_count = 0
     contract_runs = 0
-    bootstrap_roots = [p.parent for p in (candidate / "bootstrap").rglob("versions.tf")]
-    for root in (
-        [p for p in roots if p.is_dir()]
-        + bootstrap_roots
-        + sorted((candidate / "modules").rglob("versions.tf"))
-    ):
-        root = root.parent if root.is_file() else root
-        initialize(root, env=env, lock=lock if "modules" in root.parts else None)
-        if root.name == "ota-governance":
-            schema = terraform(root, "providers", "schema", "-json", env=env, quiet=True)
-            require_governance_schema(json.loads(schema.stdout))
-        tests = list((root / "tests").glob("*.tftest.hcl"))
-        if "modules" in root.parts and not tests:
-            raise RuntimeError(f"Module has no contract tests: {root.relative_to(candidate)}")
-        if tests:
-            tested = terraform(root, "test", "-no-color", env=env)
-            passed = re.search(r"Success! ([0-9]+) passed", tested.stdout)
-            if not passed or int(passed[1]) == 0:
-                raise RuntimeError(f"No active contract assertions for {root.name}")
-            contract_runs += int(passed[1])
-            contract_count += len(tests)
-        if root.parent.name == "environments" and root.name not in {"local", "ota-local"}:
-            # No AWS deployment/state yet; adding one must not silently bypass policy.
-            _, empty = _empty_root_plan(root, env)
-            if empty.get("resource_changes") or empty.get("planned_values", {}).get(
-                "root_module", {}
-            ).get("resources"):
-                raise RuntimeError(
-                    "AWS root now has resources: add a read-only state-backed AWS plan gate first"
-                )
-    for label, directory in [
-        ("deployment source", repo / "infra/terraform"),
-        ("CI fixture", candidate),
-    ]:
-        scanned = run(
-            [
-                scanner_python,
-                "-m",
-                "checkov.main",
-                "--config-file",
-                str(repo / "scripts/iac/checkov.yaml"),
-                "-d",
-                str(directory),
-            ],
-            cwd=directory,
-            env=env,
-            allowed=(0, 1),
-            quiet=True,
+    lock = candidate / "environments" / "local" / ".terraform.lock.hcl"
+    if phase in {"all", "contracts"}:
+        roots = sorted(p for p in (candidate / "environments").iterdir() if list(p.glob("*.tf")))
+        old_roots = {
+            p.name
+            for p in (original / "environments").iterdir()
+            if p.is_dir() and list(p.glob("*.tf"))
+        }
+        current_roots = {p.name for p in roots if p.is_dir() and list(p.glob("*.tf"))}
+        if old_roots - current_roots:
+            raise RuntimeError(
+                f"Environment removal prohibited: {sorted(old_roots - current_roots)}"
+            )
+        lock = candidate / "environments" / "local" / ".terraform.lock.hcl"
+        contract_count = 0
+        contract_runs = 0
+        bootstrap_roots = [p.parent for p in (candidate / "bootstrap").rglob("versions.tf")]
+        for root in (
+            [p for p in roots if p.is_dir()]
+            + bootstrap_roots
+            + sorted((candidate / "modules").rglob("versions.tf"))
+        ):
+            root = root.parent if root.is_file() else root
+            initialize(root, env=env, lock=lock if "modules" in root.parts else None)
+            if root.name == "ota-governance":
+                schema = terraform(root, "providers", "schema", "-json", env=env, quiet=True)
+                require_governance_schema(json.loads(schema.stdout))
+            tests = list((root / "tests").glob("*.tftest.hcl"))
+            if "modules" in root.parts and not tests:
+                raise RuntimeError(f"Module has no contract tests: {root.relative_to(candidate)}")
+            if tests:
+                tested = terraform(root, "test", "-no-color", env=env)
+                passed = re.search(r"Success! ([0-9]+) passed", tested.stdout)
+                if not passed or int(passed[1]) == 0:
+                    raise RuntimeError(f"No active contract assertions for {root.name}")
+                contract_runs += int(passed[1])
+                contract_count += len(tests)
+            if root.parent.name == "environments" and root.name not in {"local", "ota-local"}:
+                # No AWS deployment/state yet; adding one must not silently bypass policy.
+                _, empty = _empty_root_plan(root, env)
+                if empty.get("resource_changes") or empty.get("planned_values", {}).get(
+                    "root_module", {}
+                ).get("resources"):
+                    raise RuntimeError(
+                        "AWS root now has resources: add a read-only state-backed "
+                        "AWS plan gate first"
+                    )
+    if phase == "contracts":
+        report.write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "phase": phase,
+                    "contract_files": contract_count,
+                    "contract_runs": contract_runs,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        scan_report = json.loads(scanned.stdout)
-        issues = audit(
-            scan_report, json.loads((repo / "scripts/iac/scan_exceptions.json").read_text())
+        return
+    if phase in {"all", "security"}:
+        for label, directory in [
+            ("deployment source", repo / "infra/terraform"),
+            ("CI fixture", candidate),
+        ]:
+            scanned = run(
+                [
+                    scanner_python,
+                    "-m",
+                    "checkov.main",
+                    "--config-file",
+                    str(repo / "scripts/iac/checkov.yaml"),
+                    "-d",
+                    str(directory),
+                ],
+                cwd=directory,
+                env=env,
+                allowed=(0, 1),
+                quiet=True,
+            )
+            scan_report = json.loads(scanned.stdout)
+            issues = audit(
+                scan_report, json.loads((repo / "scripts/iac/scan_exceptions.json").read_text())
+            )
+            if issues:
+                raise RuntimeError(f"Security scan ({label}) rejected:\n" + "\n".join(issues))
+            print(f"Security scan ({label}): PASS (expiring exceptions audited)", flush=True)
+    if phase == "security":
+        report.write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "phase": phase,
+                    "security_scan": "passed",
+                    "scanned_sources": 2,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        if issues:
-            raise RuntimeError(f"Security scan ({label}) rejected:\n" + "\n".join(issues))
-        print(f"Security scan ({label}): PASS (expiring exceptions audited)", flush=True)
+        return
     local = candidate / "environments/local"
     base_local = original / "environments/local"
+    if phase == "native":
+        initialize(local, env=env)
     if not base_local.is_dir():
         raise RuntimeError("Missing baseline local environment; no deletion comparison possible")
     name = f"cv-iac-gate-{uuid4().hex[:12]}"
@@ -538,6 +584,7 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
         day29_native = json.loads((report.parent / "day29-native.json").read_text(encoding="utf-8"))
         summary = {
             "status": "passed",
+            "phase": phase,
             "day26_s3_lock_probe": state_lock,
             "day27_s3_failure_probe": state_fault,
             "day28_state_disaster_recovery": state_dr,
@@ -546,7 +593,7 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
             "contract_runs": contract_runs,
             "destroy_actions": 0,
             "second_plan_exit_code": exit_code,
-            "security_scan": "passed",
+            "security_scan": "passed" if phase == "all" else "separate-job-required",
             "resolved_plan_policy": "passed",
             "ota_local_apply_second_plan": ota_verified,
             "ota_database_credential_isolation": ota_verified,
@@ -656,6 +703,9 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, default=REPO)
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--scanner-python", default=sys.executable)
+    parser.add_argument(
+        "--phase", choices=("all", "contracts", "security", "native"), default="all"
+    )
     parser.add_argument("--report", type=Path, default=REPO / ".iac-reports/summary.json")
     args = parser.parse_args()
     report = args.report.resolve()
@@ -673,6 +723,7 @@ def main() -> int:
                 work=work,
                 report=args.report.resolve(),
                 scanner_python=args.scanner_python,
+                phase=args.phase,
             )
         except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
             report.write_text('{"status": "failed"}\n', encoding="utf-8")
