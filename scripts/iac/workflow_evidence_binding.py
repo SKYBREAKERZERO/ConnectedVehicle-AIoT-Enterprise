@@ -26,6 +26,13 @@ WORKFLOWS = {
     ".github/workflows/runtime.yml": ("Runtime quality gate", "day31-runtime-trust"),
 }
 SOURCE_FILES = [
+    "scripts/iac/pipeline_fault_probe.py",
+    "scripts/verify_ci_database_identity.py",
+    "tests/unit/iac/test_pipeline_fault_probe.py",
+    "tests/unit/test_management_credentials.py",
+    "pyproject.toml",
+    ".github/workflows/ci-fault-matrix.yml",
+    ".github/workflows/ci-fault-case.yml",
     "scripts/iac/pipeline_evidence.py",
     "tests/unit/iac/test_pipeline_evidence.py",
     "tests/unit/iac/test_workflow.py",
@@ -80,7 +87,9 @@ def latest(runs: list[dict[str, Any]], path: str, context: dict[str, Any]) -> di
     ]
     if not matches:
         raise ValueError("no matching workflow run")
-    run = max(matches, key=lambda r: (timestamp(r["created_at"]), r["id"]))
+    if any(type(r.get("run_attempt")) is not int or r["run_attempt"] < 1 for r in matches):
+        raise ValueError("invalid workflow attempt identity")
+    run = max(matches, key=lambda r: (timestamp(r["created_at"]), r["id"], r["run_attempt"]))
     if (
         run["status"] != "completed"
         or run["conclusion"] != "success"

@@ -35,10 +35,25 @@ def test_runtime_workflow_limits_cluster_credentials_to_bootstrap_step() -> None
     assert workflow["jobs"]["integration"]["uses"] == "./.github/workflows/runtime-core.yml"
     reusable = yaml.safe_load((root / ".github/workflows/runtime-core.yml").read_text())
     job = reusable["jobs"]["run"]
-    assert job["env"]["MIGRATION_DATABASE_USERNAME"] == "migration_owner"
+    assert job["env"]["DATABASE_USERNAME"] == "app_user"
+    assert not any(name.startswith("MIGRATION_") for name in job["env"])
+    migration_steps = [
+        row for row in job["steps"] if "MIGRATION_DATABASE_PASSWORD" in row.get("env", {})
+    ]
+    assert {row["run"] for row in migration_steps} == {
+        "python -m database.bootstrap_cluster",
+        "python -m alembic upgrade head",
+    }
+    assert len(migration_steps) == 2
+    assert all(
+        row["env"]["MIGRATION_DATABASE_USERNAME"] == "migration_owner" for row in migration_steps
+    )
     assert job["services"]["postgres"]["env"]["POSTGRES_USER"] == "cluster_bootstrap"
     assert not any(name.startswith("BOOTSTRAP_") for name in job["env"])
     steps = [row for row in job["steps"] if "BOOTSTRAP_DATABASE_PASSWORD" in row.get("env", {})]
     assert len(steps) == 1 and steps[0]["run"] == "python -m database.bootstrap_cluster"
+    assert any(
+        row.get("run") == "python -m scripts.verify_ci_database_identity" for row in job["steps"]
+    )
     grants = (root / "database/runtime-grants.sql").read_text()
     assert "CREATE ROLE" not in grants and "ALTER ROLE" not in grants

@@ -211,3 +211,28 @@ def test_workflow_identity_attack_flows_are_denied(flow: str) -> None:
         context["current_merge_sha"] = B
     with pytest.raises(ValueError):
         bind(context, runs, jobs, artifacts, files)
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", None])
+def test_newer_attempt_of_same_run_never_falls_back_to_first_green(conclusion: str | None) -> None:
+    context, runs, jobs, artifacts, files = deepcopy(sample())
+    path = ".github/workflows/runtime.yml"
+    original = runs[path][0]
+    runs[path].append(
+        {
+            **original,
+            "run_attempt": 2,
+            "conclusion": conclusion,
+            "status": "in_progress" if conclusion is None else "completed",
+        }
+    )
+    with pytest.raises(ValueError, match="latest run"):
+        bind(context, runs, jobs, artifacts, files)
+
+
+def test_green_rerun_cannot_consume_first_attempt_artifacts() -> None:
+    context, runs, jobs, artifacts, files = deepcopy(sample())
+    path = ".github/workflows/runtime.yml"
+    runs[path].append({**runs[path][0], "run_attempt": 2})
+    with pytest.raises(ValueError):
+        bind(context, runs, jobs, artifacts, files)
