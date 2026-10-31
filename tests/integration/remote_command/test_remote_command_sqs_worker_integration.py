@@ -5,7 +5,8 @@ from typing import NotRequired, Protocol, TypedDict, cast
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, text
+from sqlalchemy.exc import DBAPIError
 
 from connected_vehicle.remote_command.domain import (
     RemoteCommand,
@@ -47,20 +48,28 @@ from enterprise_platform.config.environment import (
     CloudRuntime,
 )
 from enterprise_platform.config.settings import (
+    Settings,
     get_settings,
+)
+from enterprise_platform.database.credentials import (
+    load_runtime_database_settings,
+    runtime_database_user,
 )
 from enterprise_platform.database.engine import (
     create_database_engine,
 )
+from enterprise_platform.database.runtime_security import verify_runtime_database_security
 from enterprise_platform.database.session import (
     create_session_factory,
 )
+from enterprise_platform.database.tenant import set_tenant_scope
 from enterprise_platform.database.unit_of_work import (
     SQLAlchemyUnitOfWork,
 )
 from enterprise_platform.messaging.sqs_runtime import (
     create_named_sqs_event_queue,
 )
+from tests.integration.day12.test_credential_cloud_contracts import prepare
 
 
 class SQSCreateQueueResponse(TypedDict):
@@ -128,7 +137,9 @@ async def persist_vehicle_and_command(
 
 
 @pytest.mark.asyncio
-async def test_remote_command_worker_processes_and_deduplicates_real_sqs_event() -> None:
+async def test_remote_command_worker_processes_and_deduplicates_real_sqs_event(
+    local_environment: Settings,
+) -> None:
     base_settings = get_settings()
 
     assert base_settings.cloud_runtime is CloudRuntime.LOCALSTACK
@@ -137,14 +148,21 @@ async def test_remote_command_worker_processes_and_deduplicates_real_sqs_event()
 
     redis_prefix = f"connected-vehicle:worker-integration:{uuid4().hex}"
 
-    settings = base_settings.model_copy(
+    _, _, scoped_settings, _ = await prepare(local_environment, "tenant-sqs-worker")
+    settings = scoped_settings.model_copy(
         update={
             "vehicle_command_queue_name": (queue_name),
             "redis_key_prefix": redis_prefix,
+            "redis_host": base_settings.redis_host,
+            "redis_port": base_settings.redis_port,
+            "cloud_runtime": CloudRuntime.LOCALSTACK,
         }
     )
 
-    engine = create_database_engine(settings)
+    setup_engine = create_database_engine(local_environment)
+    setup_sessions = create_session_factory(setup_engine)
+    worker_settings = await load_runtime_database_settings(settings, "remote-command")
+    engine = create_database_engine(worker_settings)
 
     session_factory = create_session_factory(engine)
 
@@ -178,6 +196,21 @@ async def test_remote_command_worker_processes_and_deduplicates_real_sqs_event()
     )
 
     try:
+        await verify_runtime_database_security(
+            engine, "remote-command", tenant_id=vehicle.tenant_id
+        )
+        async with engine.connect() as connection:
+            assert await connection.scalar(text("SELECT current_user")) == runtime_database_user(
+                "remote-command", vehicle.tenant_id
+            )
+        # Seed/cleanup authority belongs only to the dedicated disposable fixture.
+        # A real worker login must be denied vehicle deletion by PostgreSQL itself.
+        with pytest.raises(DBAPIError) as denied:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    delete(VehicleModel).where(VehicleModel.id == vehicle.id.value)
+                )
+        assert getattr(denied.value.orig, "sqlstate", None) == "42501"
         response = sqs_client.create_queue(
             QueueName=queue_name,
             Attributes={
@@ -191,7 +224,7 @@ async def test_remote_command_worker_processes_and_deduplicates_real_sqs_event()
         assert queue_url
 
         await persist_vehicle_and_command(
-            session_factory,
+            setup_sessions,
             vehicle,
             command,
         )
@@ -224,6 +257,7 @@ async def test_remote_command_worker_processes_and_deduplicates_real_sqs_event()
         assert publisher.published[0].status is RemoteCommandStatus.DISPATCHING
 
         async with SQLAlchemyUnitOfWork(session_factory) as uow:
+            await set_tenant_scope(uow.session, vehicle.tenant_id)
             repository = SQLAlchemyRemoteCommandRepository(uow.session)
 
             stored = await repository.get_by_id(command.id)
@@ -247,6 +281,7 @@ async def test_remote_command_worker_processes_and_deduplicates_real_sqs_event()
         assert len(publisher.published) == 1
 
         async with SQLAlchemyUnitOfWork(session_factory) as uow:
+            await set_tenant_scope(uow.session, vehicle.tenant_id)
             repository = SQLAlchemyRemoteCommandRepository(uow.session)
 
             duplicate_stored = await repository.get_by_id(command.id)
@@ -261,7 +296,7 @@ async def test_remote_command_worker_processes_and_deduplicates_real_sqs_event()
 
             await runtime.close()
 
-        async with engine.begin() as connection:
+        async with setup_engine.begin() as connection:
             await connection.execute(
                 delete(RemoteCommandModel).where(RemoteCommandModel.id == command.id.value)
             )
@@ -271,6 +306,7 @@ async def test_remote_command_worker_processes_and_deduplicates_real_sqs_event()
             )
 
         await engine.dispose()
+        await setup_engine.dispose()
 
         if queue_url is not None:
             sqs_client.delete_queue(QueueUrl=queue_url)

@@ -3,6 +3,7 @@
 ## Closed in code; execution must still be checked
 
 - The shared Runtime runner defaults to `app_user` with no provisioned implicit password. Scoped runtime credentials continue to come from the existing per-runtime/per-tenant secret flow. A real PostgreSQL authentication probe must see InvalidPasswordError, not connection refusal or timeout. Bootstrap and migration secrets exist only on their two explicit management steps, never the pytest/evidence steps.
+- The SQS worker integration uses its own disposable PostgreSQL/LocalStack fixture for explicit data preparation. The worker obtains a tenant-pinned remote-command secret, passes the runtime-role security verifier, and must receive PostgreSQL 42501 for vehicle deletion. State reads establish tenant scope; cleanup authority stays on the disposable fixture connection. It does not use the shared CI default or migration owner to execute the worker.
 - The credential contract follows runtime.yml into runtime-core.yml. It enforces the default identity and exact management-step allowlist; it cannot silently inspect the old workflow layout.
 - pytest-asyncio explicitly uses function fixture-loop scope. This records the existing effective default instead of suppressing warnings.
 - Cross-workflow selection orders same-Run snapshots by Attempt as well as creation time and Run ID. Failure, cancellation and pending reruns cannot fall back to a green first Attempt. Reports and artifact creation time remain bound to the latest Attempt.
