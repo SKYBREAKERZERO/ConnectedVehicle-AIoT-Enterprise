@@ -189,9 +189,11 @@ def test_final_gate_rejects_every_non_success_evidence(workflow: str, outcome: s
     document = yaml.safe_load((root / ".github/workflows" / workflow).read_text())
     gate = "quality" if workflow == "ci.yml" else "runtime"
     expected = set(document["jobs"][gate]["needs"])
-    assert expected == {"evidence"}
+    assert expected == ({"day32"} if workflow == "ci.yml" else {"evidence"})
     with pytest.raises(ValueError):
-        require_needs(expected, {} if outcome is None else {"evidence": {"result": outcome}})
+        require_needs(
+            expected, {} if outcome is None else {next(iter(expected)): {"result": outcome}}
+        )
 
 
 @pytest.mark.parametrize("workflow", ["ci.yml", "runtime.yml"])

@@ -1,6 +1,6 @@
 # Multi-file CI/CD presentation and execution graph
 
-Runtime shows nine real jobs; IaC shows twelve, with four parallel module groups. Fan-out quality
+Runtime shows nine real jobs; IaC shows thirteen, with four parallel module groups. Fan-out quality
 checks converge on integration work, then a dedicated Evidence job and the
 existing required quality gate. Expand a reusable job to inspect its engine steps.
 There are no sleeps, duplicate test loops or placeholder deployment jobs added to
@@ -65,7 +65,8 @@ flowchart LR
     C4 --> E
     S --> E
     N --> E
-    E --> G[IaC quality gate]
+    E --> D32[09 Day32 deployment acceptance]
+    D32 --> G[IaC quality gate]
 ```
 
 The native runner supports explicit `contracts`, `security`, `native` and legacy
@@ -86,7 +87,7 @@ The final `iac-gate-summary` and existing day-specific artifacts are preserved.
 | File | Responsibility |
 |---|---|
 | `.github/workflows/runtime.yml` | Nine-node Runtime DAG and mandatory gate |
-| `.github/workflows/ci.yml` | Twelve-job IaC DAG with four module groups and mandatory gate |
+| `.github/workflows/ci.yml` | Thirteen-job IaC DAG with four module groups and mandatory gate |
 | `.github/workflows/runtime-core.yml` | Service-backed Runtime regression engine |
 | `.github/workflows/runtime-postgres.yml` | Fixed Day21/Day24 PostgreSQL suites |
 | `.github/workflows/iac-phase.yml` | Fixed contracts/security/native Terraform phases |
@@ -145,3 +146,5 @@ Attempt before summing; an omitted shard cannot be replaced by a fabricated tota
 Native LocalStack work starts only after all module groups and Checkov succeed.
 The original IaC quality gate name and Day25-31 artifact interfaces are retained.
 Real AWS Apply, State push and force-unlock remain disabled.
+
+Day32 adds live LocalStack readback before emulator cleanup and a separate deployment-acceptance job before the final required check. See [Day32 automation](day32-iac-automation.md).

@@ -50,11 +50,18 @@ def graph(path: str, final: str, name: str, expected: set[str]) -> dict[str, Any
     for event in ("pull_request", "push"):
         assert w["on"][event] == {"branches": ["main"]}
     jobs = w["jobs"]
-    assert set(jobs) == expected | {"evidence", final}
-    assert jobs[final]["name"] == name and jobs[final]["needs"] == ["evidence"]
+    assert set(jobs) == expected | {"evidence", final} | (
+        {"day32"} if final == "quality" else set()
+    )
+    last = "day32" if final == "quality" else "evidence"
+    assert jobs[final]["name"] == name and jobs[final]["needs"] == [last]
+    if last == "day32":
+        assert jobs[last]["needs"] == ["evidence"] and jobs[last]["if"] == "${{ always() }}"
     assert jobs[final]["if"] == "${{ always() }}" and jobs["evidence"]["if"] == "${{ always() }}"
     assert set(jobs["evidence"]["needs"]) == expected
-    for j, ids in [(jobs[final], {"evidence"}), (jobs["evidence"], expected)]:
+    for j, ids in [(jobs[final], {last}), (jobs["evidence"], expected)] + (
+        [(jobs["day32"], {"evidence"})] if last == "day32" else []
+    ):
         step = next(s for s in j["steps"] if s.get("name") == "Fail closed on all upstream results")
         assert step["env"]["PIPELINE_NEEDS"] == "${{ toJSON(needs) }}"
         assert set(step["run"].split("--expected ", 1)[1].split(",")) == ids

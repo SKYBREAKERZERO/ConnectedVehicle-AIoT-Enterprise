@@ -521,6 +521,15 @@ def gate(
         if (candidate / "environments/ota-local").is_dir():
             _ota_local_acceptance(candidate, original, endpoint, env)
             ota_verified = True
+        from scripts.iac.deployment_probe import probe as deployment_probe
+
+        output = terraform(local, "output", "-json", env=env, quiet=True)
+        live_receipt = deployment_probe(
+            endpoint, json.loads(output.stdout), ota_verified=ota_verified
+        )
+        (report.parent / "day32-deployment.json").write_text(
+            json.dumps(live_receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
         dr_env = {
             **env,
             "DAY28_PROVIDER_CACHE": env["TF_PLUGIN_CACHE_DIR"],

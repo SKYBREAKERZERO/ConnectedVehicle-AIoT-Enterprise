@@ -121,7 +121,7 @@ jobs:
     with:
       phase: security
   native:
-    name: 07 LocalStack plans and recovery
+    name: 07 LocalStack deploy and recovery
     needs:
     - contracts
     - security
@@ -198,10 +198,12 @@ jobs:
     - security
     - native
     if: ${{ always() }}
-  quality:
-    name: IaC quality gate
+  day32:
+    name: 09 Day32 deployment acceptance
+    needs: [evidence]
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -215,8 +217,48 @@ jobs:
       with:
         name: iac-verified-evidence
         path: .ci-inputs/iac-evidence
-    - run: python -m scripts.iac.pipeline_evidence consume --stage iac-evidence --folder .ci-inputs/iac-evidence
+    - run: python -m scripts.iac.pipeline_evidence consume --stage iac-evidence --folder .ci-inputs/iac-evidence --output .iac-reports
+    - run: python -m scripts.iac.day32_evidence
+      name: Validate live deployment receipt, module coverage and plan evidence
+    - run: python -m scripts.iac.pipeline_evidence publish --stage iac-day32 --folder .iac-reports --output .ci-bundles/day32
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: iac-day32-verified
+        path: .ci-bundles/day32
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+  quality:
+    name: IaC quality gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Fail closed on all upstream results
+      env:
+        PIPELINE_NEEDS: ${{ toJSON(needs) }}
+      run: python -m scripts.iac.pipeline_evidence needs --expected day32
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: iac-day32-verified
+        path: .ci-inputs/iac-day32
+    - run: python -m scripts.iac.pipeline_evidence consume --stage iac-day32 --folder .ci-inputs/iac-day32
         --output .iac-reports
+    - run: python -m scripts.iac.day32_evidence --verify
+    - name: Upload Day32 IaC acceptance
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day32-iac-acceptance
+        path: |
+          .iac-reports/day32-acceptance.json
+          .iac-reports/day32-deployment.json
+          .iac-reports/contracts.json
+          .iac-reports/summary.json
+        if-no-files-found: error
+        retention-days: 7
     - name: Upload sanitized success summary
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -307,5 +349,5 @@ jobs:
         if-no-files-found: error
         retention-days: '7'
     needs:
-    - evidence
+    - day32
     if: ${{ always() }}
