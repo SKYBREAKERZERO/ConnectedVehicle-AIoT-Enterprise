@@ -4,13 +4,14 @@ import hashlib
 import io
 import json
 import zipfile
+from typing import Any
 
 import pytest
 
 from scripts.iac.day33_independent_verifier import REQUIRED_JOBS, verify_artifact, verify_run
 
 
-def fixture():
+def fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     run = dict(
         id=17,
         head_sha="a" * 40,
@@ -25,7 +26,7 @@ def fixture():
     return run, jobs
 
 
-def test_complete_latest_run():
+def test_complete_latest_run() -> None:
     run, jobs = fixture()
     verify_run(run, jobs, "a" * 40, 14)
 
@@ -34,7 +35,7 @@ def test_complete_latest_run():
     "fault",
     ["cancelled", "old_attempt", "wrong_head", "missing", "skipped", "cancelled_job", "renamed"],
 )
-def test_reject_run_fault(fault):
+def test_reject_run_fault(fault: str) -> None:
     run, jobs = fixture()
     if fault == "cancelled":
         run["conclusion"] = "cancelled"
@@ -57,9 +58,9 @@ def test_reject_run_fault(fault):
 @pytest.mark.parametrize(
     "fault", ["none", "tamper", "old_attempt", "missing", "proof_mismatch", "expired"]
 )
-def test_artifact_faults(fault):
+def test_artifact_faults(fault: str) -> None:
     run, _ = fixture()
-    report = dict(
+    report: dict[str, Any] = dict(
         status="passed",
         production_apply_enabled=False,
         release_authorized=False,
@@ -98,7 +99,7 @@ def test_artifact_faults(fault):
             verify_artifact(raw, meta, run, "b" * 40)
 
 
-def test_active_iac_run_is_not_auto_cancelled():
+def test_active_iac_run_is_not_auto_cancelled() -> None:
     from tests.unit.iac.test_workflow import read
 
     workflow = read(".github/workflows/ci.yml")
