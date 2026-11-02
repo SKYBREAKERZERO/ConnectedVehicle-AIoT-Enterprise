@@ -12,7 +12,8 @@ permissions:
   contents: read
 concurrency:
   group: iac-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Complete the active native run; newer evidence must still pass latest-attempt checks.
+  cancel-in-progress: false
 jobs:
   baseline:
     name: 01 IaC baseline and candidate
