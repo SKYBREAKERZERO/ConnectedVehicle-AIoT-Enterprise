@@ -1,5 +1,23 @@
 # Day34 vertical acceptance
 
+## Standalone complete workflow
+
+`.github/workflows/day34.yml` appears as **Day34 full OTA acceptance** in Actions.
+It calls the same-commit Runtime workflow, including all baseline, quality,
+contract, real service/process, PostgreSQL concurrency, observability and evidence
+jobs. Its final **Day34 full acceptance gate** refuses a failed/skipped/cancelled
+chain, verifies the sealed artifact's source/run/attempt/hashes, and checks that
+Day34 acceptance is CI verified while release authorization remains false.
+The `day34-workflow-result` artifact records the tested commit and PR head.
+
+PR updates targeting main, main pushes and merge queue events run automatically.
+Manual dispatch remains subject to the existing baseline policy: current main
+only, with no baseline overrides. An unmerged development branch is verified by
+its PR event, which tests the native merge preview and records the branch head.
+Adding this workflow does not merge the PR, authorize a release or run Apply.
+The caller and reusable workflow use different concurrency groups to prevent
+mutual cancellation.
+
 Baseline: `993aa2ca13dc6a2e9c8ef12b0249dcc45b613d3b` on
 `wip/day20-infra-20261018` (the actual development branch, despite its older name).
 No Day20–33 feature is presumed complete from its day number.

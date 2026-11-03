@@ -8,10 +8,11 @@ name: Runtime quality gates
     - main
   merge_group: null
   workflow_dispatch: null
+  workflow_call: null
 permissions:
   contents: read
 concurrency:
-  group: runtime-${{ github.event.pull_request.number || github.ref }}
+  group: runtime-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
   baseline:

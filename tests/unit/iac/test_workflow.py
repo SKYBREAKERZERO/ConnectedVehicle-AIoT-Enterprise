@@ -26,6 +26,7 @@ def assert_pinned_steps(workflow: dict[str, Any]) -> None:
         assert j.get("permissions", {"contents": "read"}) == {"contents": "read"}
         if "uses" in j:
             assert j["uses"] in {
+                "./.github/workflows/runtime.yml",
                 "./.github/workflows/runtime-core.yml",
                 "./.github/workflows/runtime-postgres.yml",
                 "./.github/workflows/iac-phase.yml",
