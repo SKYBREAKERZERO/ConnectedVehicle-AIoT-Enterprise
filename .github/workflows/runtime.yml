@@ -150,6 +150,22 @@ jobs:
         python -m scripts.day24_evidence --check-existing
         python -m scripts.iac.day31_evidence --runtime
       name: Revalidate transported Runtime evidence
+    - name: Day34 exact-source quality checks
+      run: python -m scripts.day34_evidence --quality
+    - name: Day34 vertical acceptance (fail closed)
+      if: ${{ always() }}
+      env:
+        PIPELINE_NEEDS: ${{ toJSON(needs) }}
+      run: python -m scripts.day34_evidence
+    - name: Upload Day34 acceptance and check logs
+      if: ${{ always() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day34-vertical-acceptance
+        path: .runtime-reports/day34-*
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
     - run: python -m scripts.iac.pipeline_evidence publish --stage runtime-evidence --folder .runtime-reports --output
         .ci-bundles/runtime-evidence
       name: Seal runtime-evidence candidate / attempt / hashes

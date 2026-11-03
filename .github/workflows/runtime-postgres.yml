@@ -21,6 +21,7 @@ jobs:
       AWS_ENDPOINT_URL: http://127.0.0.1:14566
       AWS_EC2_METADATA_DISABLED: 'true'
       DAY24_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+      DAY16_EVIDENCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:

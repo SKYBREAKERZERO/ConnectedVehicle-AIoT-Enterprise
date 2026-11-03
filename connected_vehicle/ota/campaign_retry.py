@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Awaitable, Callable
+from functools import wraps
 
 from sqlalchemy.exc import DBAPIError
 
@@ -29,6 +30,18 @@ class CampaignDatabaseBusy(DependencyUnavailableError):
         self.sqlstate = sqlstate
         self.attempts = attempts
         super().__init__(f"Campaign database {RETRYABLE[sqlstate]} after {attempts} attempts")
+
+
+def transaction_retry[**P, T](
+    operation: Callable[P, Awaitable[T]],
+) -> Callable[P, Awaitable[T]]:
+    """Retry a complete idempotent service call after its session has rolled back."""
+
+    @wraps(operation)
+    async def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
+        return await database_retry(lambda: operation(*args, **kwargs))
+
+    return wrapped
 
 
 async def database_retry[T](operation: Callable[[], Awaitable[T]]) -> T:

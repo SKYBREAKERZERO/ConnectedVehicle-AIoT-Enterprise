@@ -18,7 +18,11 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
-from connected_vehicle.ota.campaign_retry import CampaignDatabaseBusy, database_retry
+from connected_vehicle.ota.campaign_retry import (
+    CampaignDatabaseBusy,
+    database_retry,
+    transaction_retry,
+)
 from connected_vehicle.ota.install_receipt import load_key
 from enterprise_platform.database.runtime_security import verify_runtime_database_security
 from enterprise_platform.errors.base import ConflictError
@@ -399,3 +403,49 @@ async def test_real_deadlock_rolls_back_and_retries_whole_transaction(world: Wor
     await asyncio.wait_for(asyncio.gather(database_retry(operation), competitor()), 5)
     assert attempts == 2
     assert await world.count("ota_jobs") == 0
+
+
+@pytest.mark.parametrize("exhaust", [False, True])
+async def test_real_serialization_failure_retries_fresh_transaction(
+    world: World, exhaust: bool
+) -> None:
+    campaign = await world.campaign()
+    attempts = 0
+    states: list[str] = []
+
+    @transaction_retry
+    async def operation() -> None:
+        nonlocal attempts
+        attempts += 1
+        try:
+            async with world.admin.begin() as connection:
+                await connection.execute(text("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"))
+                await connection.scalar(
+                    text("SELECT name FROM ota_campaigns WHERE id=:c"), dict(c=campaign)
+                )
+                if exhaust or attempts == 1:
+                    # Commit a newer row version after this transaction's snapshot.
+                    async with world.admin.begin() as competitor:
+                        await competitor.execute(
+                            text("UPDATE ota_campaigns SET name=name || '.' WHERE id=:c"),
+                            dict(c=campaign),
+                        )
+                await connection.execute(
+                    text("UPDATE ota_campaigns SET name='retry-committed' WHERE id=:c"),
+                    dict(c=campaign),
+                )
+        except DBAPIError as exc:
+            states.append(getattr(exc.orig, "sqlstate", ""))
+            raise
+
+    if exhaust:
+        with pytest.raises(CampaignDatabaseBusy) as error:
+            await asyncio.wait_for(operation(), 5)
+        assert error.value.sqlstate == "40001" and error.value.attempts == 3
+        assert attempts == 3 and states == ["40001"] * 3
+    else:
+        await asyncio.wait_for(operation(), 5)
+        assert attempts == 2 and states == ["40001"]
+    row = await world.service.row(world.tenant, campaign)
+    assert (row["name"] == "retry-committed") is (not exhaust)
+    assert row["status"] == "running" and await world.count("ota_jobs") == 0

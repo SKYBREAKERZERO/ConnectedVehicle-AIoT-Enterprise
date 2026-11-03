@@ -10,7 +10,7 @@ import secrets
 import subprocess
 import sys
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +36,15 @@ from enterprise_platform.database.engine import create_database_engine
 from enterprise_platform.database.session import create_session_factory
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def day34_junit_binding(record_testsuite_property: Callable[[str, str], None]) -> None:
+    if os.environ.get("DAY16_EVIDENCE_RUN_ID"):
+        from scripts.day34_evidence import binding
+
+        for name, value in binding().items():
+            record_testsuite_property(name, value)
 
 
 def docker(*args: str) -> str:
