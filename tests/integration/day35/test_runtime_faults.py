@@ -36,6 +36,7 @@ from connected_vehicle.ota.execution_contracts import (
     SignedManifest,
 )
 from connected_vehicle.ota.execution_service import OTAExecutionService
+from connected_vehicle.ota.service import fingerprint
 from enterprise_platform.database.engine import create_database_engine
 from enterprise_platform.database.session import create_session_factory
 from simulators.ota_device.store import DeviceStore
@@ -346,6 +347,36 @@ async def test_confirmed_boot_audit_failure_reconciles_without_second_install(
                     dict(t=world.tenant),
                 )
             ).scalar_one()
+            audit = (
+                (
+                    await c.execute(
+                        text(
+                            "SELECT resource_id,actor_id,payload_sha256 FROM ota_audit_events "
+                            "WHERE tenant_id=:t AND action='report' AND operation_key=:op"
+                        ),
+                        dict(t=world.tenant, op=str(terminal.event_id)),
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert audit["resource_id"] == jid and audit["actor_id"] == "device"
+            assert audit["payload_sha256"] == fingerprint(terminal.model_dump(mode="json"))
+            execution = (
+                (
+                    await c.execute(
+                        text(
+                            "SELECT claim_token,report_sequence FROM ota_executions "
+                            "WHERE tenant_id=:t AND id=:job"
+                        ),
+                        dict(t=world.tenant, job=jid),
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert execution["claim_token"] == str(claim.claim_token)
+            assert execution["report_sequence"] == 2
             assert terminal.installation_proof is not None
             assert saved["installation_proof"] == terminal.installation_proof.model_dump(
                 mode="json"
