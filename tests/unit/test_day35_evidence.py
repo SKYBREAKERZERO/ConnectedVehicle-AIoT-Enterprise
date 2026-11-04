@@ -174,3 +174,24 @@ def test_day35_actual_final_workflow_guard(
         env=dict(os.environ, GITHUB_SHA="a" * 40, GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2"),
     )
     assert (result.returncode == 0) is (fault == "none"), result.stderr.decode()
+
+
+def test_day35_workflow_keeps_upstream_identity_and_real_faults() -> None:
+    from tests.unit.iac.test_workflow import read
+
+    workflow = read(".github/workflows/runtime.yml")
+    steps = workflow["jobs"]["evidence"]["steps"]
+    admission = next(s for s in steps if s.get("name") == "Day35 fault and evidence admission")
+    assert admission["env"]["PIPELINE_NEEDS"] == "${{ toJSON(needs) }}"
+    assert "scripts.day35_evidence --check-existing" in admission["run"]
+    assert steps.index(admission) < next(
+        i
+        for i, s in enumerate(steps)
+        if "--stage runtime-evidence --folder" in s.get("run", "") and "publish" in s.get("run", "")
+    )
+    pg = read(".github/workflows/runtime-postgres.yml")
+    faults = next(
+        s for s in pg["jobs"]["run"]["steps"] if "tests/integration/day35" in s.get("run", "")
+    )
+    assert faults["if"] == "inputs.suite == 'postgres'"
+    assert "--junitxml=.runtime-reports/day35-runtime-faults.xml" in faults["run"]

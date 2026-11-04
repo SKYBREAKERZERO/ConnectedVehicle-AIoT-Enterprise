@@ -168,6 +168,8 @@ jobs:
         if-no-files-found: error
         retention-days: 7
     - name: Day35 fault and evidence admission
+      env:
+        PIPELINE_NEEDS: ${{ toJSON(needs) }}
       run: |
         python -m scripts.day35_evidence
         python -m scripts.day35_evidence --check-existing
