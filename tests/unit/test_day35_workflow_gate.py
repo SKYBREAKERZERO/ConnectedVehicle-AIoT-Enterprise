@@ -209,3 +209,13 @@ def test_workflow_keeps_readonly_dag_and_attempt_scoped_artifacts() -> None:
         upload["with"]["name"]
         == "day35-workflow-result-${{ github.run_id }}-${{ github.run_attempt }}"
     )
+
+
+def test_intake_upload_includes_the_hidden_sealed_directory() -> None:
+    from tests.unit.iac.test_workflow import read
+
+    workflow = read(".github/workflows/day35.yml")
+    upload = workflow["jobs"]["intake"]["steps"][-1]
+    assert upload["with"]["path"] == ".day35-sealed-intake"
+    assert upload["with"]["include-hidden-files"] == "true"
+    assert upload["with"]["if-no-files-found"] == "error"
