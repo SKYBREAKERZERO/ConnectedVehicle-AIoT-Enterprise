@@ -318,6 +318,11 @@ async def test_confirmed_boot_audit_failure_reconciles_without_second_install(
             ecu_type="body",
             hardware_version="hw1",
         )
+        persisted = store.pending(jid)
+        assert len(persisted) == 1
+        terminal = OTAReport.model_validate_json(persisted[0][1])
+        assert terminal.installation_proof is not None
+        proof = terminal.installation_proof
         engine = create_database_engine(settings)
         try:
             fresh = OTAExecutionService(create_session_factory(engine), ArtifactVerifier(settings))
