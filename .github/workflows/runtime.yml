@@ -167,6 +167,20 @@ jobs:
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 7
+    - name: Day35 fault and evidence admission
+      run: |
+        python -m scripts.day35_evidence
+        python -m scripts.day35_evidence --check-existing
+    - name: Upload Day35 runtime acceptance
+      if: ${{ always() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day35-runtime-acceptance
+        path: |
+          .runtime-reports/day35-runtime-faults.xml
+          .runtime-reports/day35-acceptance.json
+        if-no-files-found: error
+        retention-days: 7
     - run: python -m scripts.iac.pipeline_evidence publish --stage runtime-evidence --folder .runtime-reports --output
         .ci-bundles/runtime-evidence
       name: Seal runtime-evidence candidate / attempt / hashes
@@ -208,6 +222,30 @@ jobs:
         name: runtime-verified-evidence
         path: .ci-inputs/runtime-evidence
     - run: python3 -m scripts.iac.pipeline_evidence verify --stage runtime-evidence --folder .ci-inputs/runtime-evidence
+    - name: Require Day35 acceptance from this candidate and attempt
+      run: |
+        python3 - <<'PY'
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+        root = Path('.ci-inputs/runtime-evidence')
+        proof = json.loads((root / 'day35-acceptance.json').read_text())
+        expected_run = os.environ['GITHUB_RUN_ID'] + ':' + os.environ['GITHUB_RUN_ATTEMPT']
+        if not (
+            proof['decision'] == 'READY_FOR_LOCAL_REVIEW'
+            and proof['ci_verified'] is True
+            and proof['release_authorized'] is False
+            and proof['real_aws_verified'] is False
+            and proof['physical_boot_verified'] is False
+            and proof['provenance']['commit'] == os.environ['GITHUB_SHA']
+            and proof['provenance']['run_id'] == expected_run
+            and set(proof['proofs']) == {'day35-runtime-faults.xml', 'day34-acceptance.json'}
+            and all(hashlib.sha256((root / name).read_bytes()).hexdigest() == digest
+                    for name, digest in proof['proofs'].items())
+        ):
+            raise SystemExit('BLOCKED: Day35 acceptance/source/run/hash mismatch')
+        PY
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: day31-runtime-trust

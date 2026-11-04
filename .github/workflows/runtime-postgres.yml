@@ -33,6 +33,9 @@ jobs:
     - name: Real dispatcher contention and recovery
       if: inputs.suite == 'postgres'
       run: pytest tests/integration/day21 -q --junitxml=.runtime-reports/day21-postgres.xml
+    - name: Day35 cross-module PostgreSQL and independent boot faults
+      if: inputs.suite == 'postgres'
+      run: pytest tests/integration/day35 -q --junitxml=.runtime-reports/day35-runtime-faults.xml
     - name: PostgreSQL metrics and real promtool fault scenarios
       if: inputs.suite == 'observability'
       run: |-
