@@ -11,16 +11,42 @@ permissions:
 concurrency:
   # Distinct from the called Runtime group, including for the same PR.
   group: day35-entry-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
 jobs:
+  intake:
+    name: Day35 event and immutable source intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - name: Bind repository, event, candidate, baseline and attempt
+      run: python -m scripts.iac.ci_baseline_policy --output .day35-intake/day35-intake.json
+    - name: Seal intake without credentials or deployment State
+      run: python -m scripts.iac.pipeline_evidence publish --stage day35-intake --folder .day35-intake --output .day35-sealed-intake
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day35-intake-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day35-sealed-intake
+        if-no-files-found: error
+        retention-days: 7
   acceptance:
     name: Complete Day35 verification chain
+    needs: [intake]
     # Same-commit reusable workflow: baseline -> lint/types/contracts -> real
     # Runtime -> PostgreSQL/observability faults -> Day35 evidence -> Runtime gate.
     uses: ./.github/workflows/runtime.yml
   day35:
     name: Day35 full acceptance gate
-    needs: [acceptance]
+    needs: [intake, acceptance]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -31,61 +57,27 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 0
-    - name: Require the complete verification chain to succeed
-      env:
-        PIPELINE_NEEDS: ${{ toJSON(needs) }}
-      run: python3 -m scripts.iac.pipeline_evidence needs --expected acceptance
+    - uses: ./.github/actions/setup-ci-runtime
     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ needs.intake.result == 'success' && needs.acceptance.result == 'success' }}
+      with:
+        name: day35-intake-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day35-intake-input
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ needs.intake.result == 'success' && needs.acceptance.result == 'success' }}
       with:
         name: runtime-verified-evidence
         path: .day35-input
-    - name: Verify exact candidate, run, attempt and every evidence hash
-      run: python3 -m scripts.iac.pipeline_evidence verify --stage runtime-evidence --folder .day35-input
-    - name: Confirm Day35 acceptance and closed release authorization
-      run: |
-        python3 - <<'PY'
-        import hashlib
-        import json
-        import os
-        from pathlib import Path
-
-        root = Path('.day35-input')
-        proof = json.loads((root / 'day35-acceptance.json').read_text())
-        baseline = json.loads((root / 'day31-runtime-baseline.json').read_text())
-        if not (
-            proof['decision'] == 'READY_FOR_LOCAL_REVIEW'
-            and proof['ci_verified'] is True
-            and proof['release_authorized'] is False
-            and proof['real_aws_verified'] is False
-            and proof['physical_boot_verified'] is False
-            and proof['simulated_installation'] is True
-            and proof['provenance']['commit'] == os.environ['GITHUB_SHA']
-            and baseline['candidate_sha'] == os.environ['GITHUB_SHA']
-            and proof['provenance']['run_id'] == os.environ['DAY16_EVIDENCE_RUN_ID']
-            and set(proof['proofs']) == {'day35-runtime-faults.xml', 'day34-acceptance.json'}
-            and all(hashlib.sha256((root / name).read_bytes()).hexdigest() == digest
-                    for name, digest in proof['proofs'].items())
-        ):
-            raise SystemExit('BLOCKED: Day35 acceptance/source/run/release policy mismatch')
-        result = {
-            'decision': proof['decision'],
-            'ci_verified': True,
-            'release_authorized': False,
-            'tested_commit': baseline['candidate_sha'],
-            'pr_head_sha': baseline['pr_head_sha'],
-            'run_id': proof['provenance']['run_id'],
-            'proofs': proof['proofs'],
-        }
-        Path('day35-workflow-result.json').write_text(json.dumps(result, indent=2) + '\n')
-        with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as out:
-            out.write('## Day35 full OTA acceptance\n\n')
-            out.write('All mandatory stages passed. Release authorized: **false**.\n\n')
-            out.write('Tested commit: `' + result['tested_commit'] + '`\n')
-        PY
+    - name: Evaluate Day35 evidence and write fail-closed decision
+      if: ${{ always() }}
+      env:
+        PIPELINE_NEEDS: ${{ toJSON(needs) }}
+      run: python -m scripts.day35_workflow_gate
     - name: Upload final Day35 workflow result
+      if: ${{ always() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
-        name: day35-workflow-result
+        name: day35-workflow-result-${{ github.run_id }}-${{ github.run_attempt }}
         path: day35-workflow-result.json
         if-no-files-found: error
         retention-days: 7
