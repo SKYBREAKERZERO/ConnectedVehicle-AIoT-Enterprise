@@ -88,11 +88,21 @@ resources behind; do not delete other projects to clean them up.
 current PR head branch after its primary Runtime and IaC workflows succeed.
 Before this workflow is installed on main, adding the `day36-staging` PR label
 provides an explicit local-test entry. Other labels do not run this chain.
-The intake reuses the existing read-only GitHub evidence auditor to reject
+The intake reuses the existing GitHub CI-fact auditor to reject
 old/cancelled attempts and validate jobs, artifacts and source identity. Its
 mode explicitly remains `branch-local-staging-precheck`. Test/build jobs check
 out the tested PR merge SHA, which is distinct from the dispatch head SHA.
 Tokens are provided only to read-only audit steps, never build/API containers.
+
+GitHub redacts Ruleset `bypass_actors` when the caller cannot write the ruleset
+([API documentation](https://docs.github.com/en/rest/repos/rules?apiVersion=2022-11-28)).
+The first Day36 run exposed this API limitation and failed before deployment.
+Day36 records `governance_observation.status=UNOBSERVABLE` when this field is
+redacted, while still rejecting visible weakening of branch/review/check rules.
+It never substitutes an empty bypass list or verifies independent approval.
+CI facts and local-container exercises can be inspected with a read-only token;
+the existing Day31 trusted `live` entry still rejects incomplete governance.
+No token permissions or repository protection were expanded or weakened.
 
 Five mandatory real-container JUnit cases bind to candidate, workflow Run,
 Attempt and raw observation hash. The verifier rejects missing/duplicate,

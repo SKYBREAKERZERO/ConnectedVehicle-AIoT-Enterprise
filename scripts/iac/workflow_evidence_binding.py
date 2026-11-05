@@ -35,6 +35,7 @@ SOURCE_FILES = [
     "scripts/day36_staging.py",
     "scripts/day36_evidence.py",
     "tests/unit/test_day36_evidence.py",
+    "tests/unit/test_day36_ci_input.py",
     "tests/integration/day36/test_staging.py",
     ".github/workflows/day35.yml",
     "scripts/day35_workflow_gate.py",
@@ -321,10 +322,8 @@ class GitHub:
         return base64.b64decode(data["content"], validate=False)
 
 
-def live(api: GitHub, pr_number: int) -> dict[str, Any]:
-    rules = api.get("rulesets/24828733")
-    if ruleset_errors(rules):
-        raise ValueError("main ruleset no longer enforces independent review and both gates")
+def inspect_ci(api: GitHub, pr_number: int) -> dict[str, Any]:
+    """CI facts only; does not verify governance or authorize trusted promotion."""
     pr = api.get(f"pulls/{pr_number}")
     if pr["state"] != "open" or pr["base"]["ref"] != "main":
         raise ValueError("current open main PR required")
@@ -386,14 +385,22 @@ def live(api: GitHub, pr_number: int) -> dict[str, Any]:
         )
         if (newer["id"], newer["run_attempt"]) != (receipt["run_id"], receipt["run_attempt"]):
             raise ValueError("workflow changed during inspection")
+    return report
+
+
+def live(api: GitHub, pr_number: int) -> dict[str, Any]:
+    rules = api.get("rulesets/24828733")
+    if ruleset_errors(rules):
+        raise ValueError("main ruleset no longer enforces independent review and both gates")
+    report = inspect_ci(api, pr_number)
+    candidate = report["candidate"]["candidate_sha"]
     main = api.get("git/ref/heads/main")["object"]["sha"]
     installed = False
     with suppress(ValueError):
-        installed = (
-            api.file("scripts/iac/workflow_evidence_binding.py", main)
-            == files["scripts/iac/workflow_evidence_binding.py"]
-            and api.file(".github/workflows/day31-trust-boundary.yml", main)
-            == files[".github/workflows/day31-trust-boundary.yml"]
+        installed = api.file("scripts/iac/workflow_evidence_binding.py", main) == api.file(
+            "scripts/iac/workflow_evidence_binding.py", candidate
+        ) and api.file(".github/workflows/day31-trust-boundary.yml", main) == api.file(
+            ".github/workflows/day31-trust-boundary.yml", candidate
         )
     if canonical_digest(api.get("rulesets/24828733")) != canonical_digest(rules):
         raise ValueError("main governance changed during inspection")

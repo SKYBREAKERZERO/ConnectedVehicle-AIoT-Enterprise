@@ -136,6 +136,20 @@ def verify(folder: Path, ci: bool = False) -> dict[str, Any]:
             or any(w["candidate_sha"] != candidate for w in before["workflows"].values())
         ):
             raise ValueError("CI identity or latest-attempt snapshot mismatch")
+        observation = before["governance_observation"]
+        if (
+            type(observation["bypass_actors_visible"]) is not bool
+            or observation["status"]
+            != (
+                "CONFIGURATION_VERIFIED" if observation["bypass_actors_visible"] else "UNOBSERVABLE"
+            )
+            or observation["release_approval_verified"] is not False
+            or observation["trusted_main_release_verified"] is not False
+            or before["trusted_main_release_verified"] is not False
+            or before["production_authorized"] is not False
+        ):
+            raise ValueError("Local staging cannot infer governance visibility or approval")
+        result["governance_observation"] = observation
         result["upstream_workflows"] = before["workflows"]
         result["decision"] = "READY_FOR_STAGING_REVIEW"
         result["proofs"].update(
