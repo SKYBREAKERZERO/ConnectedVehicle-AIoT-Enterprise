@@ -26,6 +26,16 @@ WORKFLOWS = {
     ".github/workflows/runtime.yml": ("Runtime quality gate", "day31-runtime-trust"),
 }
 SOURCE_FILES = [
+    "Dockerfile",
+    ".dockerignore",
+    ".github/workflows/day36.yml",
+    "infra/staging/compose.yml",
+    "scripts/day36_build.py",
+    "scripts/day36_ci_input.py",
+    "scripts/day36_staging.py",
+    "scripts/day36_evidence.py",
+    "tests/unit/test_day36_evidence.py",
+    "tests/integration/day36/test_staging.py",
     ".github/workflows/day35.yml",
     "scripts/day35_workflow_gate.py",
     "tests/unit/test_day35_workflow_gate.py",

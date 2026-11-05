@@ -1,0 +1,162 @@
+name: Day36 local staging deployment and rollback
+'on':
+  pull_request:
+    branches: [main]
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Open same-repository PR with latest Runtime and IaC SUCCESS
+        type: number
+        required: true
+        default: 15
+      baseline:
+        description: Full historical application commit (ancestor of tested candidate)
+        type: string
+        required: true
+        default: aefebb352c359e593a6b0fe572a0e8ca9dbcf97e
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+concurrency:
+  group: day36-local-staging-${{ github.ref }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  intake:
+    name: 01 Read-only latest CI and candidate admission
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'day36-staging' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      candidate: ${{ steps.identity.outputs.candidate }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - name: Audit current PR, latest attempts, jobs and artifacts
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ inputs.pr || github.event.pull_request.number }}
+      run: python -m scripts.day36_ci_input --pr "$PR_NUMBER" --output .day36/ci-input.json
+    - name: Bind dispatch identity to the tested PR candidate
+      id: identity
+      run: |
+        python - <<'PY'
+        import json, os
+        from pathlib import Path
+        candidate = json.loads(Path('.day36/ci-input.json').read_text())['candidate']
+        event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+        expected = event['pull_request']['head']['sha'] if 'pull_request' in event else os.environ['GITHUB_SHA']
+        if candidate['head_sha'] != expected:
+            raise SystemExit('Dispatch must use the current tested PR head branch')
+        if 'pull_request' in event and candidate['candidate_sha'] != os.environ['GITHUB_SHA']:
+            raise SystemExit('PR merge candidate does not match this event')
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+            out.write('candidate=' + candidate['candidate_sha'] + '\n')
+        PY
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day36-intake-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36/ci-input.json
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+  staging:
+    name: 02 Build immutable images, deploy and exercise rollback
+    needs: intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      DAY36_REPORT_DIR: .day36-reports
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.intake.outputs.candidate }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day36-intake-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-reports
+    - name: Build historical and exact tested candidate images
+      env:
+        BASELINE_SHA: ${{ inputs.baseline || 'aefebb352c359e593a6b0fe572a0e8ca9dbcf97e' }}
+      run: python -m scripts.day36_build --baseline "$BASELINE_SHA" --output .day36-reports/images.json
+    - name: Real PostgreSQL, runtime role, HTTP faults and stable ingress rollback
+      run: python -m pytest tests/integration/day36 -q -o junit_family=xunit1 --junitxml=.day36-reports/staging.xml
+    - name: Recheck current CI identity after deployment exercise
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ inputs.pr || github.event.pull_request.number }}
+      run: python -m scripts.day36_ci_input --pr "$PR_NUMBER" --compare .day36-reports/ci-input.json --output .day36-reports/ci-final.json
+    - name: Verify staging evidence without granting deployment authority
+      run: python -m scripts.day36_evidence --folder .day36-reports --ci --output .day36-reports/day36-staging-acceptance.json
+    - name: Seal exact candidate/source/Run/Attempt and all reports
+      run: python -m scripts.iac.pipeline_evidence publish --stage day36-staging --folder .day36-reports --output .day36-sealed
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day36-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-sealed
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    - name: Preserve failure diagnostics as unverified evidence
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day36-failed-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-reports
+        include-hidden-files: true
+        if-no-files-found: warn
+        retention-days: 3
+  evidence:
+    name: 03 Independently recompute sealed staging proof
+    needs: [intake, staging]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.intake.outputs.candidate }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day36-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-verify
+    - run: python -m scripts.iac.pipeline_evidence verify --stage day36-staging --folder .day36-verify
+    - run: python -m scripts.day36_evidence --folder .day36-verify --ci --output day36-recomputed.json
+    - run: |
+        python - <<'PY'
+        import json
+        from pathlib import Path
+        if json.loads(Path('day36-recomputed.json').read_text()) != json.loads(Path('.day36-verify/day36-staging-acceptance.json').read_text()):
+            raise SystemExit('Staging decision failed independent recomputation')
+        PY
+  gate:
+    name: 04 Day36 local staging acceptance gate
+    needs: [intake, staging, evidence]
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event.label.name == 'day36-staging') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+    - name: Deny failure, cancellation, skipped or incomplete evidence
+      env:
+        PIPELINE_NEEDS: ${{ toJSON(needs) }}
+      run: |
+        python3 - <<'PY'
+        import json, os
+        needs = json.loads(os.environ['PIPELINE_NEEDS'])
+        if set(needs) != {'intake', 'staging', 'evidence'} or any(j['result'] != 'success' for j in needs.values()):
+            raise SystemExit('BLOCKED: mandatory Day36 chain did not succeed')
+        with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+            out.write('## Day36 local staging\n\nREADY_FOR_STAGING_REVIEW. Production authorized: **false**.\n')
+        PY
