@@ -19,6 +19,7 @@ from scripts.day18_evidence import verify as verify_day18
 BASELINE = "d336c8a1be301ea08c79374c173ce0a4c8ef4f13"
 REQUIRED = frozenset(
     {
+        "concurrent_device_claim_single_owner_and_stable_replay",
         "wave_job_audit_failure_rolls_back_all_effects",
         "shared_login_cannot_select_campaign_tenant",
         "observation_window_blocks_early_promotion",

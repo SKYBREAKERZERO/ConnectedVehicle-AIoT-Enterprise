@@ -77,3 +77,31 @@ def test_exception_matches_check_resource_file_caller_and_expiry(scan: dict[str,
 def test_corrupt_report_never_passes() -> None:
     assert audit([], {"exceptions": []})
     assert audit({}, {"exceptions": []})
+
+
+@pytest.mark.parametrize("environment", ["prod", "dev", None])
+def test_local_s3_operational_waiver_cannot_escape_scope(
+    scan: dict[str, Any], environment: str | None
+) -> None:
+    finding: dict[str, Any] = {
+        "check_id": "CKV_AWS_18",
+        "resource": "module.artifact_bucket.aws_s3_bucket.this",
+        "file_path": "/modules/ota-artifact-bucket/main.tf",
+        "entity_tags": {"Environment": environment},
+    }
+    scan["results"]["failed_checks"] = [finding]
+    exceptions = {
+        "exceptions": [
+            {
+                "check_id": finding["check_id"],
+                "resource": finding["resource"],
+                "file": "modules/ota-artifact-bucket/main.tf",
+                "scope": "local-only",
+                "expires": "2026-11-18",
+                "reason": "Local delivery gap",
+            }
+        ]
+    }
+    assert audit(scan, exceptions, today=date(2026, 10, 19))
+    finding["entity_tags"]["Environment"] = "local"
+    assert not audit(scan, exceptions, today=date(2026, 10, 19))
