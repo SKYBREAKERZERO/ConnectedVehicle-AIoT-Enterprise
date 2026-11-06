@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from scripts.day36_lock import LOCKS, normalized, packages, sha, validate
 from scripts.day36_staging import ROOT, command
 
 INPUTS = (
@@ -37,16 +38,32 @@ def application_hash(root: Path) -> str:
     return digest.hexdigest()
 
 
-def build(baseline: str) -> dict[str, Any]:
+def build(baseline: str, archives: Path) -> dict[str, Any]:
+    archives = output_archives(archives)
     if not re.fullmatch(r"[0-9a-f]{40}", baseline):
         raise ValueError("Full historical commit SHA required")
     candidate = command(["git", "rev-parse", "HEAD"])
     command(["git", "merge-base", "--is-ancestor", baseline, candidate])
     # Reject modified build inputs; unrelated local user edits are preserved.
-    dirty = command(["git", "status", "--porcelain", "--", *INPUTS, "Dockerfile", ".dockerignore"])
+    dirty = command(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--",
+            *INPUTS,
+            "Dockerfile",
+            ".dockerignore",
+            "infra/staging/requirements",
+        ]
+    )
     if dirty:
         raise ValueError("Commit build inputs before recording candidate identity")
-    result: dict[str, Any] = {"candidate_sha": candidate, "baseline_sha": baseline}
+    result: dict[str, Any] = {
+        "candidate_sha": candidate,
+        "baseline_sha": baseline,
+        "dependency_locks": validate(),
+    }
     with tempfile.TemporaryDirectory(prefix="cv-day36-build-") as temporary:
         context = Path(temporary)
         archive = subprocess.run(
@@ -56,6 +73,8 @@ def build(baseline: str) -> dict[str, Any]:
             bundle.extractall(context, filter="data")
         for name in ("Dockerfile", ".dockerignore"):
             shutil.copyfile(ROOT / name, context / name)
+        shutil.copytree(LOCKS, context / "infra/staging/requirements")
+        validate(context / "pyproject.toml")
         for role, revision, source in (
             ("baseline", baseline, context),
             ("candidate", candidate, ROOT),
@@ -72,35 +91,61 @@ def build(baseline: str) -> dict[str, Any]:
                 "image_digest": image["Id"],
                 "revision": revision,
                 "application_sha256": application_hash(source),
-                "dependency_freeze_sha256": hashlib.sha256(
-                    command(
-                        [
-                            "docker",
-                            "run",
-                            "--rm",
-                            "--network=none",
-                            "--read-only",
-                            "--cap-drop=ALL",
-                            image["Id"],
-                            "python",
-                            "-m",
-                            "pip",
-                            "freeze",
-                        ]
-                    ).encode()
-                ).hexdigest(),
+                "installed_packages": inventory(image["Id"]),
             }
+            archive_path = archives / (role + ".tar")
+            command(["docker", "save", "--output", str(archive_path), tag], timeout=300)
+            result[role]["archive_sha256"] = sha(archive_path)
+            result[role]["archive_name"] = archive_path.name
     if result["baseline"]["image_digest"] == result["candidate"]["image_digest"]:
         raise ValueError("A distinct historical and candidate image is required")
     return result
+
+
+def output_archives(directory: Path) -> Path:
+    # Explicit task directory, never a shared Docker resource or existing archive.
+    directory.mkdir(parents=True, exist_ok=True)
+    if any((directory / (role + ".tar")).exists() for role in ("baseline", "candidate")):
+        raise ValueError("Use a new image archive directory")
+    return directory
+
+
+def inventory(image: str) -> dict[str, str]:
+    code = (
+        "import importlib.metadata as m,json; "
+        "print(json.dumps({d.metadata['Name']:d.version for d in m.distributions()}))"
+    )
+    found = json.loads(
+        command(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network=none",
+                "--read-only",
+                "--cap-drop=ALL",
+                "--security-opt=no-new-privileges:true",
+                image,
+                "python",
+                "-c",
+                code,
+            ]
+        )
+    )
+    installed = {normalized(k): v for k, v in found.items()}
+    project = installed.pop("connected-vehicle-aiot-enterprise", None)
+    if project != "0.1.0" or installed != packages(LOCKS / "runtime.lock"):
+        raise ValueError("Actual image dependency closure differs from the hash lock")
+    return installed
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--archives", type=Path, required=True)
     args = parser.parse_args()
-    result = build(args.baseline)
+    result = build(args.baseline, args.archives.resolve())
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x", encoding="utf-8") as stream:
         json.dump(result, stream, indent=2)

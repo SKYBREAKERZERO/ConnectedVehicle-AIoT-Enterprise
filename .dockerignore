@@ -6,6 +6,7 @@
 !connected_vehicle/**
 !enterprise_platform/**
 !simulators/**
+!infra/staging/requirements/**
 **/__pycache__
 **/*.pyc
 **/.env*

@@ -15,6 +15,7 @@ from xml.etree import ElementTree as ET
 from scripts.day35_workflow_gate import load
 from scripts.day36_build import application_hash
 from scripts.day36_staging import ROOT, command
+from scripts.day36_supply import verify as verify_supply
 
 REQUIRED = {
     "test_staging_fault[startup_exit]",
@@ -30,7 +31,27 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def junit(path: Path) -> ET.Element:
+    if path.is_symlink() or path.stat().st_size > 3_000_000:
+        raise ValueError("Unsafe JUnit file")
+    raw = path.read_bytes()
+    if b"<!" in raw:
+        raise ValueError("JUnit declarations forbidden")
+    root = ET.fromstring(raw)
+    if root.tag not in {"testsuite", "testsuites"} or any(
+        root.findall(".//" + name) for name in ("failure", "error", "skipped")
+    ):
+        raise ValueError("Failed or skipped JUnit evidence")
+    for suite in root.iter():
+        if suite.tag in {"testsuite", "testsuites"} and any(
+            int(suite.get(name, "0")) != 0 for name in ("failures", "errors", "skipped")
+        ):
+            raise ValueError("Nonzero JUnit failure/skip counters")
+    return root
+
+
 def verify(folder: Path, ci: bool = False) -> dict[str, Any]:
+    supply = verify_supply(folder)
     images, staging = load(folder / "images.json"), load(folder / "staging.json")
     candidate = command(["git", "rev-parse", "HEAD"])
     if (
@@ -90,7 +111,7 @@ def verify(folder: Path, ci: bool = False) -> dict[str, Any]:
     data = xml.read_bytes()
     if b"<!" in data:
         raise ValueError("JUnit declarations forbidden")
-    tree = ET.fromstring(data)
+    tree = junit(xml)
     cases = tree.findall(".//testcase")
     if len(cases) != len(REQUIRED) or {c.get("name") for c in cases} != REQUIRED:
         raise ValueError("Missing or duplicate mandatory staging tests")
@@ -120,9 +141,41 @@ def verify(folder: Path, ci: bool = False) -> dict[str, Any]:
         "production_authorized": False,
         "release_authorized": False,
         "trusted_main_release_verified": False,
+        "supply_chain": supply,
+        "formal_image_publication_verified": False,
+        "cloud_rollout_verified": False,
         "proofs": {name: digest(folder / name) for name in FILES},
         "required_cases": sorted(REQUIRED),
     }
+    result["proofs"].update(
+        {
+            p.name: digest(p)
+            for p in folder.iterdir()
+            if p.name
+            in {
+                "supply-chain.json",
+                "baseline-trivy.json",
+                "candidate-trivy.json",
+                "baseline-sbom.json",
+                "candidate-sbom.json",
+                "contracts.xml",
+            }
+        }
+    )
+    contracts = junit(folder / "contracts.xml")
+    if any(
+        contracts.findall(".//" + tag) for tag in ("failure", "error", "skipped")
+    ) or "test_workflow_five_nodes_and_python_interfaces" not in {
+        c.get("name") for c in contracts.findall(".//testcase")
+    }:
+        raise ValueError("Missing or failed mandatory workflow/interface contract")
+    contract_props = {
+        p.get("name"): p.get("value") for p in contracts.findall(".//properties/property")
+    }
+    if len(contracts.findall(".//properties/property")) != len(
+        contract_props
+    ) or contract_props != {"candidate_sha": candidate, "run_id": run, "run_attempt": attempt}:
+        raise ValueError("Contract JUnit context mismatch")
     if ci:
         before, after = load(folder / "ci-input.json"), load(folder / "ci-final.json")
         if (

@@ -18,7 +18,7 @@ def prepared(folder: Path) -> None:
         "summary.json": {
             "status": "passed",
             "phase": "assembled-dag",
-            "contract_runs": 17,
+            "contract_runs": 18,
             "module_contract_groups": list(GROUPS),
             "destroy_actions": 0,
             "second_plan_exit_code": 0,

@@ -23,6 +23,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
     "governance": (
         "bootstrap/state-backend",
         "modules/github-oidc-deploy",
+        "modules/ota-staging",
         "modules/terraform-state-store",
     ),
     "roots": (

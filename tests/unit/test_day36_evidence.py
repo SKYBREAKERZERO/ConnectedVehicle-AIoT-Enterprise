@@ -16,6 +16,7 @@ from scripts import day36_evidence as gate
 
 @pytest.fixture
 def proof(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr(gate, "verify_supply", lambda _: {"decision": "SUPPLY_CHAIN_VERIFIED"})
     monkeypatch.setattr(gate, "command", lambda _: "a" * 40)
     monkeypatch.setattr(gate, "application_hash", lambda _: "c" * 64)
     monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
@@ -67,6 +68,16 @@ def proof(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         for key, value in properties.items():
             ET.SubElement(props, "property", name=key, value=value)
     ET.ElementTree(suite).write(tmp_path / "staging.xml")
+    contracts = ET.Element("testsuite")
+    ET.SubElement(contracts, "testcase", name="test_workflow_five_nodes_and_python_interfaces")
+    props = ET.SubElement(contracts, "properties")
+    for key, value in {
+        "candidate_sha": "a" * 40,
+        "run_id": "local",
+        "run_attempt": "local",
+    }.items():
+        ET.SubElement(props, "property", name=key, value=value)
+    ET.ElementTree(contracts).write(tmp_path / "contracts.xml")
     return tmp_path
 
 

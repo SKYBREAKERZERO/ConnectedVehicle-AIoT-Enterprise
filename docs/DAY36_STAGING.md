@@ -35,7 +35,7 @@ no-new-privileges. Only loopback random ports are exposed.
 $reports = '.runtime-reports/day36/local'
 python -m scripts.day36_build `
   --baseline aefebb352c359e593a6b0fe572a0e8ca9dbcf97e `
-  --output "$reports/images.json"
+  --output "$reports/images.json" --archives "$reports/images"
 $env:DAY36_REPORT_DIR = $reports
 python -m pytest tests/integration/day36 -q -o junit_family=xunit1 `
   --junitxml="$reports/staging.xml"
@@ -55,9 +55,13 @@ or arbitrary schema compatibility.
 `image_digest` denotes the actual local Docker engine image SHA-256 ID;
 it is not claimed to be a registry manifest digest. Containers run by that
 immutable ID, never by a mutable tag. Python base image, PostgreSQL, Redis and
-LocalStack are pinned by digest. Resolved Python dependencies are recorded by
-the hash of the image's actual `pip freeze`. Full transitive dependency locking
-and registry signing/SBOM are future work, not claimed by this stage.
+LocalStack are pinned by digest. Runtime, build and Runtime-CI third-party
+Python dependencies now have complete Linux amd64/Python 3.12 wheel SHA256 locks
+under `infra/staging/requirements`. Builds use hash-checking and wheel-only
+installation, an offline source build and no dynamic build isolation. Actual
+image dependency inventory must exactly match the lock. Runtime CI also uses an
+isolated hash-locked environment. The separate legacy IaC scanner toolchain is
+outside this application-image lock scope. OCI publication/signing is not enabled.
 
 ## Fault and rollback boundaries
 
@@ -117,3 +121,26 @@ Local proof yields `LOCAL_STAGING_VERIFIED`; the CI-bound chain can yield
 Protected-main promotion, reviewer approval, real AWS staging, ECR/OIDC,
 production ingress, database migration rollback and physical ECU boot remain
 separate acceptance requirements.
+
+
+## Five-node supply-chain revision
+
+The current workflow is `intake -> image -> staging -> evidence -> gate`.
+The image node runs interface/DAG contracts, builds and saves BOTH immutable
+images, and scans each actual TAR with digest-pinned Trivy 0.76.1. HIGH,
+CRITICAL and UNKNOWN findings, unfixed issues, missing reports and scanner
+errors block promotion; no ignore file is used. Native CycloneDX SBOMs derive
+from the same scan inventory and bind source, engine/config IDs, Run/Attempt,
+lock hash and scan hash. Image TARs have separate bounded-retention artifacts.
+
+Staging consumes sealed reports, authenticates TAR/OCI config and exact source,
+loads both immutable IDs and passes both explicitly into the real fault runner.
+The independent evidence job downloads TARs anew, checks installed package
+closure, checks report semantics and SBOM coverage, then recomputes staging
+acceptance. The final node consumes only a sealed independent decision. Failure,
+missing/skipped evidence and wrong context produce durable BLOCKED receipts.
+
+The real probe scan exposed blocking OS vulnerabilities. A previous four-node
+staging success does not qualify this revised supply-chain gate. Missing
+registry/Cosign/provenance and cloud canary/schema validation remain explicit
+formal-publication/cloud-release blockers.
