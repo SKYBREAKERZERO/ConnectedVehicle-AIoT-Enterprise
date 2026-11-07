@@ -2,10 +2,13 @@ name: Day37 temporary read-only format probe
 'on':
   push:
     branches: [feat/day37-p1-audit-20261107]
+  pull_request:
+    branches: [main]
 permissions:
   contents: read
 jobs:
   format:
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.ref == 'feat/day37-p1-audit-20261107' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
