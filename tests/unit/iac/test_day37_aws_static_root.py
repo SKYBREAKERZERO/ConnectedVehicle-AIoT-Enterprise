@@ -28,15 +28,15 @@ def test_static_aws_root_never_uses_backend_or_plan(
     root.mkdir()
     (root / ".terraform.lock.hcl").write_text("# committed lock\n")
     (root / "main.tf").write_text(
-        'terraform {\n'
+        "terraform {\n"
         '  backend "s3" {\n'
-        '    encrypt = true\n'
-        '    use_lockfile = true\n'
-        '  }\n'
-        '}\n'
+        "    encrypt = true\n"
+        "    use_lockfile = true\n"
+        "  }\n"
+        "}\n"
         'provider "aws" {\n'
-        f'  allowed_account_ids = [var.{variable}]\n'
-        '}\n'
+        f"  allowed_account_ids = [var.{variable}]\n"
+        "}\n"
     )
     calls: list[tuple[str, ...]] = []
 
@@ -77,15 +77,15 @@ def test_static_aws_root_rejects_trust_boundary_mutations(
     locked = "false" if mutation == "unlocked" else "true"
     account = "account_id" if mutation == "foreign-account-var" else "aws_account_id"
     (root / "main.tf").write_text(
-        'terraform {\n'
+        "terraform {\n"
         f'  backend "{backend}" {{\n'
-        f'    encrypt = {encrypt}\n'
-        f'    use_lockfile = {locked}\n'
-        '  }\n'
-        '}\n'
+        f"    encrypt = {encrypt}\n"
+        f"    use_lockfile = {locked}\n"
+        "  }\n"
+        "}\n"
         'provider "aws" {\n'
-        f'  allowed_account_ids = [var.{account}]\n'
-        '}\n'
+        f"  allowed_account_ids = [var.{account}]\n"
+        "}\n"
     )
     monkeypatch.setattr(
         gate,

@@ -226,16 +226,12 @@ def initialize_aws_staging_static(root: Path, *, env: dict[str, str]) -> None:
     if settings != {"encrypt": True, "use_lockfile": True}:
         raise ValueError("AWS staging backend requires encrypted and locked remote state")
     aws_providers = [
-        provider["aws"]
-        for doc in docs
-        for provider in doc.get("provider", [])
-        if "aws" in provider
+        provider["aws"] for doc in docs for provider in doc.get("provider", []) if "aws" in provider
     ]
     account_var = "aws_account_id" if root.name == "ota-staging" else "account_id"
-    if (
-        len(aws_providers) != 1
-        or aws_providers[0].get("allowed_account_ids") != [f"${{var.{account_var}}}"]
-    ):
+    if len(aws_providers) != 1 or aws_providers[0].get("allowed_account_ids") != [
+        f"${{var.{account_var}}}"
+    ]:
         raise ValueError("AWS staging provider must pin the exact target account variable")
     print(f"Terraform static-only init/validate: {root.name}", flush=True)
     terraform(
