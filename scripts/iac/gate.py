@@ -230,10 +230,7 @@ def initialize_aws_staging_static(root: Path, *, env: dict[str, str]) -> None:
         if len(backend_block) != 1:
             raise ValueError("AWS staging requires exactly one encrypted S3 backend block")
         backend_block = backend_block[0]
-    if not isinstance(backend_block, dict) or set(backend_block) != {
-        "encrypt",
-        "use_lockfile",
-    }:
+    if not isinstance(backend_block, dict) or set(backend_block) != {"encrypt", "use_lockfile"}:
         raise ValueError("AWS staging backend requires encrypted and locked remote state")
     # Checkov's pinned bc-python-hcl2 wraps each HCL attribute in a singleton
     # list. Canonical parsers may return scalar bools. Accept only literal true
