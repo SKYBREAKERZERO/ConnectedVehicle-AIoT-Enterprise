@@ -1,54 +1,75 @@
 """High-risk DAG + saved-plan/integrity/read-only checks."""
+
 from pathlib import Path
+
 import yaml
+
 from scripts import day37_gate
 
-ROOT=Path(__file__).resolve().parents[2]
-W=yaml.safe_load((ROOT/'.github/workflows/day37-aws-staging.yml').read_text())
+ROOT = Path(__file__).resolve().parents[2]
+W = yaml.safe_load((ROOT / ".github/workflows/day37-aws-staging.yml").read_text())
 
-def workflow_jobs():return W['jobs']
+
+def workflow_jobs():
+    return W["jobs"]
+
 
 def test_approval_after_plan_not_before():
-    jobs=workflow_jobs()
-    assert 'plan' in jobs['bootstrap']['needs']
-    assert 'deploy_plan' in jobs['deploy']['needs']
-    assert jobs['bootstrap']['environment']=='aws-staging-bootstrap'
-    assert jobs['deploy']['environment']=='aws-staging-deploy'
-    assert jobs['deploy_plan']['environment']=='aws-staging-plan'
-    assert 'Plan ${{ needs.deploy_plan.outputs.plan_sha256 }}' in jobs['deploy']['name']
+    jobs = workflow_jobs()
+    assert "plan" in jobs["bootstrap"]["needs"]
+    assert "deploy_plan" in jobs["deploy"]["needs"]
+    assert jobs["bootstrap"]["environment"] == "aws-staging-bootstrap"
+    assert jobs["deploy"]["environment"] == "aws-staging-deploy"
+    assert jobs["deploy_plan"]["environment"] == "aws-staging-plan"
+    assert "Plan ${{ needs.deploy_plan.outputs.plan_sha256 }}" in jobs["deploy"]["name"]
+
 
 def test_saved_plan_applied_without_regeneration():
-    for job in ('bootstrap','deploy'):
-        text='\n'.join(x.get('run','') for x in workflow_jobs()[job]['steps'])
-        assert 'day37_plan_transport fetch' in text
+    for job in ("bootstrap", "deploy"):
+        text = "\n".join(x.get("run", "") for x in workflow_jobs()[job]["steps"])
+        assert "day37_plan_transport fetch" in text
         assert 'terraform -chdir="${DAY37_TF_ROOT}" apply' in text
         assert 'terraform -chdir="${DAY37_TF_ROOT}" plan ' not in text
-    assert 'mark-fence' in text and text.index('mark-fence')<text.index(' apply ')
+    assert "mark-fence" in text and text.index("mark-fence") < text.index(" apply ")
+
 
 def test_private_plan_never_uploaded_as_github_artifact():
-    for name in ('plan','deploy_plan'):
-        for step in workflow_jobs()[name]['steps']:
-            if 'actions/upload-artifact@' in step.get('uses',''):
-                assert step['with']['path']=='.day37/plan-public/'
+    for name in ("plan", "deploy_plan"):
+        for step in workflow_jobs()[name]["steps"]:
+            if "actions/upload-artifact@" in step.get("uses", ""):
+                assert step["with"]["path"] == ".day37/plan-public/"
+
 
 def test_success_requires_closure_and_failure_keeps_fence():
-    jobs=workflow_jobs()
-    assert 'close' in jobs['gate']['needs']
-    assert 'verify' in jobs['close']['needs']
-    text='\n'.join(x.get('run','') for x in jobs['close']['steps'])
-    assert '-detailed-exitcode' in text and 'close-fence' in text
-    assert 'close-fence' not in '\n'.join(x.get('run','') for x in jobs['recovery']['steps'])
+    jobs = workflow_jobs()
+    assert "close" in jobs["gate"]["needs"]
+    assert "verify" in jobs["close"]["needs"]
+    text = "\n".join(x.get("run", "") for x in jobs["close"]["steps"])
+    assert "-detailed-exitcode" in text and "close-fence" in text
+    assert "close-fence" not in "\n".join(x.get("run", "") for x in jobs["recovery"]["steps"])
+
 
 def test_plan_check_scope_refuses_iam_updates():
-    plan={'variables':{'enable_service':{'value':False}},'resource_changes':[{'address':'aws_iam_role.staging','type':'aws_iam_role','change':{'actions':['update']}}]}
+    plan = {
+        "variables": {"enable_service": {"value": False}},
+        "resource_changes": [
+            {
+                "address": "aws_iam_role.staging",
+                "type": "aws_iam_role",
+                "change": {"actions": ["update"]},
+            }
+        ],
+    }
     import pytest
-    with pytest.raises(ValueError,match='Bootstrap refuses'):
-        day37_gate.plan_check(plan,phase='bootstrap')
+
+    with pytest.raises(ValueError, match="Bootstrap refuses"):
+        day37_gate.plan_check(plan, phase="bootstrap")
+
 
 def test_foundation_requires_private_alb_and_encryption():
-    text=(ROOT/'infra/terraform/environments/ota-staging-foundation/main.tf').read_text()
-    assert 'internal = true' in text
-    assert 'manage_master_user_password = true' in text
-    assert 'transit_encryption_enabled = true' in text
-    assert 'auth_token_wo' in text
+    text = (ROOT / "infra/terraform/environments/ota-staging-foundation/main.tf").read_text()
+    assert "internal = true" in text
+    assert "manage_master_user_password = true" in text
+    assert "transit_encryption_enabled = true" in text
+    assert "auth_token_wo" in text
     assert 'oidc_application_provisioned" { value = false' in text

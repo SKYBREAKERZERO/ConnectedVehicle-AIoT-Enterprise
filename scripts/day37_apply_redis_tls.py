@@ -3,6 +3,7 @@
 Run from the PROJECT ROOT after overlaying the Day37 files. Does not execute
 unless --apply is explicitly supplied. Keeps non-TLS local development working.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,32 +19,35 @@ def transform_settings(text: str) -> str:
     marker = '    redis_host: str = Field(default="localhost", min_length=1)'
     if text.count(marker) != 1:
         raise ValueError("BLOCKED: Settings Redis host anchor changed; manual review required")
-    text = text.replace(marker, '    redis_tls_enabled: bool = False\n' + marker)
-    validator = '    def validate_runtime_contracts(self) -> Settings:\n'
+    text = text.replace(marker, "    redis_tls_enabled: bool = False\n" + marker)
+    validator = "    def validate_runtime_contracts(self) -> Settings:\n"
     if text.count(validator) != 1:
         raise ValueError("BLOCKED: Settings validator anchor changed; manual review required")
-    addition = '''        if (self.app_env == AppEnvironment.STAGING and self.cloud_runtime == CloudRuntime.AWS
+    addition = """        if (self.app_env == AppEnvironment.STAGING and self.cloud_runtime == CloudRuntime.AWS
                 and (not self.redis_tls_enabled or not self.redis_password)):
             raise ValueError("AWS Staging Redis requires TLS and injected Redis authentication")
-'''
+"""
     return text.replace(validator, validator + addition)
 
 
 def transform_client(text: str) -> str:
-    if 'from redis.asyncio.connection import SSLConnection' in text:
+    if "from redis.asyncio.connection import SSLConnection" in text:
         return text
-    marker = 'from redis.asyncio import ConnectionPool, Redis\n'
-    anchor = '    pool = ConnectionPool(\n'
+    marker = "from redis.asyncio import ConnectionPool, Redis\n"
+    anchor = "    pool = ConnectionPool(\n"
     if text.count(marker) != 1 or text.count(anchor) != 1:
         raise ValueError("BLOCKED: redis.asyncio client connection anchors changed")
-    text = text.replace(marker, marker + 'from redis.asyncio.connection import SSLConnection\n')
-    return text.replace(anchor, '''    tls_options = (
+    text = text.replace(marker, marker + "from redis.asyncio.connection import SSLConnection\n")
+    return text.replace(
+        anchor,
+        """    tls_options = (
         {"connection_class": SSLConnection, "ssl_cert_reqs": "required"}
         if settings.redis_tls_enabled else {}
     )
     pool = ConnectionPool(
         **tls_options,
-''')
+""",
+    )
 
 
 def main() -> None:

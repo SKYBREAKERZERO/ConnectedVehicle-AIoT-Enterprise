@@ -3,6 +3,7 @@
 No PR or audit-mode code obtains AWS credentials. This module never authorizes
 production, grants approvals, creates AWS roles or writes cloud resources.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,7 +43,11 @@ def strict_load(path: Path) -> dict[str, Any]:
             obj[k] = v
         return obj
 
-    value = json.loads(path.read_bytes(), object_pairs_hook=pairs, parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Nonfinite JSON")))
+    value = json.loads(
+        path.read_bytes(),
+        object_pairs_hook=pairs,
+        parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Nonfinite JSON")),
+    )
     if not isinstance(value, dict):
         raise ValueError("Evidence root must be object")
     return value
@@ -63,11 +68,14 @@ def api(path: str) -> Any:
     token = os.environ.get("GH_TOKEN", "")
     if not token:
         raise ValueError("GitHub token missing")
-    req = Request("https://api.github.com/repos/" + REPO + "/" + path, headers={
-        "Accept": "application/vnd.github+json",
-        "Authorization": "Bearer " + token,
-        "X-GitHub-Api-Version": "2022-11-28",
-    })
+    req = Request(
+        "https://api.github.com/repos/" + REPO + "/" + path,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer " + token,
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
     try:
         with urlopen(req, timeout=15) as result:
             return json.load(result)
@@ -76,8 +84,11 @@ def api(path: str) -> Any:
 
 
 def verify_ruleset(data: dict[str, Any]) -> None:
-    if (data.get("target") != "branch" or data.get("enforcement") != "active"
-        or data.get("conditions") != {"ref_name": {"include": ["refs/heads/main"], "exclude": []}}):
+    if (
+        data.get("target") != "branch"
+        or data.get("enforcement") != "active"
+        or data.get("conditions") != {"ref_name": {"include": ["refs/heads/main"], "exclude": []}}
+    ):
         raise ValueError("Main ruleset does not enforce expected branch")
     # Missing visibility is not interpreted as an empty bypass list.
     if "bypass_actors" not in data or data["bypass_actors"] != []:
@@ -85,13 +96,27 @@ def verify_ruleset(data: dict[str, Any]) -> None:
     rules = data.get("rules", [])
     reviews = [r.get("parameters", {}) for r in rules if r.get("type") == "pull_request"]
     checks = [r.get("parameters", {}) for r in rules if r.get("type") == "required_status_checks"]
-    if len(reviews) != 1 or type(reviews[0].get("required_approving_review_count")) is not int or reviews[0]["required_approving_review_count"] < 1:
+    if (
+        len(reviews) != 1
+        or type(reviews[0].get("required_approving_review_count")) is not int
+        or reviews[0]["required_approving_review_count"] < 1
+    ):
         raise ValueError("Independent main approval missing")
-    if not all(reviews[0].get(k) is True for k in ("dismiss_stale_reviews_on_push", "require_last_push_approval", "required_review_thread_resolution")):
+    if not all(
+        reviews[0].get(k) is True
+        for k in (
+            "dismiss_stale_reviews_on_push",
+            "require_last_push_approval",
+            "required_review_thread_resolution",
+        )
+    ):
         raise ValueError("Required review policy weakened")
     if len(checks) != 1 or checks[0].get("strict_required_status_checks_policy") is not True:
         raise ValueError("Main quality checks not strict")
-    required = {(x.get("context"), x.get("integration_id")) for x in checks[0].get("required_status_checks", [])}
+    required = {
+        (x.get("context"), x.get("integration_id"))
+        for x in checks[0].get("required_status_checks", [])
+    }
     if required != {("Runtime quality gate", 15368), ("IaC quality gate", 15368)}:
         raise ValueError("Main required status contexts changed")
     if not {"deletion", "non_fast_forward"}.issubset({r.get("type") for r in rules}):
@@ -102,21 +127,40 @@ def choose_runs(rows: list[dict[str, Any]], commit: str) -> dict[str, dict[str, 
     selected: dict[str, dict[str, Any]] = {}
     for row in rows:
         path = row.get("path", "").split("@")[0]
-        if path in REQUIRED_WORKFLOWS and row.get("head_sha") == commit and row.get("head_branch") == "main" and row.get("event") in {"push", "workflow_dispatch"}:
-            key = (row.get("run_started_at", ""), int(row.get("run_attempt", 0)), int(row.get("id", 0)))
+        if (
+            path in REQUIRED_WORKFLOWS
+            and row.get("head_sha") == commit
+            and row.get("head_branch") == "main"
+            and row.get("event") in {"push", "workflow_dispatch"}
+        ):
+            key = (
+                row.get("run_started_at", ""),
+                int(row.get("run_attempt", 0)),
+                int(row.get("id", 0)),
+            )
             old = selected.get(path)
-            if old is None or key > (old.get("run_started_at", ""), int(old.get("run_attempt", 0)), int(old.get("id", 0))):
+            if old is None or key > (
+                old.get("run_started_at", ""),
+                int(old.get("run_attempt", 0)),
+                int(old.get("id", 0)),
+            ):
                 selected[path] = row
-    if set(selected) != REQUIRED_WORKFLOWS or any(r.get("status") != "completed" or r.get("conclusion") != "success" for r in selected.values()):
+    if set(selected) != REQUIRED_WORKFLOWS or any(
+        r.get("status") != "completed" or r.get("conclusion") != "success"
+        for r in selected.values()
+    ):
         raise ValueError("Same protected-main SHA lacks latest successful Runtime/IaC/Day35/Day36")
     return selected
 
 
 def admission(commit: str) -> dict[str, Any]:
-    if (not SHA.fullmatch(commit) or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+    if (
+        not SHA.fullmatch(commit)
+        or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
         or os.environ.get("GITHUB_REF") != "refs/heads/main"
         or os.environ.get("GITHUB_REPOSITORY") != REPO
-        or os.environ.get("GITHUB_SHA") != commit):
+        or os.environ.get("GITHUB_SHA") != commit
+    ):
         raise ValueError("Only exact dispatched protected-main commit is admissible")
     branch = api("branches/main")
     if branch.get("commit", {}).get("sha") != commit:
@@ -131,7 +175,11 @@ def admission(commit: str) -> dict[str, Any]:
     started = datetime.fromisoformat(day36.get("run_started_at", "").replace("Z", "+00:00"))
     if not 0 <= (datetime.now(UTC) - started).total_seconds() <= 5400:
         raise ValueError("Day36 vulnerability/Staging evidence requires fresh same-SHA rerun")
-    names = {x.get("name") for x in api(f"actions/runs/{day36['id']}/artifacts?per_page=100").get("artifacts", []) if not x.get("expired")}
+    names = {
+        x.get("name")
+        for x in api(f"actions/runs/{day36['id']}/artifacts?per_page=100").get("artifacts", [])
+        if not x.get("expired")
+    }
     attempt = day36.get("run_attempt")
     for expected in (
         f"day36-images-{day36['id']}-{attempt}",
@@ -147,14 +195,18 @@ def admission(commit: str) -> dict[str, Any]:
         "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
         "day36_run_id": str(day36["id"]),
         "day36_attempt": str(attempt),
-        "upstream": {k: {"id": r["id"], "attempt": r["run_attempt"], "sha": r["head_sha"]} for k, r in latest.items()},
+        "upstream": {
+            k: {"id": r["id"], "attempt": r["run_attempt"], "sha": r["head_sha"]}
+            for k, r in latest.items()
+        },
         "governance": "main-ruleset-24828733-verified",
         **PRODUCTION_FALSE,
     }
 
 
-def plan_check(plan: dict[str, Any], *, expected_digest: str | None = None,
-               phase: str | None = None) -> dict[str, Any]:
+def plan_check(
+    plan: dict[str, Any], *, expected_digest: str | None = None, phase: str | None = None
+) -> dict[str, Any]:
     """Fail closed on all delete/replace and unreviewed IAM/SG changes.
 
     The bootstrap allowlist is intentionally create-only; ECS deploy may only
@@ -170,19 +222,29 @@ def plan_check(plan: dict[str, Any], *, expected_digest: str | None = None,
     if not isinstance(changes, list):
         raise ValueError("Invalid Terraform plan")
     bootstrap_types = {
-        "aws_ecr_repository", "aws_ecs_cluster", "aws_cloudwatch_log_group",
-        "aws_security_group", "aws_vpc_security_group_ingress_rule",
-        "aws_vpc_security_group_egress_rule", "aws_iam_role",
-        "aws_iam_role_policy", "aws_iam_role_policy_attachment",
+        "aws_ecr_repository",
+        "aws_ecs_cluster",
+        "aws_cloudwatch_log_group",
+        "aws_security_group",
+        "aws_vpc_security_group_ingress_rule",
+        "aws_vpc_security_group_egress_rule",
+        "aws_iam_role",
+        "aws_iam_role_policy",
+        "aws_iam_role_policy_attachment",
     }
     deploy_types = {"aws_ecs_task_definition", "aws_ecs_service"}
     for change in changes:
         actions = change.get("change", {}).get("actions", [])
         addr, resource_type = change.get("address", ""), change.get("type", "")
-        if (not isinstance(actions, list) or not actions
-                or any(action not in {"create", "read", "update", "no-op"} for action in actions)
-                or "delete" in actions or not isinstance(addr, str)
-                or addr.startswith("module.production") or change.get("mode", "managed") not in {"managed", "data"}):
+        if (
+            not isinstance(actions, list)
+            or not actions
+            or any(action not in {"create", "read", "update", "no-op"} for action in actions)
+            or "delete" in actions
+            or not isinstance(addr, str)
+            or addr.startswith("module.production")
+            or change.get("mode", "managed") not in {"managed", "data"}
+        ):
             raise ValueError("Destructive, foreign or unknown Terraform action: " + str(addr))
         if all(a in {"read", "no-op"} for a in actions):
             continue
@@ -190,7 +252,9 @@ def plan_check(plan: dict[str, Any], *, expected_digest: str | None = None,
             raise ValueError("Audit/refresh-only Plan must not mutate infrastructure")
         if phase == "bootstrap":
             if resource_type not in bootstrap_types or actions != ["create"]:
-                raise ValueError("Bootstrap refuses updates/replacements or non-foundation resource: " + addr)
+                raise ValueError(
+                    "Bootstrap refuses updates/replacements or non-foundation resource: " + addr
+                )
         else:
             if resource_type not in deploy_types or actions not in (["create"], ["update"]):
                 raise ValueError("Deploy refuses IAM, network, ECR or unrelated change: " + addr)
@@ -200,12 +264,19 @@ def plan_check(plan: dict[str, Any], *, expected_digest: str | None = None,
         if service is not False:
             raise ValueError("Infrastructure or audit mode requires disabled service")
     else:
-        if (not expected_digest or not DIGEST.fullmatch(expected_digest)
-                or service is not True or variables.get("image_digest", {}).get("value") != expected_digest):
+        if (
+            not expected_digest
+            or not DIGEST.fullmatch(expected_digest)
+            or service is not True
+            or variables.get("image_digest", {}).get("value") != expected_digest
+        ):
             raise ValueError("ECS deploy does not match exact approved ECR Manifest Digest")
         tasks = [r for r in changes if r.get("type") == "aws_ecs_task_definition"]
-        tasks += [r for r in plan.get("planned_values", {}).get("root_module", {}).get("resources", [])
-                  if r.get("type") == "aws_ecs_task_definition"]
+        tasks += [
+            r
+            for r in plan.get("planned_values", {}).get("root_module", {}).get("resources", [])
+            if r.get("type") == "aws_ecs_task_definition"
+        ]
         if not tasks:
             raise ValueError("ECS Task Definition missing from deployment plan")
         for task in tasks:
@@ -214,77 +285,166 @@ def plan_check(plan: dict[str, Any], *, expected_digest: str | None = None,
             if raw is None:
                 raise ValueError("Unknown ECS image in plan")
             containers = json.loads(raw)
-            if (len(containers) != 1 or containers[0].get("name", "vehicle-api") != "vehicle-api"
-                    or not containers[0].get("image", "").endswith("@" + expected_digest)):
+            if (
+                len(containers) != 1
+                or containers[0].get("name", "vehicle-api") != "vehicle-api"
+                or not containers[0].get("image", "").endswith("@" + expected_digest)
+            ):
                 raise ValueError("Unexpected or mutable ECS image in Plan")
-    return {"decision": "NON_DESTRUCTIVE_TERRAFORM_PLAN", "phase": phase,
-            "service_enabled": bool(service), "resource_changes": len(changes),
-            "image_digest": expected_digest, **PRODUCTION_FALSE}
+    return {
+        "decision": "NON_DESTRUCTIVE_TERRAFORM_PLAN",
+        "phase": phase,
+        "service_enabled": bool(service),
+        "resource_changes": len(changes),
+        "image_digest": expected_digest,
+        **PRODUCTION_FALSE,
+    }
 
 
-def final(mode: str, needs: dict[str, Any], folder: Path, commit: str, run: str, attempt: str) -> dict[str, Any]:
-    expected = {"source", "admission", "plan", "bootstrap", "publish", "deploy_plan", "deploy", "verify", "close", "recovery"}
+def final(
+    mode: str, needs: dict[str, Any], folder: Path, commit: str, run: str, attempt: str
+) -> dict[str, Any]:
+    expected = {
+        "source",
+        "admission",
+        "plan",
+        "bootstrap",
+        "publish",
+        "deploy_plan",
+        "deploy",
+        "verify",
+        "close",
+        "recovery",
+    }
     if set(needs) != expected or mode not in {"audit", "plan", "bootstrap", "deploy"}:
         raise ValueError("Unexpected DAG or mode")
     statuses = {k: v.get("result") for k, v in needs.items()}
-    required = {"audit": {"source"}, "plan": {"source", "admission", "plan"}, "bootstrap": {"source", "admission", "plan", "bootstrap"}, "deploy": {"source", "admission", "publish", "deploy_plan", "deploy", "verify", "close"}}[mode]
+    required = {
+        "audit": {"source"},
+        "plan": {"source", "admission", "plan"},
+        "bootstrap": {"source", "admission", "plan", "bootstrap"},
+        "deploy": {"source", "admission", "publish", "deploy_plan", "deploy", "verify", "close"},
+    }[mode]
     if any(statuses[k] != ("success" if k in required else "skipped") for k in expected):
         raise ValueError("Missing, failed, cancelled or unexpected job status")
-    output: dict[str, Any] = {"decision": {"audit": "READY_FOR_CONFIGURATION_REVIEW", "plan": "READY_FOR_STAGING_PLAN_REVIEW", "bootstrap": "AWS_STAGING_INFRA_BOOTSTRAPPED", "deploy": "AWS_STAGING_SERVICE_VERIFIED"}[mode], "commit": commit, "run_id": run, "run_attempt": attempt, "mode": mode, **PRODUCTION_FALSE, "real_aws_verified": mode == "deploy", "physical_ecu_verified": False, "proofs": {}}
+    output: dict[str, Any] = {
+        "decision": {
+            "audit": "READY_FOR_CONFIGURATION_REVIEW",
+            "plan": "READY_FOR_STAGING_PLAN_REVIEW",
+            "bootstrap": "AWS_STAGING_INFRA_BOOTSTRAPPED",
+            "deploy": "AWS_STAGING_SERVICE_VERIFIED",
+        }[mode],
+        "commit": commit,
+        "run_id": run,
+        "run_attempt": attempt,
+        "mode": mode,
+        **PRODUCTION_FALSE,
+        "real_aws_verified": mode == "deploy",
+        "physical_ecu_verified": False,
+        "proofs": {},
+    }
     if mode != "audit":
         a = strict_load(folder / "admission/admission.json")
-        if any(str(a.get(k)) != str(v) for k, v in (("commit", commit), ("run_id", run), ("run_attempt", attempt))) or a.get("release_authorized") is not False:
+        if (
+            any(
+                str(a.get(k)) != str(v)
+                for k, v in (("commit", commit), ("run_id", run), ("run_attempt", attempt))
+            )
+            or a.get("release_authorized") is not False
+        ):
             raise ValueError("Source admission provenance mismatch")
         output["proofs"]["admission.json"] = filehash(folder / "admission/admission.json")
     if mode == "plan":
         p = strict_load(folder / "plan/plan-summary.json")
-        if p.get("decision") != "NON_DESTRUCTIVE_TERRAFORM_PLAN" or p.get("service_enabled") is not False or p.get("phase") != "audit":
+        if (
+            p.get("decision") != "NON_DESTRUCTIVE_TERRAFORM_PLAN"
+            or p.get("service_enabled") is not False
+            or p.get("phase") != "audit"
+        ):
             raise ValueError("Plan-only evidence invalid")
         output["proofs"]["plan-summary.json"] = filehash(folder / "plan/plan-summary.json")
     if mode == "bootstrap":
         p = strict_load(folder / "plan/plan-summary.json")
         receipt = strict_load(folder / "plan/receipt.json")
-        if (p.get("decision") != "NON_DESTRUCTIVE_TERRAFORM_PLAN" or p.get("phase") != "bootstrap"
-                or receipt.get("phase") != "bootstrap" or receipt.get("decision") != "PRIVATE_VERSIONED_PLAN_STORED"
-                or receipt.get("commit") != commit or str(receipt.get("run_id")) != run
-                or str(receipt.get("run_attempt")) != attempt):
+        if (
+            p.get("decision") != "NON_DESTRUCTIVE_TERRAFORM_PLAN"
+            or p.get("phase") != "bootstrap"
+            or receipt.get("phase") != "bootstrap"
+            or receipt.get("decision") != "PRIVATE_VERSIONED_PLAN_STORED"
+            or receipt.get("commit") != commit
+            or str(receipt.get("run_id")) != run
+            or str(receipt.get("run_attempt")) != attempt
+        ):
             raise ValueError("Bootstrap exact Plan approval receipt invalid")
         output["proofs"]["bootstrap-plan.json"] = filehash(folder / "plan/receipt.json")
         b = strict_load(folder / "bootstrap/bootstrap.json")
-        if (b.get("decision") != "STAGING_INFRA_BOOTSTRAPPED" or
-            b.get("commit") != commit or str(b.get("run_id")) != run or
-            str(b.get("run_attempt")) != attempt or b.get("release_authorized") is not False):
+        if (
+            b.get("decision") != "STAGING_INFRA_BOOTSTRAPPED"
+            or b.get("commit") != commit
+            or str(b.get("run_id")) != run
+            or str(b.get("run_attempt")) != attempt
+            or b.get("release_authorized") is not False
+        ):
             raise ValueError("Infrastructure bootstrap evidence invalid")
         output["proofs"]["bootstrap.json"] = filehash(folder / "bootstrap/bootstrap.json")
     if mode == "deploy":
         plan_public = strict_load(folder / "deploy-plan/plan-summary.json")
         plan_receipt = strict_load(folder / "deploy-plan/receipt.json")
-        if (plan_public.get("phase") != "deploy" or plan_public.get("decision") != "NON_DESTRUCTIVE_TERRAFORM_PLAN"
-                or plan_receipt.get("phase") != "deploy" or plan_receipt.get("decision") != "PRIVATE_VERSIONED_PLAN_STORED"
-                or plan_receipt.get("commit") != commit or str(plan_receipt.get("run_id")) != run
-                or str(plan_receipt.get("run_attempt")) != attempt):
+        if (
+            plan_public.get("phase") != "deploy"
+            or plan_public.get("decision") != "NON_DESTRUCTIVE_TERRAFORM_PLAN"
+            or plan_receipt.get("phase") != "deploy"
+            or plan_receipt.get("decision") != "PRIVATE_VERSIONED_PLAN_STORED"
+            or plan_receipt.get("commit") != commit
+            or str(plan_receipt.get("run_id")) != run
+            or str(plan_receipt.get("run_attempt")) != attempt
+        ):
             raise ValueError("Deploy saved Plan receipt missing or foreign")
         r = strict_load(folder / "publish/release.json")
         v = strict_load(folder / "verify/verified.json")
         d = strict_load(folder / "deploy/deployment.json")
         close = strict_load(folder / "close/closed.json")
         for evidence in (r, v, d):
-            if evidence.get("commit") != commit or str(evidence.get("run_id")) != run or str(evidence.get("run_attempt")) != attempt:
+            if (
+                evidence.get("commit") != commit
+                or str(evidence.get("run_id")) != run
+                or str(evidence.get("run_attempt")) != attempt
+            ):
                 raise ValueError("Cross-job source/Run/Attempt mismatch")
-        if str(r.get("day36_run_id")) != str(a.get("day36_run_id")) or str(r.get("day36_attempt")) != str(a.get("day36_attempt")):
+        if str(r.get("day36_run_id")) != str(a.get("day36_run_id")) or str(
+            r.get("day36_attempt")
+        ) != str(a.get("day36_attempt")):
             raise ValueError("Release references different Day36 Run/Attempt")
-        if (not DIGEST.fullmatch(r.get("registry_digest", "")) or r["image_uri"] != v.get("image_uri") or r["image_uri"] != d.get("image_uri") or r["registry_digest"] != d.get("registry_digest") or v.get("decision") != "ECS_TASK_DIGEST_HEALTH_VERIFIED"
-                or not isinstance(v.get("tasks"), list) or len(v["tasks"]) != v.get("desired_count")
-                or not all(t.get("image_digest") == r["registry_digest"] for t in v["tasks"])
-                or plan_receipt.get("image_digest") != r["registry_digest"]
-                or close.get("decision") != "STAGING_TERRAFORM_ZERO_DRIFT_AND_FENCE_CLOSED"
-                or close.get("commit") != commit or str(close.get("run_id")) != run
-                or str(close.get("run_attempt")) != attempt
-                or close.get("registry_digest") != r["registry_digest"]):
+        if (
+            not DIGEST.fullmatch(r.get("registry_digest", ""))
+            or r["image_uri"] != v.get("image_uri")
+            or r["image_uri"] != d.get("image_uri")
+            or r["registry_digest"] != d.get("registry_digest")
+            or v.get("decision") != "ECS_TASK_DIGEST_HEALTH_VERIFIED"
+            or not isinstance(v.get("tasks"), list)
+            or len(v["tasks"]) != v.get("desired_count")
+            or not all(t.get("image_digest") == r["registry_digest"] for t in v["tasks"])
+            or plan_receipt.get("image_digest") != r["registry_digest"]
+            or close.get("decision") != "STAGING_TERRAFORM_ZERO_DRIFT_AND_FENCE_CLOSED"
+            or close.get("commit") != commit
+            or str(close.get("run_id")) != run
+            or str(close.get("run_attempt")) != attempt
+            or close.get("registry_digest") != r["registry_digest"]
+        ):
             raise ValueError("ECR/ECS registry digest or health proof mismatch")
-        for k, name in (("publish/release.json", "release.json"), ("deploy/deployment.json", "deployment.json"), ("verify/verified.json", "verified.json"), ("deploy-plan/receipt.json", "deploy-plan-receipt.json"), ("close/closed.json", "closure.json")):
+        for k, name in (
+            ("publish/release.json", "release.json"),
+            ("deploy/deployment.json", "deployment.json"),
+            ("verify/verified.json", "verified.json"),
+            ("deploy-plan/receipt.json", "deploy-plan-receipt.json"),
+            ("close/closed.json", "closure.json"),
+        ):
             output["proofs"][name] = filehash(folder / k)
-        output.update(image_uri=r["image_uri"], registry_digest=r["registry_digest"], aws_account_id=v["aws_account_id"])
+        output.update(
+            image_uri=r["image_uri"],
+            registry_digest=r["registry_digest"],
+            aws_account_id=v["aws_account_id"],
+        )
     return output
 
 
@@ -308,7 +468,14 @@ def main() -> None:
             result = plan_check(strict_load(a.input), expected_digest=a.digest, phase=a.phase)
         else:
             needs = json.loads(os.environ.get("PIPELINE_NEEDS", "{}"))
-            result = final(a.mode, needs, a.folder, a.commit, os.environ.get("GITHUB_RUN_ID", "local"), os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
+            result = final(
+                a.mode,
+                needs,
+                a.folder,
+                a.commit,
+                os.environ.get("GITHUB_RUN_ID", "local"),
+                os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
+            )
     except (ValueError, KeyError, OSError, TypeError, json.JSONDecodeError) as error:
         result = {"decision": "BLOCKED", "reason": str(error), "mode": a.mode, **PRODUCTION_FALSE}
         dump(a.output, result)
