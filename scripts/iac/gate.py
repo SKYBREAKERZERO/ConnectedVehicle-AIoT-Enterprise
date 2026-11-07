@@ -187,6 +187,70 @@ def initialize(root: Path, *, env: dict[str, str], lock: Path | None = None) -> 
     terraform(root, "validate", "-no-color", env=env)
 
 
+AWS_STAGING_STATIC_ROOTS = frozenset(
+    {
+        "ota-staging",
+        "ota-staging-foundation",
+        "ota-staging-identity",
+    }
+)
+
+
+def initialize_aws_staging_static(root: Path, *, env: dict[str, str]) -> None:
+    """Validate reviewed AWS-only roots without backend, AWS credentials or plan.
+
+    The real state-backed review and exact-plan Apply belong exclusively to
+    Day37's environment-protected release workflow, never to PR/LocalStack CI.
+    """
+    if root.name not in AWS_STAGING_STATIC_ROOTS:
+        raise ValueError("Unreviewed AWS staging root")
+    if list(root.glob("*.tf.json")) or not list(root.glob("*.tf")):
+        raise ValueError("AWS staging root must contain reviewed HCL files only")
+    lock = root / ".terraform.lock.hcl"
+    if not lock.is_file():
+        raise ValueError("Missing committed AWS staging provider lock")
+    parser = importlib.import_module("hcl2")
+    docs = []
+    for path in sorted(root.glob("*.tf")):
+        with path.open(encoding="utf-8") as stream:
+            docs.append(parser.load(stream))
+    backends = [
+        backend
+        for doc in docs
+        for terraform_block in doc.get("terraform", [])
+        for backend in terraform_block.get("backend", [])
+    ]
+    if len(backends) != 1 or set(backends[0]) != {"s3"}:
+        raise ValueError("AWS staging must declare exactly one S3 backend")
+    settings = backends[0]["s3"]
+    if settings != {"encrypt": True, "use_lockfile": True}:
+        raise ValueError("AWS staging backend requires encrypted and locked remote state")
+    aws_providers = [
+        provider["aws"]
+        for doc in docs
+        for provider in doc.get("provider", [])
+        if "aws" in provider
+    ]
+    account_var = "aws_account_id" if root.name == "ota-staging" else "account_id"
+    if (
+        len(aws_providers) != 1
+        or aws_providers[0].get("allowed_account_ids") != [f"${{var.{account_var}}}"]
+    ):
+        raise ValueError("AWS staging provider must pin the exact target account variable")
+    print(f"Terraform static-only init/validate: {root.name}", flush=True)
+    terraform(
+        root,
+        "init",
+        "-backend=false",
+        "-lockfile=readonly",
+        "-input=false",
+        "-no-color",
+        env=env,
+        quiet=True,
+    )
+    terraform(root, "validate", "-no-color", env=env)
+
+
 def require_local_backends(docs: list[dict[str, Any]]) -> None:
     for doc in docs:
         for block in doc.get("terraform", []):
@@ -306,6 +370,14 @@ def gate(
         for root in partition(discovered, candidate, contract_group):
             name = root.relative_to(candidate).as_posix()
             checked_roots[name] = {"files": 0, "passed": 0}
+            if root.name in AWS_STAGING_STATIC_ROOTS:
+                if root.parent.name != "environments":
+                    raise RuntimeError("AWS staging root must be an isolated environment")
+                initialize_aws_staging_static(root, env=env)
+                contract_count += 1
+                contract_runs += 1
+                checked_roots[name] = {"files": 1, "passed": 1}
+                continue
             initialize(root, env=env, lock=lock if "modules" in root.parts else None)
             if root.name == "ota-governance":
                 schema = terraform(root, "providers", "schema", "-json", env=env, quiet=True)
