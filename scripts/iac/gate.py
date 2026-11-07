@@ -222,16 +222,36 @@ def initialize_aws_staging_static(root: Path, *, env: dict[str, str]) -> None:
     ]
     if len(backends) != 1 or set(backends[0]) != {"s3"}:
         raise ValueError("AWS staging must declare exactly one S3 backend")
-    settings = backends[0]["s3"]
-    if settings != {"encrypt": True, "use_lockfile": True}:
+    # python-hcl2 has exposed labeled HCL blocks as either a mapping or a
+    # one-element list containing a mapping across supported library versions.
+    # Reject any non-singleton block rather than silently selecting the first.
+    backend_block = backends[0]["s3"]
+    if isinstance(backend_block, list):
+        if len(backend_block) != 1:
+            raise ValueError("AWS staging requires exactly one encrypted S3 backend block")
+        backend_block = backend_block[0]
+    if (
+        not isinstance(backend_block, dict)
+        or set(backend_block) != {"encrypt", "use_lockfile"}
+        or backend_block["encrypt"] is not True
+        or backend_block["use_lockfile"] is not True
+    ):
         raise ValueError("AWS staging backend requires encrypted and locked remote state")
     aws_providers = [
         provider["aws"] for doc in docs for provider in doc.get("provider", []) if "aws" in provider
     ]
+    if len(aws_providers) != 1:
+        raise ValueError("AWS staging must declare exactly one account-scoped AWS provider")
+    provider_block = aws_providers[0]
+    if isinstance(provider_block, list):
+        if len(provider_block) != 1:
+            raise ValueError("AWS staging requires exactly one AWS provider block")
+        provider_block = provider_block[0]
     account_var = "aws_account_id" if root.name == "ota-staging" else "account_id"
-    if len(aws_providers) != 1 or aws_providers[0].get("allowed_account_ids") != [
-        f"${{var.{account_var}}}"
-    ]:
+    if (
+        not isinstance(provider_block, dict)
+        or provider_block.get("allowed_account_ids") != [f"${{var.{account_var}}}"]
+    ):
         raise ValueError("AWS staging provider must pin the exact target account variable")
     print(f"Terraform static-only init/validate: {root.name}", flush=True)
     terraform(
