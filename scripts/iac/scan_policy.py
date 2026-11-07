@@ -54,6 +54,13 @@ def audit(report: Any, exceptions: dict[str, Any], *, today: date | None = None)
         if results.get("skipped_checks") or summary.get("skipped", 0):
             errors.append("Checkov inline skips/unchecked resources are prohibited")
         for finding in results.get("failed_checks", []):
+            # Checkov may emit entity_tags: null. Without local metadata,
+            # no local-only security exception is authorized.
+            raw_tags = finding.get("entity_tags")
+            if raw_tags is not None and not isinstance(raw_tags, dict):
+                errors.append("Invalid Checkov resource tag metadata")
+                continue
+            tags = raw_tags if raw_tags is not None else {}
             path = finding["file_path"].replace("\\", "/").lstrip("/")
             identity = (finding["check_id"], finding["resource"], path)
             # Caller metadata binds a module finding to the local deployment.
@@ -61,7 +68,7 @@ def audit(report: Any, exceptions: dict[str, Any], *, today: date | None = None)
             callers = callers.replace("\\", "/")
             local_secret = (
                 finding["check_id"] == "CKV2_AWS_57"
-                and finding.get("entity_tags", {}).get("Environment") == "local"
+                and tags.get("Environment") == "local"
                 and finding.get("check_result", {})
                 .get("entity", {})
                 .get("aws_secretsmanager_secret", {})
@@ -76,7 +83,7 @@ def audit(report: Any, exceptions: dict[str, Any], *, today: date | None = None)
             local_operational = (
                 identity in LOCAL_OPERATIONAL_EXCEPTIONS
                 and allowed.get(identity, {}).get("scope") == "local-only"
-                and finding.get("entity_tags", {}).get("Environment") == "local"
+                and tags.get("Environment") == "local"
             )
             if identity in allowed and (
                 callers.endswith("/environments/local/main.tf") or local_secret or local_operational

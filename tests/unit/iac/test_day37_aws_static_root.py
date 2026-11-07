@@ -24,8 +24,8 @@ def test_static_aws_root_never_uses_backend_or_plan(
     root_name: str,
     variable: str,
 ) -> None:
-    root = tmp_path / root_name
-    root.mkdir()
+    root = tmp_path / "environments" / root_name
+    root.mkdir(parents=True)
     (root / ".terraform.lock.hcl").write_text("# committed lock\n")
     (root / "main.tf").write_text(
         "terraform {\n"
@@ -68,8 +68,10 @@ def test_static_aws_root_rejects_trust_boundary_mutations(
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
 ) -> None:
-    root = tmp_path / ("foreign" if mutation == "unlisted-root" else "ota-staging")
-    root.mkdir()
+    root = tmp_path / "environments" / (
+        "foreign" if mutation == "unlisted-root" else "ota-staging"
+    )
+    root.mkdir(parents=True)
     if mutation != "missing-lock":
         (root / ".terraform.lock.hcl").write_text("# committed lock\n")
     backend = "local" if mutation == "local-backend" else "s3"
@@ -94,3 +96,12 @@ def test_static_aws_root_rejects_trust_boundary_mutations(
     )
     with pytest.raises(ValueError):
         gate.initialize_aws_staging_static(root, env={})
+
+
+def test_aws_only_root_matching_excludes_identically_named_module(tmp_path: Path) -> None:
+    candidate = tmp_path / "terraform"
+    assert "environments/ota-staging" in gate.AWS_STAGING_STATIC_PATHS
+    assert "modules/ota-staging" not in gate.AWS_STAGING_STATIC_PATHS
+    module = candidate / "modules" / "ota-staging"
+    with pytest.raises(ValueError, match="isolated environment"):
+        gate.initialize_aws_staging_static(module, env={})

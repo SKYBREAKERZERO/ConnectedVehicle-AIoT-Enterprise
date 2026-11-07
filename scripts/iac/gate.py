@@ -194,6 +194,9 @@ AWS_STAGING_STATIC_ROOTS = frozenset(
         "ota-staging-identity",
     }
 )
+AWS_STAGING_STATIC_PATHS = frozenset(
+    f"environments/{name}" for name in AWS_STAGING_STATIC_ROOTS
+)
 
 
 def initialize_aws_staging_static(root: Path, *, env: dict[str, str]) -> None:
@@ -202,6 +205,8 @@ def initialize_aws_staging_static(root: Path, *, env: dict[str, str]) -> None:
     The real state-backed review and exact-plan Apply belong exclusively to
     Day37's environment-protected release workflow, never to PR/LocalStack CI.
     """
+    if root.parent.name != "environments":
+        raise ValueError("AWS staging root must be an isolated environment")
     if root.name not in AWS_STAGING_STATIC_ROOTS:
         raise ValueError("Unreviewed AWS staging root")
     if list(root.glob("*.tf.json")) or not list(root.glob("*.tf")):
@@ -393,9 +398,8 @@ def gate(
         for root in partition(discovered, candidate, contract_group):
             name = root.relative_to(candidate).as_posix()
             checked_roots[name] = {"files": 0, "passed": 0}
-            if root.name in AWS_STAGING_STATIC_ROOTS:
-                if root.parent.name != "environments":
-                    raise RuntimeError("AWS staging root must be an isolated environment")
+            # modules/ota-staging is a contract-tested module, not an AWS root.
+            if name in AWS_STAGING_STATIC_PATHS:
                 initialize_aws_staging_static(root, env=env)
                 contract_count += 1
                 contract_runs += 1

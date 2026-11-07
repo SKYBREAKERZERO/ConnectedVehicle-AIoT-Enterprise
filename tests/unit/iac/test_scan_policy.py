@@ -105,3 +105,44 @@ def test_local_s3_operational_waiver_cannot_escape_scope(
     assert audit(scan, exceptions, today=date(2026, 10, 19))
     finding["entity_tags"]["Environment"] = "local"
     assert not audit(scan, exceptions, today=date(2026, 10, 19))
+
+
+@pytest.mark.parametrize("tags", [None, {}, {"Environment": "staging"}])
+def test_null_or_nonlocal_checkov_tags_cannot_authorize_waiver(
+    scan: dict[str, Any], tags: dict[str, str] | None
+) -> None:
+    finding: dict[str, Any] = {
+        "check_id": "CKV_AWS_18",
+        "resource": "module.artifact_bucket.aws_s3_bucket.this",
+        "file_path": "/modules/ota-artifact-bucket/main.tf",
+        "entity_tags": tags,
+    }
+    scan["summary"]["failed"] = 1
+    scan["results"]["failed_checks"] = [finding]
+    exceptions = {
+        "exceptions": [
+            {
+                "check_id": finding["check_id"],
+                "resource": finding["resource"],
+                "file": "modules/ota-artifact-bucket/main.tf",
+                "scope": "local-only",
+                "expires": "2026-11-18",
+                "reason": "LocalStack-only fixture",
+            }
+        ]
+    }
+    issues = audit(scan, exceptions, today=date(2026, 11, 7))
+    assert issues and "CKV_AWS_18" in issues[0]
+
+
+def test_malformed_checkov_tags_block_without_crashing(scan: dict[str, Any]) -> None:
+    scan["summary"]["failed"] = 1
+    scan["results"]["failed_checks"] = [
+        {
+            "check_id": "CKV_AWS_18",
+            "resource": "aws_s3_bucket.example",
+            "file_path": "/main.tf",
+            "entity_tags": "local",
+        }
+    ]
+    assert audit(scan, {"exceptions": []}) == ["Invalid Checkov resource tag metadata"]
