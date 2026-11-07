@@ -172,16 +172,24 @@ def test_staging_redis_wo_never_passes_without_independent_source(scan: dict[str
 @pytest.mark.parametrize(
     ("change", "old", "new"),
     [
-        ("plaintext", "auth_token_wo              = var.redis_auth_token",
-         'auth_token_wo              = "plain-secret"'),
-        ("unencrypted", "transit_encryption_enabled = true",
-         "transit_encryption_enabled = false"),
+        (
+            "plaintext",
+            "auth_token_wo              = var.redis_auth_token",
+            'auth_token_wo              = "plain-secret"',
+        ),
+        ("unencrypted", "transit_encryption_enabled = true", "transit_encryption_enabled = false"),
         ("not-ephemeral", "ephemeral = true", "ephemeral = false"),
         ("not-sensitive", "sensitive = true", "sensitive = false"),
-        ("wrong-key", "kms_key_id                 = var.data_kms_key_arn",
-         'kms_key_id                 = "invalid"'),
-        ("wrong-version", "auth_token_wo_version      = var.redis_token_version",
-         "auth_token_wo_version      = 1"),
+        (
+            "wrong-key",
+            "kms_key_id                 = var.data_kms_key_arn",
+            'kms_key_id                 = "invalid"',
+        ),
+        (
+            "wrong-version",
+            "auth_token_wo_version      = var.redis_token_version",
+            "auth_token_wo_version      = 1",
+        ),
     ],
 )
 def test_staging_redis_write_only_checkov_equivalence_is_fail_closed(

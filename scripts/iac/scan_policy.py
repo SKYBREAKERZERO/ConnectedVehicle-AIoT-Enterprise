@@ -55,8 +55,11 @@ def _redis_wo_proven(root: Path) -> bool:
             parsed = hcl2.load(src)
         matching: list[dict[str, Any]] = []
         for resource in parsed.get("resource", []):
-            for nested in resource.get("aws_elasticache_replication_group", []):
-                if "redis" in nested:
+            instances = resource.get("aws_elasticache_replication_group", [])
+            if isinstance(instances, dict):
+                instances = [instances]
+            for nested in instances:
+                if isinstance(nested, dict) and "redis" in nested:
                     matching.append(_one(nested["redis"]))
         if len(matching) != 1 or not isinstance(matching[0], dict):
             return False
