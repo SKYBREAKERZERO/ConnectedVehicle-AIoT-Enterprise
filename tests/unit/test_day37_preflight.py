@@ -22,14 +22,12 @@ def env(mode: str = "deploy") -> dict[str, str]:
         "DAY37_BACKEND_BUCKET": "cv-ota-staging-state",
         "DAY37_BACKEND_KEY": "connected-vehicle/ota-staging/main.tfstate",
         "DAY37_BACKEND_KMS_ARN": (
-            f"arn:aws:kms:ap-northeast-1:{account}:key/"
-            "ffffffff-ffff-ffff-ffff-ffffffffffff"
+            f"arn:aws:kms:ap-northeast-1:{account}:key/ffffffff-ffff-ffff-ffff-ffffffffffff"
         ),
         "DAY37_PLAN_BUCKET": "cv-ota-staging-plans",
         "DAY37_PLAN_PREFIX": "connected-vehicle/day37-plans/v1",
         "DAY37_PLAN_KMS_ARN": (
-            f"arn:aws:kms:ap-northeast-1:{account}:key/"
-            "ffffffff-ffff-ffff-ffff-ffffffffffff"
+            f"arn:aws:kms:ap-northeast-1:{account}:key/ffffffff-ffff-ffff-ffff-ffffffffffff"
         ),
         "TF_VAR_aws_account_id": account,
         "TF_VAR_aws_region": "ap-northeast-1",
@@ -39,8 +37,7 @@ def env(mode: str = "deploy") -> dict[str, str]:
         "TF_VAR_database_security_group_id": "sg-87654321",
         "TF_VAR_redis_security_group_id": "sg-abcdef12",
         "TF_VAR_application_database_secret_arn": (
-            f"arn:aws:secretsmanager:ap-northeast-1:{account}:secret:"
-            "cv/ota-staging/app-a1b2c3"
+            f"arn:aws:secretsmanager:ap-northeast-1:{account}:secret:cv/ota-staging/app-a1b2c3"
         ),
         "TF_VAR_tenant_id": "test-tenant-a",
         "TF_VAR_redis_host": "redis.example.internal",

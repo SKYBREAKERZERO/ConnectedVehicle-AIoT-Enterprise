@@ -145,6 +145,7 @@ def test_fence_written_before_apply_and_immutable(
     r.write_text(json.dumps(receipt("deploy", b"demo")))
     monkeypatch.setattr(t, "fence_clear", lambda: None)
     seen: list[tuple[str, ...]] = []
+
     def record_s3(*args: str) -> dict[str, str]:
         seen.append(args)
         return {"VersionId": "v1"}
