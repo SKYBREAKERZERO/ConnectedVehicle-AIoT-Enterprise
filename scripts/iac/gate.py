@@ -467,7 +467,9 @@ def gate(
             )
             scan_report = json.loads(scanned.stdout)
             issues = audit(
-                scan_report, json.loads((repo / "scripts/iac/scan_exceptions.json").read_text())
+                scan_report,
+                json.loads((repo / "scripts/iac/scan_exceptions.json").read_text()),
+                source_root=directory,
             )
             if issues:
                 raise RuntimeError(f"Security scan ({label}) rejected:\n" + "\n".join(issues))

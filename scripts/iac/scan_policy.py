@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 from datetime import date
 from pathlib import Path
@@ -24,7 +25,76 @@ LOCAL_OPERATIONAL_EXCEPTIONS = {
 }
 
 
-def audit(report: Any, exceptions: dict[str, Any], *, today: date | None = None) -> list[str]:
+# Checkov 3.3.26's CKV_AWS_31 predates the Terraform AWS provider's
+# write-only ElastiCache auth_token_wo attribute. A proof against actual HCL,
+# rather than a Checkov skip, is allowed for precisely this staging resource.
+REDIS_WO_COMPATIBILITY = (
+    "CKV_AWS_31",
+    "aws_elasticache_replication_group.redis",
+    "environments/ota-staging-foundation/main.tf",
+)
+
+
+def _one(value: Any) -> Any:
+    if isinstance(value, list):
+        if len(value) != 1:
+            raise ValueError("Ambiguous HCL field; expected exactly one value")
+        return value[0]
+    return value
+
+
+def _redis_wo_proven(root: Path) -> bool:
+    """Compensating source-based control; any uncertainty is a scan failure."""
+    try:
+        base = root.resolve(strict=True)
+        path = base / REDIS_WO_COMPATIBILITY[2]
+        if path.is_symlink() or not path.resolve(strict=True).is_relative_to(base):
+            return False
+        hcl2 = importlib.import_module("hcl2")
+        with path.open(encoding="utf-8") as src:
+            parsed = hcl2.load(src)
+        matching: list[dict[str, Any]] = []
+        for resource in parsed.get("resource", []):
+            for nested in resource.get("aws_elasticache_replication_group", []):
+                if "redis" in nested:
+                    matching.append(_one(nested["redis"]))
+        if len(matching) != 1 or not isinstance(matching[0], dict):
+            return False
+        attrs = matching[0]
+        if "auth_token" in attrs or "user_group_ids" in attrs:
+            return False
+        required: dict[str, str] = {
+            "auth_token_wo": "${var.redis_auth_token}",
+            "auth_token_wo_version": "${var.redis_token_version}",
+            "kms_key_id": "${var.data_kms_key_arn}",
+        }
+        if any(_one(attrs.get(key)) != value for key, value in required.items()):
+            return False
+        if any(
+            _one(attrs.get(key)) is not True
+            for key in ("transit_encryption_enabled", "at_rest_encryption_enabled")
+        ):
+            return False
+        tokens = [
+            _one(v["redis_auth_token"])
+            for v in parsed.get("variable", [])
+            if "redis_auth_token" in v
+        ]
+        if len(tokens) != 1 or not isinstance(tokens[0], dict):
+            return False
+        return all(_one(tokens[0].get(key)) is True for key in ("ephemeral", "sensitive"))
+    except Exception:
+        # A parser failure or missing source must never authorize an exemption.
+        return False
+
+
+def audit(
+    report: Any,
+    exceptions: dict[str, Any],
+    *,
+    today: date | None = None,
+    source_root: Path | None = None,
+) -> list[str]:
     today = today or date.today()
     allowed = {}
     for exception in exceptions["exceptions"]:
@@ -63,6 +133,14 @@ def audit(report: Any, exceptions: dict[str, Any], *, today: date | None = None)
             tags = raw_tags if raw_tags is not None else {}
             path = finding["file_path"].replace("\\", "/").lstrip("/")
             identity = (finding["check_id"], finding["resource"], path)
+            if (
+                identity == REDIS_WO_COMPATIBILITY
+                and not finding.get("caller_file_path")
+                and source_root is not None
+                and _redis_wo_proven(source_root)
+            ):
+                print("CKV_AWS_31: equivalent write-only TLS Redis control verified from HCL")
+                continue
             # Caller metadata binds a module finding to the local deployment.
             callers = finding.get("caller_file_path", "") or ""
             callers = callers.replace("\\", "/")
