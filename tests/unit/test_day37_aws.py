@@ -91,7 +91,10 @@ def test_recovery_blocks_foreign_resources(tmp_path: Path, monkeypatch: pytest.M
         aws.recover(p, tmp_path / "recovery.json")
 
 
-def test_no_healthy_baseline_means_manual_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_healthy_baseline_means_manual_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("DAY37_ACCOUNT_ID", "123456789012")
     monkeypatch.setenv("DAY37_CLUSTER", "cv-ota-staging")
     monkeypatch.setenv("DAY37_SERVICE", "cv-ota-staging-api")
@@ -114,9 +117,11 @@ def test_no_healthy_baseline_means_manual_recovery(tmp_path: Path, monkeypatch: 
         aws.recover(p, tmp_path / "recovery.json")
 
 
-def test_command_does_not_expose_sensitive_subprocess_output(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_command_does_not_expose_sensitive_subprocess_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
-        aws.subprocess,
+        subprocess,
         "run",
         lambda *a, **k: Mock(returncode=1, stdout="token", stderr="secret-response"),
     )

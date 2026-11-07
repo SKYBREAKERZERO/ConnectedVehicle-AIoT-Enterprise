@@ -21,7 +21,10 @@ def test_manual_reconcile_workflow_stays_separate_protected_environment() -> Non
     assert 'terraform -chdir="${DAY37_TF_ROOT}" apply' not in body
 
 
-def test_manual_closure_wrong_role_fails_before_s3(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_manual_closure_wrong_role_fails_before_s3(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setenv("GITHUB_SHA", "a" * 40)
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")

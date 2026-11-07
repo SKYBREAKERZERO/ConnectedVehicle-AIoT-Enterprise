@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import hashlib
 import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -50,7 +49,10 @@ def receipt(phase: str, body: bytes) -> dict[str, Any]:
     }
 
 
-def test_upload_is_versioned_sse_kms_and_no_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_upload_is_versioned_sse_kms_and_no_overwrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     body = b"binary Terraform Plan: private"
     path = tmp_path / "plan.tfplan"
     path.write_bytes(body)
@@ -71,7 +73,10 @@ def test_upload_is_versioned_sse_kms_and_no_overwrite(tmp_path: Path, monkeypatc
     assert row["release_authorized"] is False
 
 
-def test_receipt_cannot_be_spliced_across_run_or_phase(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_receipt_cannot_be_spliced_across_run_or_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     body = b"demo"
     p = tmp_path / "receipt.json"
     p.write_text(json.dumps(receipt("bootstrap", body)))
@@ -83,7 +88,10 @@ def test_receipt_cannot_be_spliced_across_run_or_phase(tmp_path: Path, monkeypat
         t.fetch("bootstrap", p, tmp_path / "secret.tfplan", hashlib.sha256(body).hexdigest())
 
 
-def test_wrong_approved_sha_blocks_before_s3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wrong_approved_sha_blocks_before_s3(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     p = tmp_path / "receipt.json"
     p.write_text(json.dumps(receipt("deploy", b"demo")))
     monkeypatch.setattr(t, "check_bucket", lambda _: None)
@@ -92,7 +100,10 @@ def test_wrong_approved_sha_blocks_before_s3(tmp_path: Path, monkeypatch: pytest
         t.fetch("deploy", p, tmp_path / "plan", "0" * 64)
 
 
-def test_s3_tampered_bytes_deleted_and_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_s3_tampered_bytes_deleted_and_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     good = b"exact approved plan"
     bad = b"wrong plan contents"
     p = tmp_path / "receipt.json"
@@ -126,12 +137,19 @@ def test_active_fence_prevents_publish(monkeypatch: pytest.MonkeyPatch) -> None:
         t.fence_clear()
 
 
-def test_fence_written_before_apply_and_immutable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fence_written_before_apply_and_immutable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     r = tmp_path / "receipt.json"
     r.write_text(json.dumps(receipt("deploy", b"demo")))
     monkeypatch.setattr(t, "fence_clear", lambda: None)
     seen: list[tuple[str, ...]] = []
-    monkeypatch.setattr(t, "s3", lambda *a: seen.append(a) or {"VersionId": "v1"})
+    def record_s3(*args: str) -> dict[str, str]:
+        seen.append(args)
+        return {"VersionId": "v1"}
+
+    monkeypatch.setattr(t, "s3", record_s3)
     t.mark_fence("deploy", r, tmp_path / "fence.json")
     assert "--if-none-match" in seen[0]
     assert (
