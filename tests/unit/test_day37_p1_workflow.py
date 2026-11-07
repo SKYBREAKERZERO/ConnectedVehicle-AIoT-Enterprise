@@ -71,6 +71,6 @@ def test_plan_check_scope_refuses_iam_updates() -> None:
 def test_foundation_requires_private_alb_and_encryption() -> None:
     text = (ROOT / "infra/terraform/environments/ota-staging-foundation/main.tf").read_text()
     for key in ("internal", "manage_master_user_password", "transit_encryption_enabled"):
-        assert re.search(rf"(?m)^\\s*{key}\\s*=\\s*true\\s*$", text) is not None
+        assert re.search(rf"(?m)^\s*{key}\s*=\s*true\s*$", text) is not None
     assert "auth_token_wo" in text
     assert 'oidc_application_provisioned" { value = false' in text
