@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -34,3 +35,14 @@ def test_manual_reconcile_workflows_are_dispatch_only() -> None:
         assert set(workflow['on']) == {'workflow_dispatch'}
         assert workflow['concurrency']['group'] == 'day37-aws-staging-exclusive'
         assert 'id-token' not in workflow['permissions']
+
+
+def test_three_workflow_bash_syntax() -> None:
+    for path in FILES:
+        workflow = yaml.safe_load(path.read_text())
+        for name, job in workflow["jobs"].items():
+            for step in job["steps"]:
+                if "run" not in step:
+                    continue
+                check = subprocess.run(["bash", "-n"], input=step["run"], text=True, capture_output=True, check=False)
+                assert check.returncode == 0, (path.name, name, step.get("name"), check.stderr)
