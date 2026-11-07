@@ -16,8 +16,8 @@ def test_manual_reconcile_workflow_stays_separate_protected_environment() -> Non
     assert "id-token" not in w["permissions"]
     body = "\n".join(x.get("run", "") for x in w["jobs"]["reconcile"]["steps"])
     assert "-detailed-exitcode" in body
-    assert body.index("describe-images") < body.index("close-fence")
-    assert body.index("-detailed-exitcode") < body.index("close-fence")
+    assert body.index("describe-images") < body.index("day37_fence manual-close")
+    assert body.index("-detailed-exitcode") < body.index("day37_fence manual-close")
     assert 'terraform -chdir="${DAY37_TF_ROOT}" apply' not in body
 
 

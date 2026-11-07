@@ -16,6 +16,7 @@ def test_workflow_dag() -> None:
         "admission",
         "plan",
         "bootstrap",
+        "bootstrap_close",
         "publish",
         "deploy",
         "verify",
@@ -39,6 +40,7 @@ def test_aws_oidc_only_on_environment_protected_jobs() -> None:
     for name in (
         "plan",
         "bootstrap",
+        "bootstrap_close",
         "publish",
         "deploy",
         "verify",
@@ -72,3 +74,10 @@ def test_exact_source_identity_and_safe_mode_default() -> None:
     assert inputs["mode"]["options"] == ["audit", "plan", "bootstrap", "deploy"]
     assert d["concurrency"]["cancel-in-progress"] is False
     assert "production" not in str([j.get("environment", "") for j in d["jobs"].values()])
+
+
+def test_bootstrap_closure_uses_independent_recovery_role():
+    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    assert jobs["bootstrap_close"]["environment"] == "aws-staging-recovery"
+    assert "bootstrap" in jobs["bootstrap_close"]["needs"]
+    assert "bootstrap_close" in jobs["gate"]["needs"]

@@ -1,0 +1,40 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyDeleteDurableFence",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::REVIEWED_DAY37_PLAN_BUCKET/REVIEWED_DAY37_PLAN_PREFIX/recovery/active-v2.json"
+    },
+    {
+      "Sid": "DenyUnconditionalFencePut",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::REVIEWED_DAY37_PLAN_BUCKET/REVIEWED_DAY37_PLAN_PREFIX/recovery/active-v2.json",
+      "Condition": {
+        "Null": {
+          "s3:if-match": "true",
+          "s3:if-none-match": "true"
+        }
+      }
+    },
+    {
+      "Sid": "DenyPlaintextFencePut",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::REVIEWED_DAY37_PLAN_BUCKET/REVIEWED_DAY37_PLAN_PREFIX/recovery/active-v2.json",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "s3:x-amz-server-side-encryption": "aws:kms"
+        }
+      }
+    }
+  ]
+}

@@ -32,7 +32,8 @@ def test_saved_plan_applied_without_regeneration() -> None:
         assert "day37_plan_transport fetch" in text
         assert 'terraform -chdir="${DAY37_TF_ROOT}" apply' in text
         assert 'terraform -chdir="${DAY37_TF_ROOT}" plan ' not in text
-    assert "mark-fence" in text and text.index("mark-fence") < text.index(" apply ")
+    assert "day37_fence mark --phase deploy" in text
+    assert text.index("day37_fence mark --phase deploy") < text.index('terraform -chdir="${DAY37_TF_ROOT}" apply')
 
 
 def test_private_plan_never_uploaded_as_github_artifact() -> None:
@@ -47,8 +48,8 @@ def test_success_requires_closure_and_failure_keeps_fence() -> None:
     assert "close" in jobs["gate"]["needs"]
     assert "verify" in jobs["close"]["needs"]
     text = "\n".join(x.get("run", "") for x in jobs["close"]["steps"])
-    assert "-detailed-exitcode" in text and "close-fence" in text
-    assert "close-fence" not in "\n".join(x.get("run", "") for x in jobs["recovery"]["steps"])
+    assert "-detailed-exitcode" in text and "day37_fence close" in text
+    assert "day37_fence close" not in "\n".join(x.get("run", "") for x in jobs["recovery"]["steps"])
 
 
 def test_plan_check_scope_refuses_iam_updates() -> None:

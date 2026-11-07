@@ -266,6 +266,10 @@ resource "aws_db_parameter_group" "postgres" {
   name   = "cv-ota-staging-postgres-logging"
   family = "postgres17"
   parameter {
+    name  = "rds.force_ssl"
+    value = "1"
+  }
+  parameter {
     name  = "log_statement"
     value = "ddl"
   }
@@ -361,3 +365,42 @@ resource "aws_secretsmanager_secret" "redis_auth" {
   lifecycle { prevent_destroy = true }
 }
 output "redis_auth_secret_arn" { value = aws_secretsmanager_secret.redis_auth.arn }
+
+
+# CKV2_AWS_57: these two secrets are only metadata until external administrator
+# provisions AWSCURRENT, Lambda rotation protocols, and downstream credentials.
+# These ARNs intentionally have NO DEFAULT. Never replace them with placeholders.
+variable "application_rotation_lambda_arn" {
+  type     = string
+  nullable = false
+  validation {
+    condition     = can(regex("^arn:aws:lambda:ap-northeast-1:[0-9]{12}:function:[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)?$", var.application_rotation_lambda_arn)) && split(":", var.application_rotation_lambda_arn)[4] == var.account_id
+    error_message = "Independent, reviewed same-account Application DB rotation Lambda ARN required."
+  }
+}
+variable "redis_rotation_lambda_arn" {
+  type     = string
+  nullable = false
+  validation {
+    condition     = can(regex("^arn:aws:lambda:ap-northeast-1:[0-9]{12}:function:[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)?$", var.redis_rotation_lambda_arn)) && split(":", var.redis_rotation_lambda_arn)[4] == var.account_id
+    error_message = "Independent, reviewed same-account Redis multi-stage rotation Lambda ARN required."
+  }
+}
+resource "aws_secretsmanager_secret_rotation" "application" {
+  secret_id           = aws_secretsmanager_secret.application.id
+  rotation_lambda_arn = var.application_rotation_lambda_arn
+  rotate_immediately  = false
+  rotation_rules {
+    automatically_after_days = 30
+  }
+  lifecycle { prevent_destroy = true }
+}
+resource "aws_secretsmanager_secret_rotation" "redis_auth" {
+  secret_id           = aws_secretsmanager_secret.redis_auth.id
+  rotation_lambda_arn = var.redis_rotation_lambda_arn
+  rotate_immediately  = false
+  rotation_rules {
+    automatically_after_days = 30
+  }
+  lifecycle { prevent_destroy = true }
+}
