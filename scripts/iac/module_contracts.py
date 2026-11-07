@@ -31,6 +31,9 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "environments/governance-local",
         "environments/local",
         "environments/ota-local",
+        "environments/ota-staging",
+        "environments/ota-staging-foundation",
+        "environments/ota-staging-identity",
     ),
 }
 
