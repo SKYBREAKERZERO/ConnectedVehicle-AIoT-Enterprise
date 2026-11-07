@@ -1,0 +1,65 @@
+name: Reusable isolated Terraform phase
+'on':
+  workflow_call:
+    inputs:
+      phase:
+        type: string
+        required: true
+      contract_group:
+        type: string
+        default: all
+permissions:
+  contents: read
+jobs:
+  run:
+    name: Isolated Terraform phase
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CI_PHASE: ${{ inputs.phase }}
+      CI_CONTRACT_GROUP: ${{ inputs.contract_group }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-iac
+      with:
+        terraform: 'true'
+    - name: Bind independent baseline checkout
+      id: source
+      run: python -m scripts.iac.ci_baseline_policy --output .iac-reports/day31-baseline.json
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ steps.source.outputs.ref }}
+        path: baseline
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: inputs.phase == 'native'
+      with:
+        name: iac-policy-results
+        path: .ci-inputs/iac-policy
+    - if: inputs.phase == 'native'
+      run: python -m scripts.iac.pipeline_evidence consume --stage iac-policy --folder .ci-inputs/iac-policy --output
+        .iac-reports
+    - run: case "$CI_PHASE" in contracts|security|native) ;; *) exit 1 ;; esac
+      name: Validate fixed native phase
+    - run: |-
+        set -euo pipefail
+        report="$CI_PHASE"
+        if [[ "$CI_PHASE" == "native" ]]; then report=summary; fi
+        if [[ "$CI_PHASE" == "contracts" ]]; then report="contracts-$CI_CONTRACT_GROUP"; fi
+        python -m scripts.iac.gate --baseline baseline --phase "$CI_PHASE" --contract-group "$CI_CONTRACT_GROUP" --report ".iac-reports/$report.json"
+      name: Run actual Terraform phase
+    - run: |
+        stage="iac-$CI_PHASE"
+        if [[ "$CI_PHASE" == "contracts" ]]; then stage="$stage-$CI_CONTRACT_GROUP"; fi
+        python -m scripts.iac.pipeline_evidence publish --stage "$stage" --folder .iac-reports --output .ci-bundles/result
+      name: Seal native results without State or providers
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: iac-${{ inputs.phase }}${{ inputs.phase == 'contracts' && format('-{0}', inputs.contract_group) || '' }}-results
+        path: .ci-bundles/result
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
