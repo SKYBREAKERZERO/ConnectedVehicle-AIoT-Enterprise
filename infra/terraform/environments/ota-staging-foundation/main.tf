@@ -275,34 +275,34 @@ resource "aws_db_parameter_group" "postgres" {
   }
 }
 resource "aws_db_instance" "postgres" {
-  identifier                  = "${local.prefix}-postgres"
-  engine                      = "postgres"
-  engine_version              = var.postgres_engine_version
-  instance_class              = "db.t4g.small"
-  allocated_storage           = 50
-  max_allocated_storage       = 150
-  storage_type                = "gp3"
-  storage_encrypted           = true
-  kms_key_id                  = var.data_kms_key_arn
-  parameter_group_name        = aws_db_parameter_group.postgres.name
-  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
-  monitoring_interval         = 60
-  monitoring_role_arn         = var.rds_monitoring_role_arn
+  identifier                          = "${local.prefix}-postgres"
+  engine                              = "postgres"
+  engine_version                      = var.postgres_engine_version
+  instance_class                      = "db.t4g.small"
+  allocated_storage                   = 50
+  max_allocated_storage               = 150
+  storage_type                        = "gp3"
+  storage_encrypted                   = true
+  kms_key_id                          = var.data_kms_key_arn
+  parameter_group_name                = aws_db_parameter_group.postgres.name
+  enabled_cloudwatch_logs_exports     = ["postgresql", "upgrade"]
+  monitoring_interval                 = 60
+  monitoring_role_arn                 = var.rds_monitoring_role_arn
   iam_database_authentication_enabled = true
-  performance_insights_enabled = true
-  performance_insights_kms_key_id = var.data_kms_key_arn
-  db_name                     = "connected_vehicle"
-  username                    = "staging_rds_admin"
-  manage_master_user_password = true
-  publicly_accessible         = false
-  db_subnet_group_name        = aws_db_subnet_group.postgres.name
-  vpc_security_group_ids      = [aws_security_group.postgres.id]
-  multi_az                    = true
-  backup_retention_period     = 7
-  deletion_protection         = true
-  skip_final_snapshot         = false
-  copy_tags_to_snapshot       = true
-  auto_minor_version_upgrade  = true
+  performance_insights_enabled        = true
+  performance_insights_kms_key_id     = var.data_kms_key_arn
+  db_name                             = "connected_vehicle"
+  username                            = "staging_rds_admin"
+  manage_master_user_password         = true
+  publicly_accessible                 = false
+  db_subnet_group_name                = aws_db_subnet_group.postgres.name
+  vpc_security_group_ids              = [aws_security_group.postgres.id]
+  multi_az                            = true
+  backup_retention_period             = 7
+  deletion_protection                 = true
+  skip_final_snapshot                 = false
+  copy_tags_to_snapshot               = true
+  auto_minor_version_upgrade          = true
   lifecycle { prevent_destroy = true }
 }
 resource "aws_elasticache_subnet_group" "redis" {

@@ -127,9 +127,7 @@ def config(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
             raise ValueError("BLOCKED: foreign or invalid backend KMS key")
         data_key = env["TF_VAR_data_kms_key_arn"]
         if (
-            not re.fullmatch(
-                rf"arn:aws:kms:{REGION}:{account}:key/[A-Za-z0-9-]+", data_key
-            )
+            not re.fullmatch(rf"arn:aws:kms:{REGION}:{account}:key/[A-Za-z0-9-]+", data_key)
             or data_key == env["DAY37_BACKEND_KMS_ARN"]
         ):
             raise ValueError("BLOCKED: dedicated same-account data KMS key required")
