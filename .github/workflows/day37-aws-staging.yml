@@ -343,6 +343,7 @@ jobs:
         mkdir -p .day37/bootstrap
 
         python -m scripts.day37_approval verify --phase bootstrap --receipt .day37/reviewed-plan/receipt.json --output .day37/bootstrap/approval.json
+python -m scripts.day37_preflight config --mode bootstrap
 
         '
     - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
@@ -622,6 +623,7 @@ jobs:
         mkdir -p .day37/deploy
 
         python -m scripts.day37_approval verify --phase deploy --receipt .day37/reviewed-plan/receipt.json --output .day37/deploy/approval.json
+python -m scripts.day37_preflight config --mode deploy
 
         '
     - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
