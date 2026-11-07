@@ -54,7 +54,7 @@ jobs:
         set -euo pipefail
         python -m compileall -q scripts/day37_gate.py scripts/day37_aws.py scripts/day37_preflight.py
         python -m pytest tests/unit/test_day37_gate.py tests/unit/test_day37_aws.py tests/unit/test_day37_workflow.py tests/unit/test_day37_staging_static.py tests/unit/test_day37_preflight.py -q
-        terraform -chdir="${DAY37_TF_ROOT}" fmt -check -diff -recursive
+        terraform -chdir="${DAY37_TF_ROOT}" fmt -check -recursive
         terraform -chdir="${DAY37_TF_ROOT}" init -backend=false -input=false
         terraform -chdir="${DAY37_TF_ROOT}" validate -no-color
 

@@ -23,7 +23,7 @@ output "ecs_service_id" {
   value = var.enable_service ? aws_ecs_service.api[0].id : null
 }
 output "requested_registry_image_uri" {
-  value = var.enable_service ? "${aws_ecr_repository.api.repository_url}@${var.image_digest}" : null
+  value       = var.enable_service ? "${aws_ecr_repository.api.repository_url}@${var.image_digest}" : null
   description = "Requested digest URI, NOT independent supply-chain signature verification."
 }
 output "release_authorized" {

@@ -20,9 +20,9 @@ variable "aws_region" {
 }
 
 variable "name_prefix" {
-  type        = string
-  default     = "cv-ota-staging"
-  nullable    = false
+  type     = string
+  default  = "cv-ota-staging"
+  nullable = false
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{2,30}$", var.name_prefix)) && endswith(var.name_prefix, "-staging")
     error_message = "Use a short lowercase name ending in -staging."
@@ -116,24 +116,24 @@ variable "tenant_id" {
 }
 
 variable "oidc_issuer" {
-  type        = string
-  nullable    = false
+  type     = string
+  nullable = false
   validation {
     condition     = startswith(var.oidc_issuer, "https://")
     error_message = "External OIDC issuer must use HTTPS."
   }
 }
 variable "oidc_jwks_url" {
-  type        = string
-  nullable    = false
+  type     = string
+  nullable = false
   validation {
     condition     = startswith(var.oidc_jwks_url, "https://")
     error_message = "External JWKS URL must use HTTPS."
   }
 }
 variable "oidc_audience" {
-  type        = string
-  nullable    = false
+  type     = string
+  nullable = false
   validation {
     condition     = length(trimspace(var.oidc_audience)) > 0
     error_message = "OIDC audience required."
@@ -157,8 +157,8 @@ variable "enable_service" {
 }
 
 variable "desired_count" {
-  type        = number
-  default     = 0
+  type    = number
+  default = 0
   validation {
     condition     = var.desired_count >= 0 && var.desired_count <= 4 && floor(var.desired_count) == var.desired_count
     error_message = "Bounded staging desired_count 0-4."
@@ -197,7 +197,7 @@ variable "redis_auth_secret_arn" {
   nullable    = false
   description = "External Secrets Manager current Redis auth token; execution role injects into container as REDIS_PASSWORD."
   validation {
-    condition = can(regex("^arn:aws:secretsmanager:ap-northeast-1:[0-9]{12}:secret:", var.redis_auth_secret_arn))
+    condition     = can(regex("^arn:aws:secretsmanager:ap-northeast-1:[0-9]{12}:secret:", var.redis_auth_secret_arn))
     error_message = "Require an exact same-region AWS Redis auth secret ARN."
   }
 }

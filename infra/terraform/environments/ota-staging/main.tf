@@ -133,12 +133,12 @@ resource "aws_ecs_task_definition" "api" {
   }
 
   container_definitions = jsonencode([{
-    name              = "vehicle-api"
-    image             = data.aws_ecr_image.candidate[0].image_uri
-    essential         = true
+    name                   = "vehicle-api"
+    image                  = data.aws_ecr_image.candidate[0].image_uri
+    essential              = true
     readonlyRootFilesystem = true
-    user              = "10001:10001"
-    portMappings      = [{ containerPort = 8000, hostPort = 8000, protocol = "tcp" }]
+    user                   = "10001:10001"
+    portMappings           = [{ containerPort = 8000, hostPort = 8000, protocol = "tcp" }]
     environment = [
       { name = "APP_ENV", value = "staging" },
       { name = "CLOUD_RUNTIME", value = "aws" },
@@ -198,18 +198,18 @@ resource "aws_ecs_task_definition" "api" {
 }
 
 resource "aws_ecs_service" "api" {
-  count           = var.enable_service ? 1 : 0
-  name            = "${local.label}-api"
-  cluster         = aws_ecs_cluster.staging.id
-  task_definition = aws_ecs_task_definition.api[0].arn
-  desired_count   = var.desired_count
-  launch_type     = "FARGATE"
-  platform_version = "1.4.0"
-  enable_execute_command = false
-  health_check_grace_period_seconds = 120
-  wait_for_steady_state = true
+  count                              = var.enable_service ? 1 : 0
+  name                               = "${local.label}-api"
+  cluster                            = aws_ecs_cluster.staging.id
+  task_definition                    = aws_ecs_task_definition.api[0].arn
+  desired_count                      = var.desired_count
+  launch_type                        = "FARGATE"
+  platform_version                   = "1.4.0"
+  enable_execute_command             = false
+  health_check_grace_period_seconds  = 120
+  wait_for_steady_state              = true
   deployment_minimum_healthy_percent = 100
-  deployment_maximum_percent = 200
+  deployment_maximum_percent         = 200
 
   deployment_circuit_breaker {
     enable   = true
