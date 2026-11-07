@@ -68,9 +68,7 @@ def test_static_aws_root_rejects_trust_boundary_mutations(
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
 ) -> None:
-    root = tmp_path / "environments" / (
-        "foreign" if mutation == "unlisted-root" else "ota-staging"
-    )
+    root = tmp_path / "environments" / ("foreign" if mutation == "unlisted-root" else "ota-staging")
     root.mkdir(parents=True)
     if mutation != "missing-lock":
         (root / ".terraform.lock.hcl").write_text("# committed lock\n")

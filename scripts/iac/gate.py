@@ -194,9 +194,7 @@ AWS_STAGING_STATIC_ROOTS = frozenset(
         "ota-staging-identity",
     }
 )
-AWS_STAGING_STATIC_PATHS = frozenset(
-    f"environments/{name}" for name in AWS_STAGING_STATIC_ROOTS
-)
+AWS_STAGING_STATIC_PATHS = frozenset(f"environments/{name}" for name in AWS_STAGING_STATIC_ROOTS)
 
 
 def initialize_aws_staging_static(root: Path, *, env: dict[str, str]) -> None:
