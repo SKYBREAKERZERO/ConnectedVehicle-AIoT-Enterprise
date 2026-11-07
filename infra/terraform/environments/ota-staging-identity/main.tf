@@ -65,9 +65,9 @@ resource "aws_iam_role" "staging" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Federated = data.aws_iam_openid_connect_provider.github.arn }
-      Action = "sts:AssumeRoleWithWebIdentity"
+      Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
@@ -80,9 +80,9 @@ resource "aws_iam_role" "staging" {
     prevent_destroy = true
   }
   tags = {
-    Project = "ConnectedVehicle-AIoT-Enterprise"
+    Project     = "ConnectedVehicle-AIoT-Enterprise"
     Environment = "staging"
-    Day37Role = each.key
+    Day37Role   = each.key
   }
 }
 
@@ -93,5 +93,5 @@ resource "aws_iam_role_policy_attachment" "staging" {
 }
 
 output "role_arns" {
-  value = {for mode, role in aws_iam_role.staging: mode => role.arn}
+  value = { for mode, role in aws_iam_role.staging : mode => role.arn }
 }
