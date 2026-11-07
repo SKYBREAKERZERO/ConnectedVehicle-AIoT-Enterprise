@@ -248,10 +248,9 @@ def initialize_aws_staging_static(root: Path, *, env: dict[str, str]) -> None:
             raise ValueError("AWS staging requires exactly one AWS provider block")
         provider_block = provider_block[0]
     account_var = "aws_account_id" if root.name == "ota-staging" else "account_id"
-    if (
-        not isinstance(provider_block, dict)
-        or provider_block.get("allowed_account_ids") != [f"${{var.{account_var}}}"]
-    ):
+    if not isinstance(provider_block, dict) or provider_block.get("allowed_account_ids") != [
+        f"${{var.{account_var}}}"
+    ]:
         raise ValueError("AWS staging provider must pin the exact target account variable")
     print(f"Terraform static-only init/validate: {root.name}", flush=True)
     terraform(
