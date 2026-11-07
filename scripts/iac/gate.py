@@ -230,13 +230,22 @@ def initialize_aws_staging_static(root: Path, *, env: dict[str, str]) -> None:
         if len(backend_block) != 1:
             raise ValueError("AWS staging requires exactly one encrypted S3 backend block")
         backend_block = backend_block[0]
-    if (
-        not isinstance(backend_block, dict)
-        or set(backend_block) != {"encrypt", "use_lockfile"}
-        or backend_block["encrypt"] is not True
-        or backend_block["use_lockfile"] is not True
-    ):
+    if not isinstance(backend_block, dict) or set(backend_block) != {
+        "encrypt",
+        "use_lockfile",
+    }:
         raise ValueError("AWS staging backend requires encrypted and locked remote state")
+    # Checkov's pinned bc-python-hcl2 wraps each HCL attribute in a singleton
+    # list. Canonical parsers may return scalar bools. Accept only literal true
+    # in either form, never truthy strings, duplicates or missing attributes.
+    for name in ("encrypt", "use_lockfile"):
+        value = backend_block[name]
+        if isinstance(value, list):
+            if len(value) != 1:
+                raise ValueError("AWS staging requires exactly one true backend attribute")
+            value = value[0]
+        if value is not True:
+            raise ValueError("AWS staging backend requires encrypted and locked remote state")
     aws_providers = [
         provider["aws"] for doc in docs for provider in doc.get("provider", []) if "aws" in provider
     ]
@@ -248,9 +257,11 @@ def initialize_aws_staging_static(root: Path, *, env: dict[str, str]) -> None:
             raise ValueError("AWS staging requires exactly one AWS provider block")
         provider_block = provider_block[0]
     account_var = "aws_account_id" if root.name == "ota-staging" else "account_id"
-    if not isinstance(provider_block, dict) or provider_block.get("allowed_account_ids") != [
-        f"${{var.{account_var}}}"
-    ]:
+    expected_accounts = [f"${{var.{account_var}}}"]
+    if not isinstance(provider_block, dict) or provider_block.get("allowed_account_ids") not in (
+        expected_accounts,
+        [expected_accounts],
+    ):
         raise ValueError("AWS staging provider must pin the exact target account variable")
     print(f"Terraform static-only init/validate: {root.name}", flush=True)
     terraform(
