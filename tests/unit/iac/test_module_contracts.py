@@ -34,9 +34,10 @@ def test_module_partitions_cover_every_actual_tf_root_once() -> None:
         }
     )
     selected = [p for group in GROUPS for p in partition(discovered, root, group)]
-    assert len(selected) == len(set(selected)) == 18
+    expected_count = sum(len(roots) for roots in GROUPS.values())
+    assert len(selected) == len(set(selected)) == expected_count
     assert set(selected) == set(partition(discovered, root, "all"))
-    assert merge_reports(reports())["contract_runs"] == 18
+    assert merge_reports(reports())["contract_runs"] == expected_count
 
 
 @pytest.mark.parametrize(

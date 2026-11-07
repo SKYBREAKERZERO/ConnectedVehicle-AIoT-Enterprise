@@ -139,7 +139,7 @@ def test_independent_module_bundles_merge_without_double_counting(tmp_path: Path
     assemble_iac(inputs, output)
     summary = json.loads((output / "summary.json").read_text())
     combined = json.loads((output / "contracts.json").read_text())
-    assert summary["contract_runs"] == sum(len(roots) for roots in GROUPS.values()) == 18
+    assert summary["contract_runs"] == sum(len(roots) for roots in GROUPS.values())
     assert combined["contract_runs"] == summary["contract_runs"]
     assert summary["module_contract_groups"] == list(GROUPS)
 
