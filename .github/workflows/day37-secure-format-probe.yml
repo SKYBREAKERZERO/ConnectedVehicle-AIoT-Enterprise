@@ -1,0 +1,49 @@
+name: Day37 temporary secure-canonical format probe
+'on':
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  format:
+    if: ${{ github.event.pull_request.head.ref == 'feat/day37-p1-audit-20261107' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: '1.14.7'
+          terraform_wrapper: false
+      - name: Canonical formatting, evidence only; no AWS or git write
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check ruff==0.16.10
+          terraform fmt infra/terraform/environments/ota-staging-foundation/main.tf infra/terraform/environments/ota-staging/main.tf infra/terraform/environments/ota-staging/variables.tf
+          ruff check --fix scripts/day37_preflight.py tests/unit/test_day37_preflight.py || true
+          ruff format scripts/day37_preflight.py tests/unit/test_day37_preflight.py
+          python - <<'PY'
+          import base64
+          from pathlib import Path
+          paths = [
+              Path('infra/terraform/environments/ota-staging-foundation/main.tf'),
+              Path('infra/terraform/environments/ota-staging/main.tf'),
+              Path('infra/terraform/environments/ota-staging/variables.tf'),
+              Path('scripts/day37_preflight.py'),
+              Path('tests/unit/test_day37_preflight.py'),
+          ]
+          for path in paths:
+              b64 = base64.b64encode(path.read_bytes()).decode('ascii')
+              print('CV_FMT_START', path.as_posix(), len(b64))
+              for i in range(0, len(b64), 3000):
+                  print('CV_FMT_PART', path.as_posix(), i//3000, b64[i:i+3000])
+              print('CV_FMT_END', path.as_posix())
+          PY
+          terraform fmt -check infra/terraform/environments/ota-staging-foundation/main.tf infra/terraform/environments/ota-staging/main.tf infra/terraform/environments/ota-staging/variables.tf
+          ruff check scripts/day37_preflight.py tests/unit/test_day37_preflight.py
+          ruff format --check scripts/day37_preflight.py tests/unit/test_day37_preflight.py
