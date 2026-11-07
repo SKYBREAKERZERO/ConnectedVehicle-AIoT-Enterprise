@@ -27,9 +27,8 @@ REPO = "SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise"
 def command(args: list[str], *, input_text: str | None = None, timeout: int = 240) -> str:
     result = subprocess.run(args, text=True, input=input_text, capture_output=True, timeout=timeout)
     if result.returncode:
-        raise ValueError(
-            f"Staging command failed: {args[0]} {args[1] if len(args) > 1 else ''} ({result.returncode})"
-        )
+        operation = args[1] if len(args) > 1 else ""
+        raise ValueError(f"Staging command failed: {args[0]} {operation} ({result.returncode})")
     return result.stdout.strip()
 
 

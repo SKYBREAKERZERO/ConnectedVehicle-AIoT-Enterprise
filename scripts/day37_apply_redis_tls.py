@@ -23,8 +23,11 @@ def transform_settings(text: str) -> str:
     validator = "    def validate_runtime_contracts(self) -> Settings:\n"
     if text.count(validator) != 1:
         raise ValueError("BLOCKED: Settings validator anchor changed; manual review required")
-    addition = """        if (self.app_env == AppEnvironment.STAGING and self.cloud_runtime == CloudRuntime.AWS
-                and (not self.redis_tls_enabled or not self.redis_password)):
+    addition = """        if (
+            self.app_env == AppEnvironment.STAGING
+            and self.cloud_runtime == CloudRuntime.AWS
+            and (not self.redis_tls_enabled or not self.redis_password)
+        ):
             raise ValueError("AWS Staging Redis requires TLS and injected Redis authentication")
 """
     return text.replace(validator, validator + addition)
@@ -59,10 +62,10 @@ def main() -> None:
     if not a.apply:
         print("DRY-RUN: Redis TLS patch anchors valid; rerun --apply after review")
         return
-    if all(x == y for x, y in zip(originals, modified)):
+    if all(x == y for x, y in zip(originals, modified, strict=True)):
         print("Redis TLS integration already present")
         return
-    for path, value in zip((SETTINGS, CLIENT), modified):
+    for path, value in zip((SETTINGS, CLIENT), modified, strict=True):
         path.write_text(value, encoding="utf-8")
     print("Applied Redis TLS security integration to application Settings and client")
 

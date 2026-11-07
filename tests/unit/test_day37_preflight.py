@@ -20,10 +20,12 @@ def env(mode: str = "deploy") -> dict[str, str]:
         "DAY37_ROLE_ARN": f"arn:aws:iam::{account}:role/cv-ota-staging-{mode}",
         "DAY37_BACKEND_BUCKET": "cv-ota-staging-state",
         "DAY37_BACKEND_KEY": "connected-vehicle/ota-staging/main.tfstate",
-        "DAY37_BACKEND_KMS_ARN": f"arn:aws:kms:ap-northeast-1:{account}:key/ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "DAY37_BACKEND_KMS_ARN": (f"arn:aws:kms:ap-northeast-1:{account}:key/"
+            "ffffffff-ffff-ffff-ffff-ffffffffffff"),
         "DAY37_PLAN_BUCKET": "cv-ota-staging-plans",
         "DAY37_PLAN_PREFIX": "connected-vehicle/day37-plans/v1",
-        "DAY37_PLAN_KMS_ARN": f"arn:aws:kms:ap-northeast-1:{account}:key/ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "DAY37_PLAN_KMS_ARN": (f"arn:aws:kms:ap-northeast-1:{account}:key/"
+            "ffffffff-ffff-ffff-ffff-ffffffffffff"),
         "TF_VAR_aws_account_id": account,
         "TF_VAR_aws_region": "ap-northeast-1",
         "TF_VAR_vpc_id": "vpc-12345678",
@@ -31,18 +33,22 @@ def env(mode: str = "deploy") -> dict[str, str]:
         "TF_VAR_alb_security_group_id": "sg-12345678",
         "TF_VAR_database_security_group_id": "sg-87654321",
         "TF_VAR_redis_security_group_id": "sg-abcdef12",
-        "TF_VAR_application_database_secret_arn": f"arn:aws:secretsmanager:ap-northeast-1:{account}:secret:cv/ota-staging/app-a1b2c3",
+        "TF_VAR_application_database_secret_arn": (f"arn:aws:secretsmanager:ap-northeast-1:{account}:secret:"
+            "cv/ota-staging/app-a1b2c3"),
         "TF_VAR_tenant_id": "test-tenant-a",
         "TF_VAR_redis_host": "redis.example.internal",
-        "TF_VAR_redis_auth_secret_arn": f"arn:aws:secretsmanager:ap-northeast-1:{account}:secret:cv/ota-staging/redis-auth-a1b2c3",
+        "TF_VAR_redis_auth_secret_arn": (f"arn:aws:secretsmanager:ap-northeast-1:{account}:secret:"
+            "cv/ota-staging/redis-auth-a1b2c3"),
         "TF_VAR_oidc_issuer": "https://login.staging.acme.co.jp",
         "TF_VAR_oidc_jwks_url": "https://login.staging.acme.co.jp/.well-known/jwks.json",
         "TF_VAR_oidc_audience": "cv-staging",
-        "TF_VAR_alb_target_group_arn": f"arn:aws:elasticloadbalancing:ap-northeast-1:{account}:targetgroup/cv-ota-staging-api/12345678",
+        "TF_VAR_alb_target_group_arn": (f"arn:aws:elasticloadbalancing:ap-northeast-1:{account}:"
+            "targetgroup/cv-ota-staging-api/12345678"),
         "DAY37_ECR_REPOSITORY": "cv-ota-staging/vehicle-api",
         "DAY37_CLUSTER": "cv-ota-staging",
         "DAY37_SERVICE": "cv-ota-staging-api",
-        "DAY37_ALB_TARGET_GROUP_ARN": f"arn:aws:elasticloadbalancing:ap-northeast-1:{account}:targetgroup/cv-ota-staging-api/12345678",
+        "DAY37_ALB_TARGET_GROUP_ARN": (f"arn:aws:elasticloadbalancing:ap-northeast-1:{account}:"
+            "targetgroup/cv-ota-staging-api/12345678"),
     }
 
 

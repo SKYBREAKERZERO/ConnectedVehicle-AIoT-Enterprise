@@ -24,7 +24,10 @@ def test_registry_immutability_requires_real_ecr(monkeypatch):
         lambda *x: {
             "repositories": [
                 {
-                    "repositoryUri": "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cv-ota-staging/vehicle-api",
+                    "repositoryUri": (
+                        "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/"
+                        "cv-ota-staging/vehicle-api"
+                    ),
                     "registryId": "123456789012",
                     "imageTagMutability": "MUTABLE",
                     "encryptionConfiguration": {"encryptionType": "AES256"},
