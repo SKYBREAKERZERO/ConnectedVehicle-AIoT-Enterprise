@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import hashlib
 import json
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock
@@ -14,7 +17,7 @@ from scripts import day37_plan_transport as t
 
 
 @pytest.fixture(autouse=True)
-def context(monkeypatch):
+def context(monkeypatch: pytest.MonkeyPatch) -> None:
     for k, v in {
         "GITHUB_SHA": "a" * 40,
         "GITHUB_RUN_ID": "123",
@@ -30,7 +33,7 @@ def context(monkeypatch):
         monkeypatch.setenv(k, v)
 
 
-def receipt(phase, body):
+def receipt(phase: str, body: bytes) -> dict[str, Any]:
     i, c = t.identity(), t.config()
     return {
         **i,
@@ -47,16 +50,16 @@ def receipt(phase, body):
     }
 
 
-def test_upload_is_versioned_sse_kms_and_no_overwrite(tmp_path, monkeypatch):
+def test_upload_is_versioned_sse_kms_and_no_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     body = b"binary Terraform Plan: private"
     path = tmp_path / "plan.tfplan"
     path.write_bytes(body)
     policy = tmp_path / "policy.json"
     policy.write_text(json.dumps({"decision": "NON_DESTRUCTIVE_TERRAFORM_PLAN"}))
     monkeypatch.setattr(t, "check_bucket", lambda _: None)
-    calls = []
+    calls: list[tuple[str, ...]] = []
 
-    def fake(*args):
+    def fake(*args: str) -> dict[str, str]:
         calls.append(args)
         return {"VersionId": "v-1"}
 
@@ -68,7 +71,7 @@ def test_upload_is_versioned_sse_kms_and_no_overwrite(tmp_path, monkeypatch):
     assert row["release_authorized"] is False
 
 
-def test_receipt_cannot_be_spliced_across_run_or_phase(tmp_path, monkeypatch):
+def test_receipt_cannot_be_spliced_across_run_or_phase(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     body = b"demo"
     p = tmp_path / "receipt.json"
     p.write_text(json.dumps(receipt("bootstrap", body)))
@@ -80,7 +83,7 @@ def test_receipt_cannot_be_spliced_across_run_or_phase(tmp_path, monkeypatch):
         t.fetch("bootstrap", p, tmp_path / "secret.tfplan", hashlib.sha256(body).hexdigest())
 
 
-def test_wrong_approved_sha_blocks_before_s3(tmp_path, monkeypatch):
+def test_wrong_approved_sha_blocks_before_s3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = tmp_path / "receipt.json"
     p.write_text(json.dumps(receipt("deploy", b"demo")))
     monkeypatch.setattr(t, "check_bucket", lambda _: None)
@@ -89,14 +92,14 @@ def test_wrong_approved_sha_blocks_before_s3(tmp_path, monkeypatch):
         t.fetch("deploy", p, tmp_path / "plan", "0" * 64)
 
 
-def test_s3_tampered_bytes_deleted_and_blocked(tmp_path, monkeypatch):
+def test_s3_tampered_bytes_deleted_and_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     good = b"exact approved plan"
     bad = b"wrong plan contents"
     p = tmp_path / "receipt.json"
     p.write_text(json.dumps(receipt("deploy", good)))
     monkeypatch.setattr(t, "check_bucket", lambda _: None)
 
-    def fake(*args):
+    def fake(*args: str) -> dict[str, str]:
         Path(args[-1]).write_bytes(bad)
         return {"VersionId": "version-1"}
 
@@ -107,27 +110,27 @@ def test_s3_tampered_bytes_deleted_and_blocked(tmp_path, monkeypatch):
     assert not target.exists()
 
 
-def test_access_denied_is_not_fence_absent(monkeypatch):
+def test_access_denied_is_not_fence_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(t, "check_bucket", lambda _: None)
     monkeypatch.setattr(
-        t.subprocess, "run", lambda *a, **k: Mock(returncode=255, stderr="AccessDenied")
+        subprocess, "run", lambda *a, **k: Mock(returncode=255, stderr="AccessDenied")
     )
     with pytest.raises(ValueError, match="cannot prove absence"):
         t.fence_clear()
 
 
-def test_active_fence_prevents_publish(monkeypatch):
+def test_active_fence_prevents_publish(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(t, "check_bucket", lambda _: None)
-    monkeypatch.setattr(t.subprocess, "run", lambda *a, **k: Mock(returncode=0, stderr=""))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Mock(returncode=0, stderr=""))
     with pytest.raises(ValueError, match="unresolved"):
         t.fence_clear()
 
 
-def test_fence_written_before_apply_and_immutable(tmp_path, monkeypatch):
+def test_fence_written_before_apply_and_immutable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     r = tmp_path / "receipt.json"
     r.write_text(json.dumps(receipt("deploy", b"demo")))
     monkeypatch.setattr(t, "fence_clear", lambda: None)
-    seen = []
+    seen: list[tuple[str, ...]] = []
     monkeypatch.setattr(t, "s3", lambda *a: seen.append(a) or {"VersionId": "v1"})
     t.mark_fence("deploy", r, tmp_path / "fence.json")
     assert "--if-none-match" in seen[0]
@@ -136,7 +139,7 @@ def test_fence_written_before_apply_and_immutable(tmp_path, monkeypatch):
     )
 
 
-def test_plan_bucket_rejects_foreign_account(monkeypatch):
+def test_plan_bucket_rejects_foreign_account(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DAY37_PLAN_KMS_ARN", "arn:aws:kms:ap-northeast-1:999999999999:key/foreign")
     with pytest.raises(ValueError, match="KMS key"):
         t.config()

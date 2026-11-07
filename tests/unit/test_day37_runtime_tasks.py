@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from scripts import day37_aws as a
@@ -13,7 +15,7 @@ URI = (
 DEF = f"arn:aws:ecs:ap-northeast-1:{ACCOUNT}:task-definition/cv-ota-staging-api:15"
 
 
-def responses():
+def responses() -> dict[str, Any]:
     svc = {
         "status": "ACTIVE",
         "desiredCount": 2,
@@ -23,7 +25,7 @@ def responses():
         "deployments": [{"status": "PRIMARY", "rolloutState": "COMPLETED"}],
     }
 
-    def task(n):
+    def task(n: int) -> dict[str, Any]:
         return {
             "taskArn": f"arn:aws:ecs:ap-northeast-1:{ACCOUNT}:task/cv-ota-staging/{n}",
             "taskDefinitionArn": DEF,
@@ -72,7 +74,7 @@ def responses():
 
 
 @pytest.fixture
-def fake(monkeypatch):
+def fake(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(a, "account", lambda x: None)
     monkeypatch.setattr(
         a, "context", lambda: {"commit": "a" * 40, "run_id": "123", "run_attempt": "1"}
@@ -82,7 +84,7 @@ def fake(monkeypatch):
     return r
 
 
-def check():
+def check() -> dict[str, Any]:
     return a.service_readback(
         ACCOUNT,
         "cv-ota-staging",
@@ -93,7 +95,7 @@ def check():
     )
 
 
-def test_all_running_tasks_match_exact_ecr_manifest(fake):
+def test_all_running_tasks_match_exact_ecr_manifest(fake: dict[str, Any]) -> None:
     out = check()
     assert out["decision"] == "ECS_TASK_DIGEST_HEALTH_VERIFIED"
     assert len(out["tasks"]) == 2
@@ -103,7 +105,7 @@ def test_all_running_tasks_match_exact_ecr_manifest(fake):
 @pytest.mark.parametrize(
     "mutation", ["digest", "health", "taskdef", "eni", "alb", "pagination", "thirdtask"]
 )
-def test_single_task_mutation_fails_closed(fake, mutation):
+def test_single_task_mutation_fails_closed(fake: dict[str, Any], mutation: str) -> None:
     t = fake["describe-tasks"]["tasks"]
     if mutation == "digest":
         t[1]["containers"][0]["imageDigest"] = "sha256:" + "f" * 64

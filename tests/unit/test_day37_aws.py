@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -10,13 +11,13 @@ from scripts import day37_aws as aws
 
 
 @pytest.fixture(autouse=True)
-def fake_context(monkeypatch):
+def fake_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_SHA", "a" * 40)
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
 
 
-def test_registry_immutability_requires_real_ecr(monkeypatch):
+def test_registry_immutability_requires_real_ecr(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(aws, "account", lambda x: None)
     monkeypatch.setattr(
         aws,
@@ -39,7 +40,7 @@ def test_registry_immutability_requires_real_ecr(monkeypatch):
         aws.check_ecr("cv-ota-staging/vehicle-api", "123456789012")
 
 
-def test_registry_manifest_bytes_must_match_digest(monkeypatch):
+def test_registry_manifest_bytes_must_match_digest(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         aws,
         "aws",
@@ -61,14 +62,14 @@ def test_registry_manifest_bytes_must_match_digest(monkeypatch):
         aws.read_manifest("cv-ota-staging/vehicle-api", "tag", "123456789012")
 
 
-def test_release_record_must_bind_same_attempt(tmp_path: Path):
+def test_release_record_must_bind_same_attempt(tmp_path: Path) -> None:
     p = tmp_path / "release.json"
     p.write_text(json.dumps({"commit": "a" * 40, "run_id": "123", "run_attempt": "9"}))
     with pytest.raises(ValueError, match="Run/Attempt"):
         aws.verify_release(p, "123456789012", "cv-ota-staging/vehicle-api", tmp_path / "out.json")
 
 
-def test_recovery_blocks_foreign_resources(tmp_path: Path, monkeypatch):
+def test_recovery_blocks_foreign_resources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DAY37_ACCOUNT_ID", "123456789012")
     monkeypatch.setenv("DAY37_CLUSTER", "cv-ota-staging")
     monkeypatch.setenv("DAY37_SERVICE", "cv-ota-staging-api")
@@ -90,7 +91,7 @@ def test_recovery_blocks_foreign_resources(tmp_path: Path, monkeypatch):
         aws.recover(p, tmp_path / "recovery.json")
 
 
-def test_no_healthy_baseline_means_manual_recovery(tmp_path: Path, monkeypatch):
+def test_no_healthy_baseline_means_manual_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DAY37_ACCOUNT_ID", "123456789012")
     monkeypatch.setenv("DAY37_CLUSTER", "cv-ota-staging")
     monkeypatch.setenv("DAY37_SERVICE", "cv-ota-staging-api")
@@ -113,7 +114,7 @@ def test_no_healthy_baseline_means_manual_recovery(tmp_path: Path, monkeypatch):
         aws.recover(p, tmp_path / "recovery.json")
 
 
-def test_command_does_not_expose_sensitive_subprocess_output(monkeypatch):
+def test_command_does_not_expose_sensitive_subprocess_output(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         aws.subprocess,
         "run",

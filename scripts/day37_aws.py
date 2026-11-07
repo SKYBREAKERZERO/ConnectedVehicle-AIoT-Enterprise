@@ -15,10 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-try:
-    from scripts.day37_gate import DIGEST, PRODUCTION_FALSE, SHA, dump, strict_load
-except ModuleNotFoundError:  # runnable directly from project root only
-    from day37_gate import DIGEST, PRODUCTION_FALSE, SHA, dump, strict_load
+from scripts.day37_gate import DIGEST, PRODUCTION_FALSE, SHA, dump, strict_load
 
 REGION = "ap-northeast-1"
 REPO = "SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise"

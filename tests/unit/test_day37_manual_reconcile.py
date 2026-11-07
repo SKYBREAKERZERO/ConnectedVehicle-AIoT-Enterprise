@@ -8,7 +8,7 @@ from scripts import day37_plan_transport as t
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_manual_reconcile_workflow_stays_separate_protected_environment():
+def test_manual_reconcile_workflow_stays_separate_protected_environment() -> None:
     w = yaml.safe_load((ROOT / ".github/workflows/day37-reconcile.yml").read_text())
     assert w["jobs"]["reconcile"]["environment"] == "aws-staging-recovery"
     assert w["concurrency"]["group"] == "day37-aws-staging-exclusive"
@@ -21,7 +21,7 @@ def test_manual_reconcile_workflow_stays_separate_protected_environment():
     assert 'terraform -chdir="${DAY37_TF_ROOT}" apply' not in body
 
 
-def test_manual_closure_wrong_role_fails_before_s3(monkeypatch, tmp_path):
+def test_manual_closure_wrong_role_fails_before_s3(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("GITHUB_SHA", "a" * 40)
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")

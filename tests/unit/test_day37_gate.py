@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import json
 from pathlib import Path
 
@@ -11,9 +13,9 @@ COMMIT = "a" * 40
 DIGEST = "sha256:" + "b" * 64
 
 
-def make_plan(enabled: bool = False, digest: str | None = None):
+def make_plan(enabled: bool = False, digest: str | None = None) -> dict[str, Any]:
     variables = {"enable_service": {"value": enabled}, "image_digest": {"value": digest}}
-    data = {
+    data: dict[str, Any] = {
         "variables": variables,
         "resource_changes": [
             {
@@ -36,13 +38,13 @@ def make_plan(enabled: bool = False, digest: str | None = None):
     return data
 
 
-def test_plan_only_with_no_service_is_valid():
+def test_plan_only_with_no_service_is_valid() -> None:
     p = gate.plan_check(make_plan())
     assert p["decision"] == "NON_DESTRUCTIVE_TERRAFORM_PLAN"
     assert p["release_authorized"] is False
 
 
-def test_digest_deployment_must_match_exact_task():
+def test_digest_deployment_must_match_exact_task() -> None:
     p = gate.plan_check(make_plan(True, DIGEST), expected_digest=DIGEST)
     assert p["service_enabled"] is True
 
@@ -50,7 +52,7 @@ def test_digest_deployment_must_match_exact_task():
 @pytest.mark.parametrize(
     "actions", [["delete"], ["delete", "create"], ["replace"], ["create", "delete"], []]
 )
-def test_destructive_or_unknown_actions_blocked(actions):
+def test_destructive_or_unknown_actions_blocked(actions: list[str]) -> None:
     p = make_plan()
     p["resource_changes"][0]["change"]["actions"] = actions
     with pytest.raises(ValueError):
@@ -67,9 +69,9 @@ def test_destructive_or_unknown_actions_blocked(actions):
         "plan-mode-service-enabled",
     ],
 )
-def test_plan_rejects_invalid_registry_identity(mutation):
+def test_plan_rejects_invalid_registry_identity(mutation: str) -> None:
     p = make_plan(True, DIGEST)
-    expected = DIGEST
+    expected: str | None = DIGEST
     if mutation == "wrong-digest":
         expected = "sha256:" + "c" * 64
     elif mutation == "mutable-image":
@@ -86,12 +88,12 @@ def test_plan_rejects_invalid_registry_identity(mutation):
         gate.plan_check(p, expected_digest=expected)
 
 
-def test_dag_missing_node_denied():
+def test_dag_missing_node_denied() -> None:
     with pytest.raises(ValueError):
         gate.final("audit", {"source": {"result": "success"}}, Path("unused"), COMMIT, "123", "1")
 
 
-def test_audit_mode_requires_every_other_job_skipped():
+def test_audit_mode_requires_every_other_job_skipped() -> None:
     names = [
         "source",
         "admission",
@@ -128,7 +130,7 @@ def test_audit_mode_requires_every_other_job_skipped():
         "deploy_plan",
     ],
 )
-def test_failures_never_promote(job):
+def test_failures_never_promote(job: str) -> None:
     required = {"source", "admission", "publish", "deploy", "verify", "deploy_plan", "close"}
     names = {
         "source",
@@ -148,7 +150,7 @@ def test_failures_never_promote(job):
         gate.final("deploy", needs, Path("unused"), COMMIT, "123", "1")
 
 
-def test_main_only_and_sha_admission(monkeypatch):
+def test_main_only_and_sha_admission(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_REF", "refs/pull/15/merge")
     monkeypatch.setenv("GITHUB_SHA", COMMIT)
@@ -157,14 +159,14 @@ def test_main_only_and_sha_admission(monkeypatch):
         gate.admission(COMMIT)
 
 
-def test_strict_json_rejects_duplicate_keys(tmp_path):
+def test_strict_json_rejects_duplicate_keys(tmp_path: Path) -> None:
     path = tmp_path / "fake.json"
     path.write_text('{"decision":"PASS","decision":"BLOCKED"}')
     with pytest.raises(ValueError, match="Duplicate"):
         gate.strict_load(path)
 
 
-def test_latest_failed_upstream_blocks_even_if_old_success():
+def test_latest_failed_upstream_blocks_even_if_old_success() -> None:
     rows = []
     for i, path in enumerate(sorted(gate.REQUIRED_WORKFLOWS)):
         rows.append(
@@ -187,7 +189,7 @@ def test_latest_failed_upstream_blocks_even_if_old_success():
         gate.choose_runs(rows, COMMIT)
 
 
-def test_main_ruleset_bypass_fails_closed():
+def test_main_ruleset_bypass_fails_closed() -> None:
     rules = {
         "target": "branch",
         "enforcement": "active",

@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/day37-aws-staging.yml"
 
 
-def test_workflow_dag():
+def test_workflow_dag() -> None:
     d = yaml.safe_load(WORKFLOW.read_text())
     jobs = d["jobs"]
     assert set(jobs) == {
@@ -32,7 +32,7 @@ def test_workflow_dag():
     assert jobs["gate"]["if"] == "${{ always() }}"
 
 
-def test_aws_oidc_only_on_environment_protected_jobs():
+def test_aws_oidc_only_on_environment_protected_jobs() -> None:
     d = yaml.safe_load(WORKFLOW.read_text())
     for name in ("source", "admission", "gate"):
         assert "id-token" not in d["jobs"][name].get("permissions", {})
@@ -53,7 +53,7 @@ def test_aws_oidc_only_on_environment_protected_jobs():
     assert "id-token" not in d["permissions"]
 
 
-def test_no_unpinned_external_actions_or_merge_keys():
+def test_no_unpinned_external_actions_or_merge_keys() -> None:
     text = WORKFLOW.read_text()
     assert "<<:" not in text
     d = yaml.safe_load(text)
@@ -65,7 +65,7 @@ def test_no_unpinned_external_actions_or_merge_keys():
     assert "|| :" not in text
 
 
-def test_exact_source_identity_and_safe_mode_default():
+def test_exact_source_identity_and_safe_mode_default() -> None:
     d = yaml.safe_load(WORKFLOW.read_text())
     inputs = d["on"]["workflow_dispatch"]["inputs"]
     assert inputs["mode"]["default"] == "audit"

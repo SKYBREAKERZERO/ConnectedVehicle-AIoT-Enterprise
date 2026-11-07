@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from typing import Any
+
 import json
 
 import pytest
@@ -13,7 +17,7 @@ DIGEST = "sha256:" + "b" * 64
 URI = "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cv-ota-staging/vehicle-api@" + DIGEST
 
 
-def make(tmp):
+def make(tmp: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     needs = {
         name: {
             "result": "success"
@@ -85,7 +89,7 @@ def make(tmp):
     return needs, files
 
 
-def test_closure_gate_passes_only_fully_bound_immutable_image(tmp_path):
+def test_closure_gate_passes_only_fully_bound_immutable_image(tmp_path: Path) -> None:
     needs, _ = make(tmp_path)
     assert (
         g.final("deploy", needs, tmp_path, SHA, "123", "1")["decision"]
@@ -93,14 +97,14 @@ def test_closure_gate_passes_only_fully_bound_immutable_image(tmp_path):
     )
 
 
-def test_missing_closure_blocks(tmp_path):
+def test_missing_closure_blocks(tmp_path: Path) -> None:
     needs, _ = make(tmp_path)
     (tmp_path / "close/closed.json").unlink()
     with pytest.raises(ValueError):
         g.final("deploy", needs, tmp_path, SHA, "123", "1")
 
 
-def test_foreign_task_digest_blocks(tmp_path):
+def test_foreign_task_digest_blocks(tmp_path: Path) -> None:
     needs, files = make(tmp_path)
     p = tmp_path / "verify/verified.json"
     d = json.loads(p.read_text())
@@ -110,7 +114,7 @@ def test_foreign_task_digest_blocks(tmp_path):
         g.final("deploy", needs, tmp_path, SHA, "123", "1")
 
 
-def test_recovery_result_does_not_unblock_failed_release(tmp_path):
+def test_recovery_result_does_not_unblock_failed_release(tmp_path: Path) -> None:
     needs, _ = make(tmp_path)
     needs["deploy"]["result"] = "failure"
     needs["verify"]["result"] = "skipped"

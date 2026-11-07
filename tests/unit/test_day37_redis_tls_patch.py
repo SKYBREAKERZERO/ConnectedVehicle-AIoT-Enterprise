@@ -3,7 +3,7 @@ import pytest
 from scripts.day37_apply_redis_tls import transform_client, transform_settings
 
 
-def test_setting_patch_has_tls_and_auth_fail_closed():
+def test_setting_patch_has_tls_and_auth_fail_closed() -> None:
     text = """from x import y
     redis_host: str = Field(default="localhost", min_length=1)
     def validate_runtime_contracts(self) -> Settings:
@@ -15,7 +15,7 @@ def test_setting_patch_has_tls_and_auth_fail_closed():
     assert transform_settings(out) == out
 
 
-def test_client_has_verified_cert_connection():
+def test_client_has_verified_cert_connection() -> None:
     text = """from redis.asyncio import ConnectionPool, Redis
     pool = ConnectionPool(
         host=settings.redis_host,
@@ -26,6 +26,6 @@ def test_client_has_verified_cert_connection():
     assert transform_client(out) == out
 
 
-def test_unknown_client_rejected():
+def test_unknown_client_rejected() -> None:
     with pytest.raises(ValueError, match="anchors changed"):
         transform_client("pool = redis.Redis()")

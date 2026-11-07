@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import copy
 
 import pytest
@@ -109,7 +111,7 @@ def test_app_oidc_is_not_github_oidc() -> None:
 
 def test_live_aws_resources_bind_exact_account_and_vpc(monkeypatch: pytest.MonkeyPatch) -> None:
     e = env("deploy")
-    results = {
+    results: dict[str, Any] = {
         "sts": {
             "Account": e["DAY37_ACCOUNT_ID"],
             "Arn": "arn:aws:sts::123456789012:assumed-role/cv-ota-staging-deploy/gh-run-1",
@@ -183,7 +185,7 @@ def test_live_aws_resources_bind_exact_account_and_vpc(monkeypatch: pytest.Monke
         "describe-clusters": {"clusters": [{"status": "ACTIVE"}]},
     }
 
-    def fake(*args: str) -> dict:
+    def fake(*args: str) -> dict[str, Any]:
         if args[1] == "describe-secret" and args[3] == e["TF_VAR_redis_auth_secret_arn"]:
             return {
                 "ARN": e["TF_VAR_redis_auth_secret_arn"],
