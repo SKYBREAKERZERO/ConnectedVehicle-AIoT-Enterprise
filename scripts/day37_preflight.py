@@ -99,6 +99,7 @@ def config(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
             "DAY37_BACKEND_KEY",
             "DAY37_BACKEND_KMS_ARN",
             "TF_VAR_aws_account_id",
+            "TF_VAR_data_kms_key_arn",
             "TF_VAR_vpc_id",
             "TF_VAR_private_subnet_ids",
             "TF_VAR_alb_security_group_id",
@@ -124,6 +125,15 @@ def config(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
             rf"arn:aws:kms:{REGION}:{account}:key/[A-Za-z0-9-]+", env["DAY37_BACKEND_KMS_ARN"]
         ):
             raise ValueError("BLOCKED: foreign or invalid backend KMS key")
+        data_key = env["TF_VAR_data_kms_key_arn"]
+        if (
+            not re.fullmatch(
+                rf"arn:aws:kms:{REGION}:{account}:key/[A-Za-z0-9-]+", data_key
+            )
+            or data_key == env["DAY37_BACKEND_KMS_ARN"]
+        ):
+            raise ValueError("BLOCKED: dedicated same-account data KMS key required")
+        result["data_kms_key"] = data_key
         if not VPC.fullmatch(env["TF_VAR_vpc_id"]):
             raise ValueError("BLOCKED: invalid VPC ID")
         for key in (
@@ -247,6 +257,16 @@ def live(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
         )
     # Only read-only calls; no provisioning and no secret VALUE reads.
     if mode in {"plan", "bootstrap", "deploy"}:
+        data_key = aws_json("kms", "describe-key", "--key-id", c["data_kms_key"]).get(
+            "KeyMetadata", {}
+        )
+        if (
+            data_key.get("Arn") != c["data_kms_key"]
+            or data_key.get("KeyManager") != "CUSTOMER"
+            or data_key.get("KeyState") != "Enabled"
+            or data_key.get("KeyUsage") != "ENCRYPT_DECRYPT"
+        ):
+            raise ValueError("BLOCKED: reviewed customer-managed data KMS key unavailable")
         vpcs = aws_json("ec2", "describe-vpcs", "--vpc-ids", c["vpc"]).get("Vpcs", [])
         if (
             len(vpcs) != 1

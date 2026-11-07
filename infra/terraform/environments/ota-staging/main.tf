@@ -12,7 +12,8 @@ resource "aws_ecr_repository" "api" {
   }
 
   encryption_configuration {
-    encryption_type = "AES256"
+    encryption_type = "KMS"
+    kms_key         = var.data_kms_key_arn
   }
 
   lifecycle {
@@ -34,7 +35,8 @@ resource "aws_ecs_cluster" "staging" {
 
 resource "aws_cloudwatch_log_group" "api" {
   name              = "/ecs/${local.label}/api"
-  retention_in_days = 30
+  retention_in_days = 365
+  kms_key_id        = var.data_kms_key_arn
   lifecycle {
     prevent_destroy = true
   }

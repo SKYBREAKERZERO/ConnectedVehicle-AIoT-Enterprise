@@ -31,6 +31,9 @@ def env(mode: str = "deploy") -> dict[str, str]:
         ),
         "TF_VAR_aws_account_id": account,
         "TF_VAR_aws_region": "ap-northeast-1",
+        "TF_VAR_data_kms_key_arn": (
+            f"arn:aws:kms:ap-northeast-1:{account}:key/eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+        ),
         "TF_VAR_vpc_id": "vpc-12345678",
         "TF_VAR_private_subnet_ids": '["subnet-12345678", "subnet-87654321"]',
         "TF_VAR_alb_security_group_id": "sg-12345678",
@@ -81,6 +84,7 @@ def test_each_role_is_mode_specific(mode: str) -> None:
         ("TF_VAR_private_subnet_ids", "not-json"),
         ("TF_VAR_private_subnet_ids", '["subnet-12345678"]'),
         ("TF_VAR_alb_security_group_id", ""),
+        ("TF_VAR_data_kms_key_arn", "arn:aws:kms:ap-northeast-1:999999999999:key/foreign"),
         (
             "TF_VAR_application_database_secret_arn",
             "arn:aws:secretsmanager:ap-northeast-1:999999999999:secret:prod",
@@ -123,6 +127,14 @@ def test_live_aws_resources_bind_exact_account_and_vpc(monkeypatch: pytest.Monke
         "sts": {
             "Account": e["DAY37_ACCOUNT_ID"],
             "Arn": "arn:aws:sts::123456789012:assumed-role/cv-ota-staging-deploy/gh-run-1",
+        },
+        "describe-key": {
+            "KeyMetadata": {
+                "Arn": e["TF_VAR_data_kms_key_arn"],
+                "KeyManager": "CUSTOMER",
+                "KeyState": "Enabled",
+                "KeyUsage": "ENCRYPT_DECRYPT",
+            }
         },
         "describe-vpcs": {"Vpcs": [{"VpcId": e["TF_VAR_vpc_id"], "State": "available"}]},
         "describe-subnets": {

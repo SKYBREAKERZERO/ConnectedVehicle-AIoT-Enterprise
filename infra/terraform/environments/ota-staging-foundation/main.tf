@@ -70,6 +70,41 @@ variable "redis_token_version" {
   default = 1
 }
 
+# Every foundation data key must be provisioned and permission-scoped by the
+# independent infrastructure administrator; never share the Terraform State key.
+variable "data_kms_key_arn" {
+  type     = string
+  nullable = false
+  validation {
+    condition     = can(regex("^arn:aws:kms:ap-northeast-1:[0-9]{12}:key/[A-Za-z0-9-]+$", var.data_kms_key_arn)) && split(":", var.data_kms_key_arn)[4] == var.account_id
+    error_message = "Dedicated customer-managed staging data KMS key from the reviewed account required."
+  }
+}
+variable "vpc_flow_log_bucket_arn" {
+  type     = string
+  nullable = false
+  validation {
+    condition     = can(regex("^arn:aws:s3:::[a-z0-9][a-z0-9.-]{3,62}$", var.vpc_flow_log_bucket_arn))
+    error_message = "An independently provisioned private S3 VPC Flow Logs destination is required."
+  }
+}
+variable "alb_access_log_bucket_name" {
+  type     = string
+  nullable = false
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9.-]{3,62}$", var.alb_access_log_bucket_name))
+    error_message = "An independently provisioned private ALB access-log bucket is required."
+  }
+}
+variable "rds_monitoring_role_arn" {
+  type     = string
+  nullable = false
+  validation {
+    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$", var.rds_monitoring_role_arn)) && split(":", var.rds_monitoring_role_arn)[4] == var.account_id
+    error_message = "Reviewed least-privilege RDS Enhanced Monitoring role is required."
+  }
+}
+
 locals {
   prefix  = "cv-ota-staging"
   public  = { for i, az in var.availability_zones : az => cidrsubnet("10.77.0.0/16", 8, i) }
@@ -81,6 +116,18 @@ resource "aws_vpc" "this" {
   enable_dns_support   = true
   lifecycle { prevent_destroy = true }
   tags = { Name = "${local.prefix}-vpc" }
+}
+# The default VPC Security Group is intentionally empty in both directions.
+resource "aws_default_security_group" "deny_all" {
+  vpc_id = aws_vpc.this.id
+}
+# Destination bucket must already permit vpc-flow-logs delivery and use
+# administrator-reviewed retention, encryption, and access controls.
+resource "aws_flow_log" "vpc" {
+  vpc_id               = aws_vpc.this.id
+  traffic_type         = "ALL"
+  log_destination_type = "s3"
+  log_destination      = var.vpc_flow_log_bucket_arn
 }
 resource "aws_internet_gateway" "this" { vpc_id = aws_vpc.this.id }
 resource "aws_subnet" "public" {
@@ -147,6 +194,7 @@ resource "aws_vpc_security_group_ingress_rule" "alb_https" {
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
+  description       = "Approved private HTTPS clients only"
 }
 resource "aws_vpc_security_group_egress_rule" "alb_to_service" {
   security_group_id = aws_security_group.alb.id
@@ -154,6 +202,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_service" {
   ip_protocol       = "tcp"
   from_port         = 8000
   to_port           = 8000
+  description       = "Internal ALB to private OTA API port only"
 }
 resource "aws_security_group" "postgres" {
   name        = "${local.prefix}-postgres"
@@ -173,6 +222,11 @@ resource "aws_lb" "internal" {
   subnets                    = [for s in aws_subnet.private : s.id]
   enable_deletion_protection = true
   drop_invalid_header_fields = true
+  access_logs {
+    bucket  = var.alb_access_log_bucket_name
+    prefix  = "cv-ota-staging/alb"
+    enabled = true
+  }
   lifecycle { prevent_destroy = true }
 }
 resource "aws_lb_target_group" "api" {
@@ -206,6 +260,20 @@ resource "aws_db_subnet_group" "postgres" {
   name       = "${local.prefix}-postgres"
   subnet_ids = [for s in aws_subnet.private : s.id]
 }
+# Staging stores limited-duration SQL evidence; separate KMS-protected RDS
+# CloudWatch exports and access policies are required before Foundation Apply.
+resource "aws_db_parameter_group" "postgres" {
+  name   = "cv-ota-staging-postgres-logging"
+  family = "postgres17"
+  parameter {
+    name  = "log_statement"
+    value = "ddl"
+  }
+  parameter {
+    name  = "log_min_duration_statement"
+    value = "1000"
+  }
+}
 resource "aws_db_instance" "postgres" {
   identifier                  = "${local.prefix}-postgres"
   engine                      = "postgres"
@@ -215,6 +283,14 @@ resource "aws_db_instance" "postgres" {
   max_allocated_storage       = 150
   storage_type                = "gp3"
   storage_encrypted           = true
+  kms_key_id                  = var.data_kms_key_arn
+  parameter_group_name        = aws_db_parameter_group.postgres.name
+  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+  monitoring_interval         = 60
+  monitoring_role_arn         = var.rds_monitoring_role_arn
+  iam_database_authentication_enabled = true
+  performance_insights_enabled = true
+  performance_insights_kms_key_id = var.data_kms_key_arn
   db_name                     = "connected_vehicle"
   username                    = "staging_rds_admin"
   manage_master_user_password = true
@@ -245,6 +321,7 @@ resource "aws_elasticache_replication_group" "redis" {
   multi_az_enabled           = true
   at_rest_encryption_enabled = true
   transit_encryption_enabled = true
+  kms_key_id                 = var.data_kms_key_arn
   auth_token_wo              = var.redis_auth_token
   auth_token_wo_version      = var.redis_token_version
   subnet_group_name          = aws_elasticache_subnet_group.redis.name
@@ -254,6 +331,7 @@ resource "aws_elasticache_replication_group" "redis" {
 }
 # Secret metadata only: write no application database credentials to Terraform state.
 resource "aws_secretsmanager_secret" "application" {
+  kms_key_id              = var.data_kms_key_arn
   name                    = "/connected-vehicle/staging/database/application"
   description             = "Empty metadata until separately approved app_user RLS bootstrap creates secret VERSION"
   recovery_window_in_days = 30
@@ -276,6 +354,7 @@ output "foundation_release_authorized" { value = false }
 
 # Admin must populate AWSCURRENT with EXACT redis_auth_token source independently.
 resource "aws_secretsmanager_secret" "redis_auth" {
+  kms_key_id              = var.data_kms_key_arn
   name                    = "/connected-vehicle/staging/redis/auth"
   description             = "Metadata only: actual Redis token version is added by privileged administrator"
   recovery_window_in_days = 30

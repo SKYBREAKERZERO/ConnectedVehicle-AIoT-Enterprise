@@ -201,3 +201,15 @@ variable "redis_auth_secret_arn" {
     error_message = "Require an exact same-region AWS Redis auth secret ARN."
   }
 }
+
+# Separately provisioned CMK for ECR and application log encryption.
+# Key policies must grant ECR and logs service principals required usage.
+variable "data_kms_key_arn" {
+  type        = string
+  nullable    = false
+  description = "Exact customer-managed Staging data encryption KMS key, not Terraform State key."
+  validation {
+    condition     = can(regex("^arn:aws:kms:ap-northeast-1:[0-9]{12}:key/[A-Za-z0-9-]+$", var.data_kms_key_arn)) && split(":", var.data_kms_key_arn)[4] == var.aws_account_id
+    error_message = "Real same-account Tokyo CMK ARN required for ECR and CloudWatch Logs."
+  }
+}

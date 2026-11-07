@@ -56,6 +56,7 @@ jobs:
       TF_IN_AUTOMATION: 'true'
       TF_VAR_aws_account_id: ${{ vars.DAY37_ACCOUNT_ID }}
       TF_VAR_aws_region: ap-northeast-1
+      TF_VAR_data_kms_key_arn: ${{ vars.DAY37_DATA_KMS_ARN }}
       TF_VAR_vpc_id: ${{ vars.DAY37_VPC_ID }}
       TF_VAR_private_subnet_ids: ${{ vars.DAY37_PRIVATE_SUBNET_IDS_JSON }}
       TF_VAR_alb_security_group_id: ${{ vars.DAY37_ALB_SG_ID }}
