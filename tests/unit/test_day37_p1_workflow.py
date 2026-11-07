@@ -1,5 +1,6 @@
 """High-risk DAG + saved-plan/integrity/read-only checks."""
 
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -69,8 +70,7 @@ def test_plan_check_scope_refuses_iam_updates() -> None:
 
 def test_foundation_requires_private_alb_and_encryption() -> None:
     text = (ROOT / "infra/terraform/environments/ota-staging-foundation/main.tf").read_text()
-    assert "internal = true" in text
-    assert "manage_master_user_password = true" in text
-    assert "transit_encryption_enabled = true" in text
+    for key in ("internal", "manage_master_user_password", "transit_encryption_enabled"):
+        assert re.search(rf"(?m)^\\s*{key}\\s*=\\s*true\\s*$", text) is not None
     assert "auth_token_wo" in text
     assert 'oidc_application_provisioned" { value = false' in text

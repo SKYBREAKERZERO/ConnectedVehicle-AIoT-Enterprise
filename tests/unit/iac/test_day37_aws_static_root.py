@@ -24,6 +24,9 @@ def test_static_aws_root_never_uses_backend_or_plan(
     root_name: str,
     variable: str,
 ) -> None:
+    # The runtime toolchain excludes the IaC-only HCL parser; IaC CI
+    # installs it and runs this same test against the real parser.
+    pytest.importorskip("hcl2", reason="Requires pinned IaC HCL parser; exercised in IaC CI")
     root = tmp_path / "environments" / root_name
     root.mkdir(parents=True)
     (root / ".terraform.lock.hcl").write_text("# committed lock\n")
@@ -68,6 +71,9 @@ def test_static_aws_root_rejects_trust_boundary_mutations(
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
 ) -> None:
+    # Missing-lock and path-isolation checks don't need the HCL parser.
+    if mutation not in {"missing-lock", "unlisted-root"}:
+        pytest.importorskip("hcl2", reason="Requires pinned IaC HCL parser; exercised in IaC CI")
     root = tmp_path / "environments" / ("foreign" if mutation == "unlisted-root" else "ota-staging")
     root.mkdir(parents=True)
     if mutation != "missing-lock":
