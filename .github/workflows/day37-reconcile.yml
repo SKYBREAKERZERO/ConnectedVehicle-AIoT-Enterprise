@@ -1,0 +1,157 @@
+name: Day37 manual AWS Staging Terraform recovery reconciliation
+'on':
+  workflow_dispatch:
+    inputs:
+      release_commit:
+        description: Current protected-main HEAD (40-hex)
+        required: true
+        type: string
+      prior_commit:
+        description: Failed Day37 deployment commit SHA from durable fence
+        required: true
+        type: string
+      prior_run_id:
+        description: Failed Day37 GitHub Run ID from durable fence
+        required: true
+        type: string
+      prior_attempt:
+        description: Failed Day37 run attempt from durable fence
+        required: true
+        type: string
+      approved_image_digest:
+        description: Reconciled signed ECR manifest sha256 digest currently running in ECS
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: day37-aws-staging-exclusive
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  reconcile:
+    name: Independently verify restored running tasks and zero Terraform drift; close fence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: aws-staging-recovery
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DAY37_ROLE_ARN: ${{ vars.DAY37_RECOVERY_ROLE_ARN }}
+      DAY37_ACCOUNT_ID: ${{ vars.DAY37_ACCOUNT_ID }}
+      DAY37_BACKEND_BUCKET: ${{ vars.DAY37_BACKEND_BUCKET }}
+      DAY37_BACKEND_KEY: ${{ vars.DAY37_BACKEND_KEY }}
+      DAY37_BACKEND_KMS_ARN: ${{ vars.DAY37_BACKEND_KMS_ARN }}
+      DAY37_PLAN_BUCKET: ${{ vars.DAY37_PLAN_BUCKET }}
+      DAY37_PLAN_PREFIX: ${{ vars.DAY37_PLAN_PREFIX }}
+      DAY37_PLAN_KMS_ARN: ${{ vars.DAY37_PLAN_KMS_ARN }}
+      DAY37_CLUSTER: ${{ vars.DAY37_CLUSTER }}
+      DAY37_SERVICE: ${{ vars.DAY37_SERVICE }}
+      DAY37_ECR_REPOSITORY: ${{ vars.DAY37_ECR_REPOSITORY }}
+      DAY37_ALB_TARGET_GROUP_ARN: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      DAY37_TF_ROOT: infra/terraform/environments/ota-staging
+      TF_IN_AUTOMATION: 'true'
+      TF_VAR_aws_account_id: ${{ vars.DAY37_ACCOUNT_ID }}
+      TF_VAR_aws_region: ap-northeast-1
+      TF_VAR_vpc_id: ${{ vars.DAY37_VPC_ID }}
+      TF_VAR_private_subnet_ids: ${{ vars.DAY37_PRIVATE_SUBNET_IDS_JSON }}
+      TF_VAR_alb_security_group_id: ${{ vars.DAY37_ALB_SG_ID }}
+      TF_VAR_database_security_group_id: ${{ vars.DAY37_DATABASE_SG_ID }}
+      TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
+      TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_redis_auth_secret_arn: ${{ vars.DAY37_REDIS_AUTH_SECRET_ARN }}
+      TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
+      TF_VAR_redis_host: ${{ vars.DAY37_REDIS_HOST }}
+      TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
+      TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
+      TF_VAR_oidc_audience: ${{ vars.DAY37_APP_OIDC_AUDIENCE }}
+      RECONCILE_COMMIT: ${{ inputs.release_commit }}
+      RECONCILE_PRIOR_COMMIT: ${{ inputs.prior_commit }}
+      RECONCILE_PRIOR_RUN: ${{ inputs.prior_run_id }}
+      RECONCILE_PRIOR_ATTEMPT: ${{ inputs.prior_attempt }}
+      RECONCILE_DIGEST: ${{ inputs.approved_image_digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: '1.14.7'
+          terraform_wrapper: false
+      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
+        with:
+          cosign-release: 'v2.6.0'
+      - name: Validate exact main SHA and guarded recovery role before OIDC
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m scripts.day37_preflight config --mode recovery
+          [[ "$GITHUB_SHA" == "$RECONCILE_COMMIT" && "$RECONCILE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RECONCILE_PRIOR_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RECONCILE_PRIOR_RUN" =~ ^[0-9]+$ && "$RECONCILE_PRIOR_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$RECONCILE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          HEAD=$(gh api repos/SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise/branches/main --jq .commit.sha)
+          [[ "$HEAD" == "$GITHUB_SHA" ]] || { echo 'BLOCKED: main head changed'; exit 1; }
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          aws-region: ap-northeast-1
+          role-to-assume: ${{ env.DAY37_ROLE_ARN }}
+          role-session-name: day37-reconcile-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 1800
+      - name: Confirm actual Recovery Role and target ECS cluster
+        run: python -m scripts.day37_preflight live --mode recovery
+      - name: Independently verify active fence, signed old Digest, healthy tasks and Terraform no-drift
+        run: |
+          set -euo pipefail
+          mkdir -p .day37/manual
+          python -m scripts.day37_plan_transport read-fence --output .day37/manual/fence.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          x = json.loads(Path('.day37/manual/fence.json').read_text())
+          for key, env in [('commit','RECONCILE_PRIOR_COMMIT'),('run_id','RECONCILE_PRIOR_RUN'),('run_attempt','RECONCILE_PRIOR_ATTEMPT')]:
+              if str(x.get(key)) != os.environ[env]:
+                  raise SystemExit('BLOCKED: provided prior failure does not match active fence')
+          PY
+          URI="${DAY37_ACCOUNT_ID}.dkr.ecr.ap-northeast-1.amazonaws.com/${DAY37_ECR_REPOSITORY}@${RECONCILE_DIGEST}"
+          aws ecr describe-images --repository-name "$DAY37_ECR_REPOSITORY" --image-ids "imageDigest=$RECONCILE_DIGEST" --region ap-northeast-1 >/dev/null
+          cosign verify --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/day37-aws-staging.yml@refs/heads/main" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' "$URI" >/dev/null
+          python -m scripts.day37_aws verify --image-uri "$URI" --desired 2 --output .day37/manual/verified.json
+          bash scripts/day37_tf.sh init
+          export TF_VAR_enable_service=true TF_VAR_desired_count=2 TF_VAR_image_digest="$RECONCILE_DIGEST"
+          set +e
+          terraform -chdir="${DAY37_TF_ROOT}" plan -detailed-exitcode -input=false -lock-timeout=30s -no-color -out="${PWD}/.day37/manual/zero-drift.tfplan" > .day37/manual/terraform-private.log 2>&1
+          RESULT=$?
+          set -e
+          [[ "$RESULT" -eq 0 ]] || { echo 'BLOCKED: Terraform declarations/state still drift; separate approved repair required'; exit 1; }
+          python -m scripts.day37_plan_transport close-fence --verified --manual \
+            --prior-commit "$RECONCILE_PRIOR_COMMIT" --prior-run-id "$RECONCILE_PRIOR_RUN" --prior-attempt "$RECONCILE_PRIOR_ATTEMPT" \
+            --receipt .day37/manual/fence.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('.day37/manual/reconciliation.json').write_text(json.dumps({
+              'decision':'MANUAL_TERRAFORM_RECONCILED_FENCE_CLOSED',
+              'commit':os.environ['GITHUB_SHA'], 'run_id':os.environ['GITHUB_RUN_ID'],
+              'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'], 'previous_run_id':os.environ['RECONCILE_PRIOR_RUN'],
+              'restored_registry_digest':os.environ['RECONCILE_DIGEST'],
+              'production_authorized':False, 'release_authorized':False
+          },indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() }}
+        with:
+          name: day37-reconciliation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day37/manual/reconciliation.json
+          if-no-files-found: warn
+          retention-days: 30

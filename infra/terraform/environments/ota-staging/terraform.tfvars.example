@@ -1,0 +1,25 @@
+# COPY to a private, UNTRACKED staging.tfvars after formal AWS staging approval.
+# THESE ARE DELIBERATE PLACEHOLDERS. NEVER APPLY WITH PLACEHOLDERS.
+aws_account_id                  = "000000000000"
+aws_region                      = "ap-northeast-1"
+name_prefix                     = "cv-ota-staging"
+vpc_id                          = "vpc-00000000000000000"
+private_subnet_ids              = ["subnet-00000000000000001", "subnet-00000000000000002"]
+alb_security_group_id           = "sg-00000000000000001"
+database_security_group_id      = "sg-00000000000000002"
+redis_security_group_id         = "sg-00000000000000003"
+application_database_secret_arn = "arn:aws:secretsmanager:ap-northeast-1:000000000000:secret:cv/staging/app-db-EXAMPLE"
+database_kms_key_arn            = null
+tenant_id                       = "REPLACE_WITH_ACTUAL_TENANT"
+redis_host                      = "redis.staging.internal.invalid"
+oidc_issuer                     = "https://issuer.example.invalid"
+oidc_jwks_url                   = "https://issuer.example.invalid/.well-known/jwks.json"
+oidc_audience                   = "REPLACE_WITH_ACTUAL_AUDIENCE"
+
+# Strict staging plan-only posture: NO ECS task definition or Service.
+enable_service                  = false
+desired_count                   = 0
+image_digest                    = null
+alb_target_group_arn            = null
+
+redis_auth_secret_arn = "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:/connected-vehicle/staging/redis/auth-EXAMPLE" # replace
