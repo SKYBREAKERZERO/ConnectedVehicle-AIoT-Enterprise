@@ -16,7 +16,7 @@ def source(name: str) -> str:
 def test_isolated_staging_root() -> None:
     assert "backend \"s3\"" in source("versions.tf")
     assert "use_lockfile = true" in source("versions.tf")
-    assert "allowed_account_ids  = [var.aws_account_id]" in source("provider.tf")
+    assert re.search(r"allowed_account_ids\s*=\s*\[var\.aws_account_id\]", source("provider.tf"))
     assert 'Environment = "staging"' in source("provider.tf")
 
 
@@ -57,7 +57,7 @@ def test_service_private_and_failure_rollback() -> None:
         if snippet == '"/health/ready"':
             assert "/health/ready" in main
         else:
-            assert snippet in main
+            assert re.sub(r"[ \t]+", " ", snippet) in re.sub(r"[ \t]+", " ", main)
 
 
 def test_separated_runtime_and_execution_identity() -> None:
