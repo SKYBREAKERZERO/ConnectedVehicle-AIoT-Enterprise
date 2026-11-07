@@ -1,0 +1,25 @@
+module "staging" {
+  registry_kms_key_arn = var.registry_kms_key_arn
+  access_logs_bucket = var.access_logs_bucket
+  source = "../../modules/ota-staging"
+  aws_account_id = var.aws_account_id
+  aws_region = var.aws_region
+  registry_digest = var.registry_digest
+  vpc_id = var.vpc_id
+  private_subnet_ids = var.private_subnet_ids
+  ingress_cidrs = var.ingress_cidrs
+  certificate_arn = var.certificate_arn
+  database_security_group_id = var.database_security_group_id
+  redis_security_group_id = var.redis_security_group_id
+  aws_endpoints_security_group_id = var.aws_endpoints_security_group_id
+  oidc_proxy_security_group_id = var.oidc_proxy_security_group_id
+  s3_prefix_list_id = var.s3_prefix_list_id
+  application_database_secret_arn = var.application_database_secret_arn
+  application_database_kms_key_arn = var.application_database_kms_key_arn
+  logs_kms_key_arn = var.logs_kms_key_arn
+  tenant_id = var.tenant_id
+  redis_host = var.redis_host
+  oidc_issuer = var.oidc_issuer
+  oidc_audience = var.oidc_audience
+  oidc_jwks_url = var.oidc_jwks_url
+}

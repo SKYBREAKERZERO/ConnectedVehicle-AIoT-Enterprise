@@ -1,0 +1,1212 @@
+name: Day37 AWS Staging enterprise release (fail closed)
+'on':
+  pull_request:
+    branches:
+    - main
+  push:
+    branches:
+    - main
+  merge_group: null
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: audit / plan / bootstrap / deploy (only approved Staging changes)
+        required: true
+        type: choice
+        options:
+        - audit
+        - plan
+        - bootstrap
+        - deploy
+        default: audit
+      release_commit:
+        description: Exact 40-char protected-main HEAD for plan/deploy; audit may leave blank
+        type: string
+        required: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: day37-aws-staging-${{ github.event_name == 'workflow_dispatch' && 'exclusive' || github.ref }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  PYTHONUNBUFFERED: '1'
+  TF_IN_AUTOMATION: 'true'
+  DAY37_MODE: ${{ inputs.mode || 'audit' }}
+  DAY37_TF_ROOT: infra/terraform/environments/ota-staging
+jobs:
+  source:
+    name: 01 Static contracts and Terraform configuration (no AWS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      with:
+        terraform_version: 1.14.7
+        terraform_wrapper: false
+    - name: Python, evidence policy, workflow contracts and safe Terraform root
+      run: 'set -euo pipefail
+
+        python -m compileall -q scripts/day37_gate.py scripts/day37_aws.py scripts/day37_preflight.py scripts/day37_release_guard.py scripts/day37_fence.py
+        scripts/day37_reconcile.py scripts/day37_manual_proof.py scripts/day37_bootstrap_manual.py scripts/day37_enterprise_gate.py scripts/day37_approval.py
+        scripts/day37_checkpoint_guard.py scripts/day37_recovery_guard.py
+
+        python -m pytest tests/unit/test_day37_gate.py tests/unit/test_day37_aws.py tests/unit/test_day37_workflow.py tests/unit/test_day37_staging_static.py
+        tests/unit/test_day37_preflight.py tests/unit/test_day37_fence.py tests/unit/test_day37_release_guard_p0.py tests/unit/test_day37_reconcile_p0.py
+        tests/unit/test_day37_manual_proof.py tests/unit/test_day37_bootstrap_manual.py tests/unit/test_day37_enterprise_gate.py tests/unit/test_day37_workflow_enterprise.py
+        tests/unit/test_day37_foundation_patch.py tests/unit/test_day37_approval.py tests/unit/test_day37_recovery_guard.py tests/unit/test_day37_checkpoint_guard.py
+        tests/unit/test_day37_recovery_probe.py tests/unit/test_day37_manual_phase_guard.py tests/unit/test_day37_p1_workflow.py tests/unit/test_day37_manual_reconcile.py
+        tests/unit/test_day37_final_p1.py tests/unit/test_day37_plan_transport.py tests/unit/test_day37_workflow_contexts.py -q
+
+        terraform -chdir="${DAY37_TF_ROOT}" fmt -check -recursive
+
+        terraform -chdir="${DAY37_TF_ROOT}" init -backend=false -input=false
+
+        terraform -chdir="${DAY37_TF_ROOT}" validate -no-color
+
+        '
+  admission:
+    name: 02 Protected-main, source SHA, Day35/Day36 and approval policy
+    needs:
+    - source
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'plan' || inputs.mode == 'bootstrap' || inputs.mode == 'deploy') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    outputs:
+      day36_run_id: ${{ steps.receipt.outputs.day36_run_id }}
+      day36_attempt: ${{ steps.receipt.outputs.day36_attempt }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - name: Fail closed on non-main or missing same-commit upstream success
+      id: receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_COMMIT: ${{ inputs.release_commit }}
+      run: "set -euo pipefail\npython -m scripts.day37_gate admission --commit \"$RELEASE_COMMIT\" --output .day37/admission.json\npython - <<'PY'\n\
+        import json, os\nfrom pathlib import Path\nd = json.loads(Path('.day37/admission.json').read_text())\nwith open(os.environ['GITHUB_OUTPUT'],\
+        \ 'a') as o:\n    o.write('day36_run_id=' + d['day36_run_id'] + '\\n')\n    o.write('day36_attempt=' + d['day36_attempt'] + '\\n')\nPY\n"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-admission-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/admission.json
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+  publish:
+    name: 04 Load verified Day36 candidate TAR, ECR push, Digest + Cosign
+    needs:
+    - source
+    - admission
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' }}
+    environment: aws-staging-publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      DAY37_ROLE_ARN: ${{ vars.DAY37_PUBLISH_ROLE_ARN }}
+      DAY37_ACCOUNT_ID: ${{ vars.DAY37_ACCOUNT_ID }}
+      DAY37_ECR_REPOSITORY: ${{ vars.DAY37_ECR_REPOSITORY }}
+      UPSTREAM_DAY36_RUN_ID: ${{ needs.admission.outputs.day36_run_id }}
+      UPSTREAM_DAY36_ATTEMPT: ${{ needs.admission.outputs.day36_attempt }}
+      DAY37_PLAN_BUCKET: ${{ vars.DAY37_PLAN_BUCKET }}
+      DAY37_PLAN_PREFIX: ${{ vars.DAY37_PLAN_PREFIX }}
+      DAY37_PLAN_KMS_ARN: ${{ vars.DAY37_PLAN_KMS_ARN }}
+      DAY37_BACKEND_KMS_ARN: ${{ vars.DAY37_BACKEND_KMS_ARN }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
+      with:
+        cosign-release: v2.6.0
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day36-staging-${{ needs.admission.outputs.day36_run_id }}-${{ needs.admission.outputs.day36_attempt }}
+        run-id: ${{ needs.admission.outputs.day36_run_id }}
+        github-token: ${{ github.token }}
+        path: .day37/day36-staging
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day36-images-${{ needs.admission.outputs.day36_run_id }}-${{ needs.admission.outputs.day36_attempt }}
+        run-id: ${{ needs.admission.outputs.day36_run_id }}
+        github-token: ${{ github.token }}
+        path: .day37/day36-images
+    - name: Independently authenticate exact TAR and upstream supply/security reports
+      env:
+        UPSTREAM_RUN: ${{ needs.admission.outputs.day36_run_id }}
+        UPSTREAM_ATTEMPT: ${{ needs.admission.outputs.day36_attempt }}
+      run: "set -euo pipefail\nGITHUB_RUN_ID=\"$UPSTREAM_RUN\" GITHUB_RUN_ATTEMPT=\"$UPSTREAM_ATTEMPT\" \\\n  python -m scripts.iac.pipeline_evidence\
+        \ verify --stage day36-staging --folder .day37/day36-staging\nGITHUB_RUN_ID=\"$UPSTREAM_RUN\" GITHUB_RUN_ATTEMPT=\"$UPSTREAM_ATTEMPT\"\
+        \ \\\n  python -m scripts.day36_supply load --folder .day37/day36-staging --archives .day37/day36-images\n"
+    - name: BLOCKED on missing/malformed reviewed publish environment configuration
+      run: python -m scripts.day37_preflight config --mode publish
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+      with:
+        aws-region: ap-northeast-1
+        role-to-assume: ${{ env.DAY37_ROLE_ARN }}
+        role-session-name: day37-publish-${{ github.run_id }}-${{ github.run_attempt }}
+        role-duration-seconds: 1800
+    - name: Verify STS role, AWS account and actual Staging prerequisites (publish)
+      run: python -m scripts.day37_preflight live --mode publish
+    - name: BLOCKED if previous rollback or failed Apply remains unreconciled
+      run: 'set -euo pipefail
+
+        python -m scripts.day37_plan_transport clear-check
+
+        '
+    - name: ECR immutable single-platform manifest, digest readback and keyless signature
+      run: "set -euo pipefail\nmkdir -p .day37/publish\nIMAGE_ID=$(python - <<'PY'\nimport json\nfrom pathlib import Path\np=json.loads(Path('.day37/day36-staging/images.json').read_text())\n\
+        print(p['candidate']['image_digest'])\nPY\n)\npython -m scripts.day37_aws publish --folder .day37/day36-staging \\\n  --image-id \"$IMAGE_ID\"\
+        \ --output .day37/publish/release.json\n"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-publish-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/publish/release.json
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+  plan:
+    name: 03 Read-only or Bootstrap saved Plan (encrypted, versioned S3)
+    needs:
+    - source
+    - admission
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'plan' || inputs.mode == 'bootstrap') }}
+    environment: aws-staging-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DAY37_ROLE_ARN: ${{ vars.DAY37_PLAN_ROLE_ARN }}
+      DAY37_ACCOUNT_ID: ${{ vars.DAY37_ACCOUNT_ID }}
+      DAY37_BACKEND_BUCKET: ${{ vars.DAY37_BACKEND_BUCKET }}
+      DAY37_BACKEND_KEY: ${{ vars.DAY37_BACKEND_KEY }}
+      DAY37_BACKEND_KMS_ARN: ${{ vars.DAY37_BACKEND_KMS_ARN }}
+      TF_VAR_aws_account_id: ${{ vars.DAY37_ACCOUNT_ID }}
+      TF_VAR_aws_region: ap-northeast-1
+      TF_VAR_vpc_id: ${{ vars.DAY37_VPC_ID }}
+      TF_VAR_private_subnet_ids: ${{ vars.DAY37_PRIVATE_SUBNET_IDS_JSON }}
+      TF_VAR_alb_security_group_id: ${{ vars.DAY37_ALB_SG_ID }}
+      TF_VAR_database_security_group_id: ${{ vars.DAY37_DATABASE_SG_ID }}
+      TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
+      TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
+      TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
+      TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
+      TF_VAR_oidc_audience: ${{ vars.DAY37_APP_OIDC_AUDIENCE }}
+      TF_VAR_redis_host: ${{ vars.DAY37_REDIS_HOST }}
+      TF_VAR_redis_auth_secret_arn: ${{ vars.DAY37_REDIS_AUTH_SECRET_ARN }}
+      DAY37_PLAN_BUCKET: ${{ vars.DAY37_PLAN_BUCKET }}
+      DAY37_PLAN_PREFIX: ${{ vars.DAY37_PLAN_PREFIX }}
+      DAY37_PLAN_KMS_ARN: ${{ vars.DAY37_PLAN_KMS_ARN }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      with:
+        terraform_version: 1.14.7
+        terraform_wrapper: false
+    - name: BLOCKED on missing/malformed reviewed plan environment configuration
+      run: python -m scripts.day37_preflight config --mode plan
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+      with:
+        aws-region: ap-northeast-1
+        role-to-assume: ${{ env.DAY37_ROLE_ARN }}
+        role-session-name: day37-plan-${{ github.run_id }}-${{ github.run_attempt }}
+        role-duration-seconds: 900
+    - name: Verify STS role, AWS account and actual Staging prerequisites (plan)
+      run: python -m scripts.day37_preflight live --mode plan
+    - name: Read-only audit or bootstrap Plan; seal exact binary in private S3
+      run: "set -euo pipefail\numask 077\nbash scripts/day37_tf.sh init\nmkdir -p .day37/plan-public .day37/private\nexport TF_VAR_enable_service=false\
+        \ TF_VAR_desired_count=0\nif [[ \"${DAY37_MODE}\" == \"plan\" ]]; then\n  terraform -chdir=\"${DAY37_TF_ROOT}\" plan -refresh-only -input=false\
+        \ -lock-timeout=30s -out=\"${PWD}/.day37/private/audit.tfplan\" -no-color\n  terraform -chdir=\"${DAY37_TF_ROOT}\" show -json \"${PWD}/.day37/private/audit.tfplan\"\
+        \ > .day37/private/plan.json\n  python -m scripts.day37_gate plan-check --phase audit --input .day37/private/plan.json --output .day37/plan-public/plan-summary.json\n\
+        elif [[ \"${DAY37_MODE}\" == \"bootstrap\" ]]; then\n  python -m scripts.day37_plan_transport clear-check\n  terraform -chdir=\"${DAY37_TF_ROOT}\"\
+        \ plan -input=false -lock-timeout=30s -out=\"${PWD}/.day37/private/bootstrap.tfplan\" -no-color\n  terraform -chdir=\"${DAY37_TF_ROOT}\"\
+        \ show -json \"${PWD}/.day37/private/bootstrap.tfplan\" > .day37/private/plan.json\n  python -m scripts.day37_gate plan-check --phase\
+        \ bootstrap --input .day37/private/plan.json --output .day37/plan-public/plan-summary.json\n  python -m scripts.day37_plan_transport store\
+        \ --phase bootstrap --plan .day37/private/bootstrap.tfplan --summary .day37/plan-public/plan-summary.json --output .day37/plan-public/receipt.json\n\
+        else\n  echo \"BLOCKED: invalid plan mode\" >&2\n  exit 1\nfi\n# Sensitive binary/JSON Plans NEVER leave the runner as a GitHub Artifact.\n"
+    - name: Publish reviewer-visible Plan fingerprint
+      id: plan_sha
+      run: "set -euo pipefail\nif [[ \"${DAY37_MODE}\" == \"bootstrap\" ]]; then\n  PLAN_SHA=$(python -c \"import json; print(json.load(open('.day37/plan-public/receipt.json'))['plan_sha256'])\"\
+        )\nelse\n  PLAN_SHA=none\nfi\necho \"plan_sha256=$PLAN_SHA\" >> \"$GITHUB_OUTPUT\"\necho \"Day37 ${DAY37_MODE} Plan SHA-256: ${PLAN_SHA}\"\
+        \ >> \"$GITHUB_STEP_SUMMARY\"\necho \"Review sanitized Plan summary artifact and this SHA before approving the Apply Environment.\" >>\
+        \ \"$GITHUB_STEP_SUMMARY\"\n\nif [[ \"${DAY37_MODE}\" == \"bootstrap\" ]]; then\n  python -m scripts.day37_approval claim --phase bootstrap\
+        \ --receipt .day37/plan-public/receipt.json --output .day37/plan-public/approval-claim.json\n  echo '### Copy this EXACT JSON into the\
+        \ Bootstrap Environment approval comment:' >> \"$GITHUB_STEP_SUMMARY\"\n  echo '```json' >> \"$GITHUB_STEP_SUMMARY\"\n  cat .day37/plan-public/approval-claim.json\
+        \ >> \"$GITHUB_STEP_SUMMARY\"\n  echo '```' >> \"$GITHUB_STEP_SUMMARY\"\nfi\n"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-plan-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/plan-public/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    outputs:
+      plan_sha256: ${{ steps.plan_sha.outputs.plan_sha256 }}
+  bootstrap:
+    name: 03b Approved APPLY of exact bootstrap Plan ${{ needs.plan.outputs.plan_sha256 }}
+    needs:
+    - source
+    - admission
+    - plan
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'bootstrap' }}
+    environment: aws-staging-bootstrap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      DAY37_ROLE_ARN: ${{ vars.DAY37_BOOTSTRAP_ROLE_ARN }}
+      DAY37_ECR_REPOSITORY: ${{ vars.DAY37_ECR_REPOSITORY }}
+      DAY37_CLUSTER: ${{ vars.DAY37_CLUSTER }}
+      DAY37_ACCOUNT_ID: ${{ vars.DAY37_ACCOUNT_ID }}
+      DAY37_BACKEND_BUCKET: ${{ vars.DAY37_BACKEND_BUCKET }}
+      DAY37_BACKEND_KEY: ${{ vars.DAY37_BACKEND_KEY }}
+      DAY37_BACKEND_KMS_ARN: ${{ vars.DAY37_BACKEND_KMS_ARN }}
+      TF_VAR_aws_account_id: ${{ vars.DAY37_ACCOUNT_ID }}
+      TF_VAR_aws_region: ap-northeast-1
+      TF_VAR_vpc_id: ${{ vars.DAY37_VPC_ID }}
+      TF_VAR_private_subnet_ids: ${{ vars.DAY37_PRIVATE_SUBNET_IDS_JSON }}
+      TF_VAR_alb_security_group_id: ${{ vars.DAY37_ALB_SG_ID }}
+      TF_VAR_database_security_group_id: ${{ vars.DAY37_DATABASE_SG_ID }}
+      TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
+      TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
+      TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
+      TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
+      TF_VAR_oidc_audience: ${{ vars.DAY37_APP_OIDC_AUDIENCE }}
+      TF_VAR_redis_host: ${{ vars.DAY37_REDIS_HOST }}
+      TF_VAR_redis_auth_secret_arn: ${{ vars.DAY37_REDIS_AUTH_SECRET_ARN }}
+      DAY37_PLAN_BUCKET: ${{ vars.DAY37_PLAN_BUCKET }}
+      DAY37_PLAN_PREFIX: ${{ vars.DAY37_PLAN_PREFIX }}
+      DAY37_PLAN_KMS_ARN: ${{ vars.DAY37_PLAN_KMS_ARN }}
+      TF_VAR_enable_service: 'false'
+      TF_VAR_desired_count: '0'
+      DAY37_APPROVED_CONFIG_SHA: ${{ vars.DAY37_APPROVED_CONFIG_SHA }}
+      DAY37_APPROVED_PLAN_SHA: ${{ needs.plan.outputs.plan_sha256 }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      with:
+        terraform_version: 1.14.7
+        terraform_wrapper: false
+    - name: BLOCKED on missing/malformed reviewed bootstrap environment configuration
+      run: python -m scripts.day37_preflight config --mode bootstrap
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-plan-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/reviewed-plan
+    - name: Authenticate independent reviewer APPROVAL of exact saved Plan SHA and Policy SHA
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: 'set -euo pipefail
+
+        umask 077
+
+        mkdir -p .day37/bootstrap
+
+        python -m scripts.day37_approval verify --phase bootstrap --receipt .day37/reviewed-plan/receipt.json --output .day37/bootstrap/approval.json
+python -m scripts.day37_preflight config --mode bootstrap
+
+        '
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+      with:
+        aws-region: ap-northeast-1
+        role-to-assume: ${{ env.DAY37_ROLE_ARN }}
+        role-session-name: day37-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+        role-duration-seconds: 900
+    - name: Verify STS role, AWS account and actual Staging prerequisites (bootstrap)
+      run: python -m scripts.day37_preflight live --mode bootstrap
+    - name: Prepare bootstrap evidence directory
+      run: mkdir -p .day37/bootstrap .day37/private
+    - name: Fetch versioned approved Plan, check SHA, apply EXACT bytes (no re-plan)
+      run: 'set -euo pipefail
+
+        umask 077
+
+        bash scripts/day37_tf.sh init
+
+        mkdir -p .day37/bootstrap .day37/private
+
+        python -m scripts.day37_plan_transport fetch --phase bootstrap --receipt .day37/reviewed-plan/receipt.json --summary .day37/reviewed-plan/plan-summary.json
+        --sha256 "$DAY37_APPROVED_PLAN_SHA" --output .day37/private/bootstrap.tfplan
+
+        python -m scripts.day37_release_guard binding --phase bootstrap --receipt .day37/reviewed-plan/receipt.json --summary .day37/reviewed-plan/plan-summary.json
+        --sha256 "$DAY37_APPROVED_PLAN_SHA"
+
+        sha256sum .day37/private/bootstrap.tfplan
+
+        # Durable S3 fence MUST exist before any mutating Terraform Apply.
+
+        python -m scripts.day37_fence mark --phase bootstrap --receipt .day37/reviewed-plan/receipt.json --summary .day37/reviewed-plan/plan-summary.json
+        --output .day37/bootstrap/fence.json
+
+        terraform -chdir="${DAY37_TF_ROOT}" apply -input=false -lock-timeout=30s -no-color "${PWD}/.day37/private/bootstrap.tfplan"
+
+        python -m scripts.day37_aws bootstrap-verify --output .day37/bootstrap/bootstrap.json
+
+        '
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+        path: '.day37/bootstrap/bootstrap.json
+
+          .day37/bootstrap/fence.json
+
+
+          .day37/bootstrap/approval.json'
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    - name: Preserve bootstrap fence for failed/unknown Apply
+      if: ${{ always() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-bootstrap-fence-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/bootstrap/fence.json
+        include-hidden-files: true
+        if-no-files-found: warn
+        retention-days: 30
+  deploy_plan:
+    name: 05 Pre-approved ECS deployment Plan from signed ECR Digest
+    needs:
+    - source
+    - admission
+    - publish
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' }}
+    environment: aws-staging-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      plan_sha256: ${{ steps.receipt.outputs.plan_sha256 }}
+    env:
+      DAY37_ROLE_ARN: ${{ vars.DAY37_PLAN_ROLE_ARN }}
+      DAY37_ACCOUNT_ID: ${{ vars.DAY37_ACCOUNT_ID }}
+      DAY37_BACKEND_BUCKET: ${{ vars.DAY37_BACKEND_BUCKET }}
+      DAY37_BACKEND_KEY: ${{ vars.DAY37_BACKEND_KEY }}
+      DAY37_BACKEND_KMS_ARN: ${{ vars.DAY37_BACKEND_KMS_ARN }}
+      TF_VAR_aws_account_id: ${{ vars.DAY37_ACCOUNT_ID }}
+      TF_VAR_aws_region: ap-northeast-1
+      TF_VAR_vpc_id: ${{ vars.DAY37_VPC_ID }}
+      TF_VAR_private_subnet_ids: ${{ vars.DAY37_PRIVATE_SUBNET_IDS_JSON }}
+      TF_VAR_alb_security_group_id: ${{ vars.DAY37_ALB_SG_ID }}
+      TF_VAR_database_security_group_id: ${{ vars.DAY37_DATABASE_SG_ID }}
+      TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
+      TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
+      TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
+      TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
+      TF_VAR_oidc_audience: ${{ vars.DAY37_APP_OIDC_AUDIENCE }}
+      TF_VAR_redis_host: ${{ vars.DAY37_REDIS_HOST }}
+      TF_VAR_redis_auth_secret_arn: ${{ vars.DAY37_REDIS_AUTH_SECRET_ARN }}
+      DAY37_PLAN_BUCKET: ${{ vars.DAY37_PLAN_BUCKET }}
+      DAY37_PLAN_PREFIX: ${{ vars.DAY37_PLAN_PREFIX }}
+      DAY37_PLAN_KMS_ARN: ${{ vars.DAY37_PLAN_KMS_ARN }}
+      DAY37_ECR_REPOSITORY: ${{ vars.DAY37_ECR_REPOSITORY }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      with:
+        terraform_version: 1.14.7
+        terraform_wrapper: false
+    - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
+      with:
+        cosign-release: v2.6.0
+    - name: Verify Plan IAM environment and exact account configuration
+      run: 'python -m scripts.day37_preflight config --mode plan
+
+        '
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+      with:
+        aws-region: ap-northeast-1
+        role-to-assume: ${{ env.DAY37_ROLE_ARN }}
+        role-session-name: day37-deploy-plan-${{ github.run_id }}-${{ github.run_attempt }}
+        role-duration-seconds: 1800
+    - name: Read-only STS + real resource verification
+      run: 'python -m scripts.day37_preflight live --mode plan
+
+        '
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-publish-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/publish
+    - name: Check intact release and build exact immutable ECS Plan
+      run: 'set -euo pipefail
+
+        python -m scripts.day37_plan_transport clear-check
+
+        bash scripts/day37_tf.sh init
+
+        bash scripts/day37_tf.sh verify-release .day37/publish/release.json
+
+        mkdir -p .day37/plan-public .day37/private
+
+        export TF_VAR_enable_service=true TF_VAR_desired_count=2
+
+        export TF_VAR_image_digest="$(python - <<''PYCODE''
+
+        import json
+
+        from pathlib import Path
+
+        r = json.loads(Path(''.day37/publish/release.json'').read_text())
+
+        assert r[''commit''] == __import__(''os'').environ[''GITHUB_SHA''] and r[''signature_verified''] is True
+
+        print(r[''registry_digest''])
+
+        PYCODE
+
+        )"
+
+        terraform -chdir="${DAY37_TF_ROOT}" plan -input=false -lock-timeout=30s -out="${PWD}/.day37/private/deploy.tfplan" -no-color
+
+        terraform -chdir="${DAY37_TF_ROOT}" show -json "${PWD}/.day37/private/deploy.tfplan" > .day37/private/plan.json
+
+        python -m scripts.day37_gate plan-check --phase deploy --input .day37/private/plan.json --digest "$TF_VAR_image_digest" --output .day37/plan-public/plan-summary.json
+
+        python -m scripts.day37_plan_transport store --phase deploy --plan .day37/private/deploy.tfplan --summary .day37/plan-public/plan-summary.json
+        --output .day37/plan-public/receipt.json
+
+        '
+    - name: Print exact Plan fingerprint for human change approval
+      id: receipt
+      run: 'set -euo pipefail
+
+        SHA=$(python -c "import json; print(json.load(open(''.day37/plan-public/receipt.json''))[''plan_sha256''])")
+
+        echo "plan_sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+        echo "**Reviewed ECS deploy Plan SHA-256:** $SHA" >> "$GITHUB_STEP_SUMMARY"
+
+        echo "Approve only if the subsequent Apply Job displays this same SHA-256." >> "$GITHUB_STEP_SUMMARY"
+
+
+        python -m scripts.day37_approval claim --phase deploy --receipt .day37/plan-public/receipt.json --output .day37/plan-public/approval-claim.json
+
+        echo ''### Copy this EXACT JSON into the Deploy Environment approval comment:'' >> "$GITHUB_STEP_SUMMARY"
+
+        echo ''```json'' >> "$GITHUB_STEP_SUMMARY"
+
+        cat .day37/plan-public/approval-claim.json >> "$GITHUB_STEP_SUMMARY"
+
+        echo ''```'' >> "$GITHUB_STEP_SUMMARY"
+
+        '
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-deploy-plan-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/plan-public/
+        if-no-files-found: error
+        include-hidden-files: true
+        retention-days: 14
+  deploy:
+    name: 06 Approved Apply of exact ECS Plan ${{ needs.deploy_plan.outputs.plan_sha256 }}
+    needs:
+    - source
+    - admission
+    - publish
+    - deploy_plan
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' }}
+    environment: aws-staging-deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      DAY37_ROLE_ARN: ${{ vars.DAY37_DEPLOY_ROLE_ARN }}
+      DAY37_ACCOUNT_ID: ${{ vars.DAY37_ACCOUNT_ID }}
+      DAY37_BACKEND_BUCKET: ${{ vars.DAY37_BACKEND_BUCKET }}
+      DAY37_BACKEND_KEY: ${{ vars.DAY37_BACKEND_KEY }}
+      DAY37_BACKEND_KMS_ARN: ${{ vars.DAY37_BACKEND_KMS_ARN }}
+      TF_VAR_aws_account_id: ${{ vars.DAY37_ACCOUNT_ID }}
+      TF_VAR_aws_region: ap-northeast-1
+      TF_VAR_vpc_id: ${{ vars.DAY37_VPC_ID }}
+      TF_VAR_private_subnet_ids: ${{ vars.DAY37_PRIVATE_SUBNET_IDS_JSON }}
+      TF_VAR_alb_security_group_id: ${{ vars.DAY37_ALB_SG_ID }}
+      TF_VAR_database_security_group_id: ${{ vars.DAY37_DATABASE_SG_ID }}
+      TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
+      TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
+      TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
+      TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
+      TF_VAR_oidc_audience: ${{ vars.DAY37_APP_OIDC_AUDIENCE }}
+      TF_VAR_redis_host: ${{ vars.DAY37_REDIS_HOST }}
+      TF_VAR_redis_auth_secret_arn: ${{ vars.DAY37_REDIS_AUTH_SECRET_ARN }}
+      DAY37_ECR_REPOSITORY: ${{ vars.DAY37_ECR_REPOSITORY }}
+      DAY37_CLUSTER: ${{ vars.DAY37_CLUSTER }}
+      DAY37_SERVICE: ${{ vars.DAY37_SERVICE }}
+      DAY37_ALB_TARGET_GROUP_ARN: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      DAY37_PLAN_BUCKET: ${{ vars.DAY37_PLAN_BUCKET }}
+      DAY37_PLAN_PREFIX: ${{ vars.DAY37_PLAN_PREFIX }}
+      DAY37_PLAN_KMS_ARN: ${{ vars.DAY37_PLAN_KMS_ARN }}
+      DAY37_APPROVED_CONFIG_SHA: ${{ vars.DAY37_APPROVED_CONFIG_SHA }}
+      DAY37_APPROVED_PLAN_SHA: ${{ needs.deploy_plan.outputs.plan_sha256 }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      with:
+        terraform_version: 1.14.7
+        terraform_wrapper: false
+    - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
+      with:
+        cosign-release: v2.6.0
+    - name: BLOCKED on missing/malformed reviewed deploy environment configuration
+      run: python -m scripts.day37_preflight config --mode deploy
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-deploy-plan-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/reviewed-plan
+    - name: Authenticate independent reviewer APPROVAL of exact saved Plan SHA and Policy SHA
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: 'set -euo pipefail
+
+        umask 077
+
+        mkdir -p .day37/deploy
+
+        python -m scripts.day37_approval verify --phase deploy --receipt .day37/reviewed-plan/receipt.json --output .day37/deploy/approval.json
+python -m scripts.day37_preflight config --mode deploy
+
+        '
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+      with:
+        aws-region: ap-northeast-1
+        role-to-assume: ${{ env.DAY37_ROLE_ARN }}
+        role-session-name: day37-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+        role-duration-seconds: 1800
+    - name: Verify STS role, AWS account and actual Staging prerequisites (deploy)
+      run: python -m scripts.day37_preflight live --mode deploy
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-publish-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/publish
+    - name: Prepare protected deployment evidence directories
+      run: mkdir -p .day37/deploy .day37/private .day37/verify
+    - name: Capture healthy previous Task Definition before any mutable action
+      run: 'set -euo pipefail
+
+        python -m scripts.day37_aws checkpoint --output .day37/deploy/checkpoint.json
+
+        '
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/deploy/checkpoint.json
+        if-no-files-found: error
+        include-hidden-files: true
+        retention-days: 14
+    - name: Verify reviewed S3 Plan hash, mark reconciliation fence, Apply without replanning
+      run: 'set -euo pipefail
+
+        umask 077
+
+        bash scripts/day37_tf.sh init
+
+        mkdir -p .day37/private .day37/deploy
+
+        python -m scripts.day37_plan_transport clear-check
+
+        python -m scripts.day37_plan_transport fetch --phase deploy --receipt .day37/reviewed-plan/receipt.json --summary .day37/reviewed-plan/plan-summary.json
+        --sha256 "$DAY37_APPROVED_PLAN_SHA" --output .day37/private/deploy.tfplan
+
+        bash scripts/day37_tf.sh verify-release .day37/publish/release.json
+
+        python -m scripts.day37_release_guard binding --phase deploy --receipt .day37/reviewed-plan/receipt.json --summary .day37/reviewed-plan/plan-summary.json
+        --sha256 "$DAY37_APPROVED_PLAN_SHA" --release .day37/publish/release.json --checkpoint .day37/deploy/checkpoint.json
+
+        python -m scripts.day37_fence mark --phase deploy --receipt .day37/reviewed-plan/receipt.json --summary .day37/reviewed-plan/plan-summary.json
+        --release .day37/publish/release.json --checkpoint .day37/deploy/checkpoint.json --output .day37/deploy/fence.json
+
+        # Once marked, failure/cancel/crash leaves durable S3 fence. No next release until reconciled.
+
+        python -m scripts.day37_checkpoint_guard --checkpoint .day37/deploy/checkpoint.json --output .day37/deploy/checkpoint-unchanged.json
+
+        terraform -chdir="${DAY37_TF_ROOT}" apply -input=false -lock-timeout=30s -no-color "${PWD}/.day37/private/deploy.tfplan"
+
+        aws ecs wait services-stable --cluster "$DAY37_CLUSTER" --services "$DAY37_SERVICE" --region ap-northeast-1
+
+        URI=$(python -c "import json;print(json.load(open(''.day37/publish/release.json''))[''image_uri''])")
+
+        python -m scripts.day37_aws verify --image-uri "$URI" --desired 2 --output .day37/deploy/verified.json
+
+        python - <<''PYCODE''
+
+        import json
+
+        from pathlib import Path
+
+        x = json.loads(Path(''.day37/deploy/verified.json'').read_text())
+
+        r = json.loads(Path(''.day37/publish/release.json'').read_text())
+
+        x[''decision''] = ''ECS_DEPLOYMENT_ACCEPTED''
+
+        x[''registry_digest''] = r[''registry_digest'']
+
+        Path(''.day37/deploy/deployment.json'').write_text(json.dumps(x,indent=2)+''\n'')
+
+        PYCODE
+
+        '
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: ${{ always() && hashFiles('.day37/deploy/fence.json') != '' }}
+      with:
+        name: day37-fence-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/deploy/fence.json
+        if-no-files-found: error
+        include-hidden-files: true
+        retention-days: 14
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: ${{ always() }}
+      with:
+        name: day37-deployment-${{ github.run_id }}-${{ github.run_attempt }}
+        path: '.day37/deploy/deployment.json
+
+          .day37/deploy/approval.json'
+        if-no-files-found: warn
+        include-hidden-files: true
+        retention-days: 14
+  verify:
+    name: 07 Independent ECR + every actual RUNNING ECS Task imageDigest + ALB
+    needs:
+    - source
+    - admission
+    - publish
+    - deploy_plan
+    - deploy
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' }}
+    environment: aws-staging-verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DAY37_ROLE_ARN: ${{ vars.DAY37_VERIFY_ROLE_ARN }}
+      DAY37_ACCOUNT_ID: ${{ vars.DAY37_ACCOUNT_ID }}
+      DAY37_ECR_REPOSITORY: ${{ vars.DAY37_ECR_REPOSITORY }}
+      DAY37_CLUSTER: ${{ vars.DAY37_CLUSTER }}
+      DAY37_SERVICE: ${{ vars.DAY37_SERVICE }}
+      DAY37_ALB_TARGET_GROUP_ARN: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
+      with:
+        cosign-release: v2.6.0
+    - name: BLOCKED on missing/malformed reviewed verify environment configuration
+      run: python -m scripts.day37_preflight config --mode verify
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+      with:
+        aws-region: ap-northeast-1
+        role-to-assume: ${{ env.DAY37_ROLE_ARN }}
+        role-session-name: day37-verify-${{ github.run_id }}-${{ github.run_attempt }}
+        role-duration-seconds: 900
+    - name: Verify STS role, AWS account and actual Staging prerequisites (verify)
+      run: python -m scripts.day37_preflight live --mode verify
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-publish-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/publish
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-deployment-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/deploy
+    - name: Prepare verifier output directory
+      run: mkdir -p .day37/verify
+    - name: Recheck signature, Registry Digest and actual deployed ECS service
+      run: "set -euo pipefail\nbash scripts/day37_tf.sh verify-release .day37/publish/release.json\nURI=$(python -c \"import json;print(json.load(open('.day37/publish/release.json'))['image_uri'])\"\
+        )\npython -m scripts.day37_aws verify --image-uri \"$URI\" --desired 2 --output .day37/verify/verified.json\npython - <<'PY'\nimport json\n\
+        from pathlib import Path\na=json.loads(Path('.day37/deploy/deployment.json').read_text())\nb=json.loads(Path('.day37/verify/verified.json').read_text())\n\
+        if a['image_uri']!=b['image_uri'] or a['task_definition']!=b['task_definition']:\n    raise SystemExit('ECS deployment drift after Apply')\n\
+        PY\n"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-verified-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/verify/verified.json
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+  close:
+    name: 08 Independent zero-drift Terraform reconciliation and fence closure
+    needs:
+    - source
+    - admission
+    - publish
+    - deploy_plan
+    - deploy
+    - verify
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' && needs.verify.result == 'success' }}
+    environment: aws-staging-recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DAY37_ROLE_ARN: ${{ vars.DAY37_RECOVERY_ROLE_ARN }}
+      DAY37_ACCOUNT_ID: ${{ vars.DAY37_ACCOUNT_ID }}
+      DAY37_BACKEND_BUCKET: ${{ vars.DAY37_BACKEND_BUCKET }}
+      DAY37_BACKEND_KEY: ${{ vars.DAY37_BACKEND_KEY }}
+      DAY37_BACKEND_KMS_ARN: ${{ vars.DAY37_BACKEND_KMS_ARN }}
+      TF_VAR_aws_account_id: ${{ vars.DAY37_ACCOUNT_ID }}
+      TF_VAR_aws_region: ap-northeast-1
+      TF_VAR_vpc_id: ${{ vars.DAY37_VPC_ID }}
+      TF_VAR_private_subnet_ids: ${{ vars.DAY37_PRIVATE_SUBNET_IDS_JSON }}
+      TF_VAR_alb_security_group_id: ${{ vars.DAY37_ALB_SG_ID }}
+      TF_VAR_database_security_group_id: ${{ vars.DAY37_DATABASE_SG_ID }}
+      TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
+      TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
+      TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
+      TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
+      TF_VAR_oidc_audience: ${{ vars.DAY37_APP_OIDC_AUDIENCE }}
+      TF_VAR_redis_host: ${{ vars.DAY37_REDIS_HOST }}
+      TF_VAR_redis_auth_secret_arn: ${{ vars.DAY37_REDIS_AUTH_SECRET_ARN }}
+      DAY37_ECR_REPOSITORY: ${{ vars.DAY37_ECR_REPOSITORY }}
+      DAY37_CLUSTER: ${{ vars.DAY37_CLUSTER }}
+      DAY37_SERVICE: ${{ vars.DAY37_SERVICE }}
+      DAY37_ALB_TARGET_GROUP_ARN: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      DAY37_PLAN_BUCKET: ${{ vars.DAY37_PLAN_BUCKET }}
+      DAY37_PLAN_PREFIX: ${{ vars.DAY37_PLAN_PREFIX }}
+      DAY37_PLAN_KMS_ARN: ${{ vars.DAY37_PLAN_KMS_ARN }}
+      DAY37_APPROVED_CONFIG_SHA: ${{ vars.DAY37_APPROVED_CONFIG_SHA }}
+      DAY37_APPROVED_PLAN_SHA: ${{ needs.deploy_plan.outputs.plan_sha256 }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      with:
+        terraform_version: 1.14.7
+        terraform_wrapper: false
+    - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
+      with:
+        cosign-release: v2.6.0
+    - name: Verify recovery Role configuration
+      run: 'python -m scripts.day37_preflight config --mode recovery
+
+        '
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+      with:
+        aws-region: ap-northeast-1
+        role-to-assume: ${{ env.DAY37_ROLE_ARN }}
+        role-session-name: day37-close-${{ github.run_id }}-${{ github.run_attempt }}
+        role-duration-seconds: 1800
+    - name: Confirm independent ECS Staging identity
+      run: 'python -m scripts.day37_preflight live --mode recovery
+
+        '
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-publish-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/publish
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-fence-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/fence
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-verified-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/verified
+    - name: Require real ECS Digest and ZERO changes in Terraform configuration/state
+      run: "set -euo pipefail\numask 077\nbash scripts/day37_tf.sh init\nbash scripts/day37_tf.sh verify-release .day37/publish/release.json\n\
+        URI=$(python -c \"import json;print(json.load(open('.day37/publish/release.json'))['image_uri'])\")\nmkdir -p .day37/closure\npython -m\
+        \ scripts.day37_aws verify --image-uri \"$URI\" --desired 2 --output .day37/closure/real-tasks.json\npython - <<'PYCODE'\nimport json\n\
+        from pathlib import Path\nprior = json.loads(Path('.day37/verified/verified.json').read_text())\ncurrent = json.loads(Path('.day37/closure/real-tasks.json').read_text())\n\
+        if prior['image_uri'] != current['image_uri'] or prior['task_definition'] != current['task_definition']:\n    raise SystemExit('BLOCKED:\
+        \ deployment changed after independent verification')\nPYCODE\nexport TF_VAR_enable_service=true TF_VAR_desired_count=2\nexport TF_VAR_image_digest=\"\
+        ${URI##*@}\"\nset +e\nterraform -chdir=\"${DAY37_TF_ROOT}\" plan -detailed-exitcode -input=false -lock-timeout=30s -no-color -out=\"${PWD}/.day37/closure/zero-drift.tfplan\"\
+        \ > .day37/closure/terraform.log 2>&1\nCODE=$?\nset -e\nif [[ \"$CODE\" -ne 0 ]]; then\n  echo 'BLOCKED: zero-drift reconciliation requires\
+        \ Terraform plan exit 0'\n  exit 1\nfi\nterraform -chdir=\"${DAY37_TF_ROOT}\" show -json \"${PWD}/.day37/closure/zero-drift.tfplan\" >\
+        \ .day37/closure/zero-drift.json\npython -m scripts.day37_reconcile --phase deploy --fence .day37/fence/fence.json --terraform-json .day37/closure/zero-drift.json\
+        \ --terraform-exit-code \"$CODE\" --release .day37/publish/release.json --output .day37/closure/proof.json\npython -m scripts.day37_release_guard\
+        \ closure --receipt .day37/fence/fence.json --proof .day37/closure/proof.json --sha256 \"$DAY37_APPROVED_PLAN_SHA\" --release .day37/publish/release.json\n\
+        python -m scripts.day37_fence close --receipt .day37/fence/fence.json --proof .day37/closure/proof.json --output .day37/closure/fence-closed.json\n\
+        python - <<'PYCODE'\nimport json, os\nfrom pathlib import Path\nrecord = {'decision':'STAGING_TERRAFORM_ZERO_DRIFT_AND_FENCE_CLOSED',\
+        \ 'commit':os.environ['GITHUB_SHA'],\n          'run_id':os.environ['GITHUB_RUN_ID'], 'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],\n\
+        \          'registry_digest':os.environ['TF_VAR_image_digest'], 'production_authorized':False,'release_authorized':False}\nPath('.day37/closure/closed.json').write_text(json.dumps(record,\
+        \ indent=2)+'\\n')\nPYCODE\n"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-closure-${{ github.run_id }}-${{ github.run_attempt }}
+        path: '.day37/closure/closed.json
+
+          .day37/closure/proof.json
+
+          .day37/closure/fence-closed.json'
+        if-no-files-found: error
+        include-hidden-files: true
+        retention-days: 14
+  recovery:
+    name: 09 Emergency rollback; durable reconciliation fence remains ACTIVE
+    needs:
+    - source
+    - admission
+    - publish
+    - deploy_plan
+    - deploy
+    - verify
+    if: ${{ always() && inputs.mode == 'deploy' && (needs.deploy.result == 'failure' || needs.verify.result == 'failure') && needs.publish.result
+      == 'success' && needs.admission.result == 'success' }}
+    environment: aws-staging-recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      DAY37_ROLE_ARN: ${{ vars.DAY37_RECOVERY_ROLE_ARN }}
+      DAY37_ACCOUNT_ID: ${{ vars.DAY37_ACCOUNT_ID }}
+      DAY37_CLUSTER: ${{ vars.DAY37_CLUSTER }}
+      DAY37_SERVICE: ${{ vars.DAY37_SERVICE }}
+      DAY37_PLAN_BUCKET: ${{ vars.DAY37_PLAN_BUCKET }}
+      DAY37_PLAN_PREFIX: ${{ vars.DAY37_PLAN_PREFIX }}
+      DAY37_PLAN_KMS_ARN: ${{ vars.DAY37_PLAN_KMS_ARN }}
+      DAY37_BACKEND_KMS_ARN: ${{ vars.DAY37_BACKEND_KMS_ARN }}
+      DAY37_ECR_REPOSITORY: ${{ vars.DAY37_ECR_REPOSITORY }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - uses: ./.github/actions/setup-ci-runtime
+    - name: BLOCKED on missing/malformed reviewed recovery environment configuration
+      run: python -m scripts.day37_preflight config --mode recovery
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+      with:
+        aws-region: ap-northeast-1
+        role-to-assume: ${{ env.DAY37_ROLE_ARN }}
+        role-session-name: day37-recover-${{ github.run_id }}-${{ github.run_attempt }}
+        role-duration-seconds: 900
+    - name: Verify STS role, AWS account and actual Staging prerequisites (recovery)
+      run: python -m scripts.day37_preflight live --mode recovery
+    - name: Read LIVE S3 Fence, never trust optional Artifact as lock authority
+      id: live_fence
+      run: 'set -euo pipefail
+
+        umask 077
+
+        mkdir -p .day37/recovery/fence
+
+        python -m scripts.day37_fence probe --fence-output .day37/recovery/fence/fence.json --status-output .day37/recovery/fence-status.json
+
+        echo "active=$(python -c ''import json;print(json.load(open(".day37/recovery/fence-status.json"))["active"])'')" >> "$GITHUB_OUTPUT"'
+    - name: Determine if authenticated pre-Apply checkpoint exists
+      id: checkpoint
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: 'set -euo pipefail
+
+        mkdir -p .day37/recovery
+
+        python -m scripts.day37_release_guard checkpoint --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+        --output .day37/recovery/checkpoint-status.json
+
+        RESULT=$(python -c "import json;print(json.load(open(''.day37/recovery/checkpoint-status.json''))[''checkpoint_exists''])")
+
+        echo "exists=$RESULT" >> "$GITHUB_OUTPUT"
+
+        '
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ steps.checkpoint.outputs.exists == 'true' }}
+      with:
+        name: day37-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/recovery
+    - name: Record missing/unsafe checkpoint or missing ACTIVE fence without rollback
+      if: ${{ steps.checkpoint.outputs.exists != 'true' || steps.live_fence.outputs.active != 'true' }}
+      run: 'python -m scripts.day37_release_guard skipped-recovery --output .day37/recovery/recovery.json
+
+        '
+    - name: Revert ECS only after checkpoint and durable fence are verified
+      if: ${{ steps.checkpoint.outputs.exists == 'true' && steps.live_fence.outputs.active == 'true' }}
+      run: "set -euo pipefail\npython -m scripts.day37_fence recovery-check --checkpoint .day37/recovery/checkpoint.json --fence .day37/recovery/fence/fence.json\n\
+        python -m scripts.day37_release_guard recovery-admission --checkpoint .day37/recovery/checkpoint.json --fence .day37/recovery/fence/fence.json\n\
+        python -m scripts.day37_recovery_guard --checkpoint .day37/recovery/checkpoint.json --fence .day37/recovery/fence/fence.json --output\
+        \ .day37/recovery/restore-admission.json\nRESTORE=$(python -c 'import json;print(str(json.load(open(\".day37/recovery/restore-admission.json\"\
+        ))[\"restore_required\"]).lower())')\nif [[ \"$RESTORE\" == 'true' ]]; then\n  python -m scripts.day37_aws recover --checkpoint .day37/recovery/checkpoint.json\
+        \ --output .day37/recovery/recovery.json\nelse\n  python -m scripts.day37_release_guard skipped-recovery --output .day37/recovery/recovery.json\n\
+        fi\n"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: ${{ always() }}
+      with:
+        name: day37-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/recovery/recovery.json
+        include-hidden-files: true
+        if-no-files-found: warn
+        retention-days: 14
+  gate:
+    name: 10 Final evidence decision (deploy requires zero-drift closure)
+    if: ${{ always() }}
+    needs:
+    - source
+    - admission
+    - publish
+    - plan
+    - bootstrap
+    - bootstrap_close
+    - deploy_plan
+    - deploy
+    - verify
+    - close
+    - recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ needs.admission.result == 'success' }}
+      with:
+        name: day37-admission-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/check/admission
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ (inputs.mode == 'plan' || inputs.mode == 'bootstrap') && needs.plan.result == 'success' }}
+      with:
+        name: day37-plan-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/check/plan
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ inputs.mode == 'bootstrap' && needs.bootstrap.result == 'success' }}
+      with:
+        name: day37-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/check/bootstrap
+    - if: ${{ inputs.mode == 'bootstrap' && needs.bootstrap_close.result == 'success' }}
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-bootstrap-closure-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/check/bootstrap
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ inputs.mode == 'deploy' && needs.publish.result == 'success' }}
+      with:
+        name: day37-publish-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/check/publish
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ inputs.mode == 'deploy' && needs.deploy.result == 'success' }}
+      with:
+        name: day37-deployment-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/check/deploy
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ inputs.mode == 'deploy' && needs.verify.result == 'success' }}
+      with:
+        name: day37-verified-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/check/verify
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-deploy-plan-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/check/deploy-plan
+      if: ${{ inputs.mode == 'deploy' && needs.deploy_plan.result == 'success' }}
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-closure-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/check/close
+      if: ${{ inputs.mode == 'deploy' && needs.close.result == 'success' }}
+    - name: Emit evidence-bound READY/BLOCKED with production authority always false
+      if: ${{ always() }}
+      env:
+        PIPELINE_NEEDS: ${{ toJSON(needs) }}
+        GH_TOKEN: ${{ github.token }}
+      run: 'set -euo pipefail
+
+        umask 077
+
+        mkdir -p .day37
+
+        python -m scripts.day37_enterprise_gate --mode "${DAY37_MODE}" --folder .day37/check --output .day37/final.json'
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: ${{ always() }}
+      with:
+        name: day37-final-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/final.json
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 30
+  bootstrap_close:
+    name: 03c Independent Bootstrap AWS/State reconcile and S3 CAS closure
+    needs:
+    - source
+    - admission
+    - plan
+    - bootstrap
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'bootstrap' && needs.bootstrap.result == 'success' }}
+    environment: aws-staging-recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DAY37_ROLE_ARN: ${{ vars.DAY37_RECOVERY_ROLE_ARN }}
+      DAY37_ACCOUNT_ID: ${{ vars.DAY37_ACCOUNT_ID }}
+      DAY37_BACKEND_BUCKET: ${{ vars.DAY37_BACKEND_BUCKET }}
+      DAY37_BACKEND_KEY: ${{ vars.DAY37_BACKEND_KEY }}
+      DAY37_BACKEND_KMS_ARN: ${{ vars.DAY37_BACKEND_KMS_ARN }}
+      TF_VAR_aws_account_id: ${{ vars.DAY37_ACCOUNT_ID }}
+      TF_VAR_aws_region: ap-northeast-1
+      TF_VAR_vpc_id: ${{ vars.DAY37_VPC_ID }}
+      TF_VAR_private_subnet_ids: ${{ vars.DAY37_PRIVATE_SUBNET_IDS_JSON }}
+      TF_VAR_alb_security_group_id: ${{ vars.DAY37_ALB_SG_ID }}
+      TF_VAR_database_security_group_id: ${{ vars.DAY37_DATABASE_SG_ID }}
+      TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
+      TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
+      TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
+      TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
+      TF_VAR_oidc_audience: ${{ vars.DAY37_APP_OIDC_AUDIENCE }}
+      TF_VAR_redis_host: ${{ vars.DAY37_REDIS_HOST }}
+      TF_VAR_redis_auth_secret_arn: ${{ vars.DAY37_REDIS_AUTH_SECRET_ARN }}
+      DAY37_ECR_REPOSITORY: ${{ vars.DAY37_ECR_REPOSITORY }}
+      DAY37_CLUSTER: ${{ vars.DAY37_CLUSTER }}
+      DAY37_SERVICE: ${{ vars.DAY37_SERVICE }}
+      DAY37_ALB_TARGET_GROUP_ARN: ${{ vars.DAY37_TARGET_GROUP_ARN }}
+      DAY37_PLAN_BUCKET: ${{ vars.DAY37_PLAN_BUCKET }}
+      DAY37_PLAN_PREFIX: ${{ vars.DAY37_PLAN_PREFIX }}
+      DAY37_PLAN_KMS_ARN: ${{ vars.DAY37_PLAN_KMS_ARN }}
+      DAY37_APPROVED_PLAN_SHA: ${{ needs.plan.outputs.plan_sha256 }}
+      TF_VAR_enable_service: 'false'
+      TF_VAR_desired_count: '0'
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      with:
+        terraform_version: 1.14.7
+        terraform_wrapper: false
+    - name: Validate independent recovery account and IAM role
+      run: python -m scripts.day37_preflight config --mode recovery
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+      with:
+        aws-region: ap-northeast-1
+        role-to-assume: ${{ env.DAY37_ROLE_ARN }}
+        role-session-name: day37-bootstrap-close-${{ github.run_id }}-${{ github.run_attempt }}
+        role-duration-seconds: 1800
+    - name: Verify Recovery Role and Staging prerequisites
+      run: python -m scripts.day37_preflight live --mode recovery
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day37-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/bootstrap
+    - name: Independent Bootstrap Zero Drift, AWS Recheck and Fence CAS
+      run: 'set -euo pipefail
+
+        umask 077
+
+        mkdir -p .day37/bootstrap-close
+
+        bash scripts/day37_tf.sh init
+
+        # A real S3 CAS readback is enforced inside the close command.
+
+        export TF_VAR_enable_service=false TF_VAR_desired_count=0
+
+        set +e
+
+        terraform -chdir="${DAY37_TF_ROOT}" plan -detailed-exitcode -input=false -lock-timeout=30s -no-color -out="${PWD}/.day37/bootstrap-close/no-drift.tfplan"
+        > .day37/bootstrap-close/terraform-private.log 2>&1
+
+        RC=$?
+
+        set -e
+
+        [[ "$RC" -eq 0 ]] || { echo ''BLOCKED: Bootstrap still has Terraform drift'' >&2; exit 1; }
+
+        terraform -chdir="${DAY37_TF_ROOT}" show -json "${PWD}/.day37/bootstrap-close/no-drift.tfplan" > .day37/bootstrap-close/no-drift.json
+
+        python -m scripts.day37_reconcile --phase bootstrap --fence .day37/bootstrap/fence.json --terraform-json .day37/bootstrap-close/no-drift.json
+        --terraform-exit-code "$RC" --output .day37/bootstrap-close/proof.json
+
+        python -m scripts.day37_fence close --receipt .day37/bootstrap/fence.json --proof .day37/bootstrap-close/proof.json --output .day37/bootstrap-close/closed-fence.json
+
+        '
+    - if: ${{ always() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-bootstrap-closure-${{ github.run_id }}-${{ github.run_attempt }}
+        path: '.day37/bootstrap-close/proof.json
+
+          .day37/bootstrap-close/closed-fence.json'
+        if-no-files-found: warn
+        include-hidden-files: true
+        retention-days: 30

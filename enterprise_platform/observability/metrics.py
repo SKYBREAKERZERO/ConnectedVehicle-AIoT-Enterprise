@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from secrets import compare_digest
 from time import monotonic
 
@@ -63,7 +64,9 @@ class MetricsMiddleware:
             self.metrics.duration.labels(method, route).observe(monotonic() - started)
 
 
-def configure_metrics(app: FastAPI, settings: Settings) -> HTTPMetrics:
+def configure_metrics(
+    app: FastAPI, settings: Settings, *, extra: Callable[[], Awaitable[bytes]] | None = None
+) -> HTTPMetrics:
     metrics = HTTPMetrics()
     app.add_middleware(MetricsMiddleware, metrics=metrics)
 
@@ -77,8 +80,11 @@ def configure_metrics(app: FastAPI, settings: Settings) -> HTTPMetrics:
             or not compare_digest(token.encode(), expected.get_secret_value().encode())
         ):
             raise HTTPException(status_code=403, detail="Metrics access denied")
+        additional = await extra() if extra is not None else b""
         return Response(
-            generate_latest(metrics.registry) + generate_latest(RECOVERY_MONITOR.registry),
+            generate_latest(metrics.registry)
+            + generate_latest(RECOVERY_MONITOR.registry)
+            + additional,
             headers={"Content-Type": CONTENT_TYPE_LATEST},
         )
 
