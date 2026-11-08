@@ -265,6 +265,12 @@ resource "aws_db_subnet_group" "postgres" {
 resource "aws_db_parameter_group" "postgres" {
   name   = "cv-ota-staging-postgres-logging"
   family = "postgres17"
+  # Explicit PostgreSQL 17 TLS enforcement; confirm the live group is in-sync.
+  parameter {
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
+  }
   parameter {
     name  = "log_statement"
     value = "ddl"

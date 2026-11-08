@@ -117,10 +117,19 @@ def test_verify_aggregate_requires_exact_stage_set(
 ) -> None:
     context(monkeypatch)
     path = tmp_path / "aggregate.json"
-    path.write_text(json.dumps({"schema_version": "day38.aggregate.v1",
-        "decision": "OFFLINE_STAGE_EVIDENCE_VERIFIED", "source": x.current_identity(),
-        "mandatory_stages": list(x.MANDATORY_STAGES), "stages": {},
-        "release_authorized": False, "aws_plan_or_apply_executed": False}))
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "day38.aggregate.v1",
+                "decision": "OFFLINE_STAGE_EVIDENCE_VERIFIED",
+                "source": x.current_identity(),
+                "mandatory_stages": list(x.MANDATORY_STAGES),
+                "stages": {},
+                "release_authorized": False,
+                "aws_plan_or_apply_executed": False,
+            }
+        )
+    )
     with pytest.raises(ValueError, match="aggregate"):
         x.verify_aggregate(path)
 
@@ -152,7 +161,9 @@ def test_workflow_parser_confirms_minimum_enterprise_jobs() -> None:
 def test_aws_mutating_workflow_is_rejected(tmp_path: Path) -> None:
     original = Path(__file__).resolve().parents[2] / ".github/workflows/day38-release-readiness.yml"
     data: dict[str, Any] = yaml.safe_load(original.read_text())
-    data["jobs"]["offline"]["steps"].append({"name": "unsafe", "run": "terraform apply -auto-approve"})
+    data["jobs"]["offline"]["steps"].append(
+        {"name": "unsafe", "run": "terraform apply -auto-approve"}
+    )
     altered = tmp_path / "unsafe.yml"
     altered.write_text(yaml.safe_dump(data, sort_keys=False))
     with pytest.raises(ValueError, match="Terraform mutation"):
@@ -194,10 +205,21 @@ def test_trusted_verifier_and_stage_inventory_cannot_drift() -> None:
     assert x.MANDATORY_STAGES == verifier.DAY38_REQUIRED_STAGES
     file = Path(__file__).resolve().parents[2] / ".github/workflows/day38-release-readiness.yml"
     jobs = yaml.safe_load(file.read_text())["jobs"]
-    actual = {job["name"] for name, job in jobs.items() if name not in {
-        "terraform_roots", "terraform_modules", "offline", "offline_gate",
-        "readiness", "readiness_gate", "diagnostics", "post_offline_recheck",
-    }}
+    actual = {
+        job["name"]
+        for name, job in jobs.items()
+        if name
+        not in {
+            "terraform_roots",
+            "terraform_modules",
+            "offline",
+            "offline_gate",
+            "readiness",
+            "readiness_gate",
+            "diagnostics",
+            "post_offline_recheck",
+        }
+    }
     for root in jobs["terraform_roots"]["strategy"]["matrix"]["root"]:
         actual.add(f"Day38 static AWS Terraform root ({root})")
     for group in jobs["terraform_modules"]["strategy"]["matrix"]["group"]:
@@ -242,15 +264,26 @@ def test_end_to_end_22_stage_aggregation_and_final_gate(
     for stage in x.MANDATORY_STAGES:
         folder = input_root / stage
         folder.mkdir()
-        report = {"schema_version": "day38.stage.v1", "stage": stage,
-                  "decision": "VERIFIED_BY_RUNNER", "source": x.current_identity(),
-                  "release_authorized": False, "aws_mutation_allowed": False,
-                  "proof_sha256": "f" * 64, "proof_bytes": 12}
+        report = {
+            "schema_version": "day38.stage.v1",
+            "stage": stage,
+            "decision": "VERIFIED_BY_RUNNER",
+            "source": x.current_identity(),
+            "release_authorized": False,
+            "aws_mutation_allowed": False,
+            "proof_sha256": "f" * 64,
+            "proof_bytes": 12,
+        }
         body = json.dumps(report).encode()
         (folder / "receipt.json").write_bytes(body)
-        (folder / "manifest.json").write_text(json.dumps({
-            "stage": stage, "files": {"receipt.json": x.raw_sha(body)},
-        }))
+        (folder / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "stage": stage,
+                    "files": {"receipt.json": x.raw_sha(body)},
+                }
+            )
+        )
 
     fake_pkg = ModuleType("scripts.iac")
     fake = ModuleType("scripts.iac.pipeline_evidence")
@@ -276,11 +309,26 @@ def test_end_to_end_22_stage_aggregation_and_final_gate(
     assert len(observed["stages"]) == 22
 
     gate_jobs = {
-        "intake", "source_guard", "dependencies", "python_quality",
-        "terraform_format", "terraform_roots", "terraform_modules", "security",
-        "policy_tests", "trust_tests", "recovery_tests", "day37_tests",
-        "database_tests", "ota_tests", "fault_probes", "workflow_contracts",
-        "supply_tests", "state_tests", "offline", "evidence",
+        "intake",
+        "source_guard",
+        "dependencies",
+        "python_quality",
+        "terraform_format",
+        "terraform_roots",
+        "terraform_modules",
+        "security",
+        "policy_tests",
+        "trust_tests",
+        "recovery_tests",
+        "day37_tests",
+        "database_tests",
+        "ota_tests",
+        "fault_probes",
+        "workflow_contracts",
+        "supply_tests",
+        "state_tests",
+        "offline",
+        "evidence",
     }
     needs = json.dumps({k: {"result": "success"} for k in gate_jobs})
     decision = tmp_path / "decision.json"
@@ -333,22 +381,36 @@ def test_recheck_dispatch_must_bind_source_and_mode(
 
     monkeypatch.setattr(verifier, "verify_main_ruleset", lambda value: None)
     monkeypatch.setattr(verifier, "selected_runs", lambda *args: {})
-    monkeypatch.setattr(verifier, "verify_existing", lambda *args: {
-        "tested_candidate_sha": "a" * 40,
-    })
-    monkeypatch.setattr(verifier, "verify_day38_offline", lambda *args: {
-        "run_id": 91, "run_attempt": 2, "decision": "OFFLINE_AUDIT_PASS",
-    })
+    monkeypatch.setattr(
+        verifier,
+        "verify_existing",
+        lambda *args: {
+            "tested_candidate_sha": "a" * 40,
+        },
+    )
+    monkeypatch.setattr(
+        verifier,
+        "verify_day38_offline",
+        lambda *args: {
+            "run_id": 91,
+            "run_attempt": 2,
+            "decision": "OFFLINE_AUDIT_PASS",
+        },
+    )
     event: dict[str, Any] = {
         "repository": {"full_name": x.REPO},
         "inputs": {
-            "mode": "recheck", "source_commit": "a" * 40,
-            "source_run_id": "91", "source_attempt": "2",
+            "mode": "recheck",
+            "source_commit": "a" * 40,
+            "source_run_id": "91",
+            "source_attempt": "2",
         },
     }
-    env = {"GITHUB_REPOSITORY": x.REPO, "GITHUB_REF": "refs/heads/main",
-           "GITHUB_SHA": "a" * 40}
-    assert verifier.evaluate(API(), "workflow_dispatch", event, env)["decision"] == "READY_FOR_STAGING_REVIEW"  # type: ignore[arg-type]
+    env = {"GITHUB_REPOSITORY": x.REPO, "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": "a" * 40}
+    assert (
+        verifier.evaluate(API(), "workflow_dispatch", event, env)["decision"]
+        == "READY_FOR_STAGING_REVIEW"
+    )  # type: ignore[arg-type]
     event["inputs"]["source_run_id"] = "90"
     with pytest.raises(ValueError, match="source/run/attempt mismatch"):
         verifier.evaluate(API(), "workflow_dispatch", event, env)  # type: ignore[arg-type]
@@ -378,18 +440,36 @@ def test_companion_verifier_requires_exact_latest_day38_run(
 
     monkeypatch.setattr(verifier, "verify_main_ruleset", lambda value: None)
     monkeypatch.setattr(verifier, "selected_runs", lambda *args: {})
-    monkeypatch.setattr(verifier, "verify_existing", lambda *args: {
-        "tested_candidate_sha": "b" * 40,
-    })
-    monkeypatch.setattr(verifier, "verify_day38_offline", lambda *args: {
-        "run_id": 91, "run_attempt": 1, "decision": "OFFLINE_AUDIT_PASS",
-    })
-    event = {"repository": {"full_name": x.REPO},
-             "workflow_run": {"repository": {"full_name": x.REPO},
-                 "head_sha": "a" * 40, "event": "pull_request",
-                 "head_branch": "feat/day38", "status": "completed",
-                 "path": verifier.DAY38_PATH, "id": 91,
-                 "run_attempt": 1, "conclusion": "success"}}
+    monkeypatch.setattr(
+        verifier,
+        "verify_existing",
+        lambda *args: {
+            "tested_candidate_sha": "b" * 40,
+        },
+    )
+    monkeypatch.setattr(
+        verifier,
+        "verify_day38_offline",
+        lambda *args: {
+            "run_id": 91,
+            "run_attempt": 1,
+            "decision": "OFFLINE_AUDIT_PASS",
+        },
+    )
+    event: dict[str, Any] = {
+        "repository": {"full_name": x.REPO},
+        "workflow_run": {
+            "repository": {"full_name": x.REPO},
+            "head_sha": "a" * 40,
+            "event": "pull_request",
+            "head_branch": "feat/day38",
+            "status": "completed",
+            "path": verifier.DAY38_PATH,
+            "id": 91,
+            "run_attempt": 1,
+            "conclusion": "success",
+        },
+    }
     env = {"GITHUB_REPOSITORY": x.REPO}
     result = verifier.evaluate(API(), "workflow_run", event, env)  # type: ignore[arg-type]
     assert result["decision"] == "READY_FOR_STAGING_REVIEW"
@@ -404,6 +484,7 @@ def test_self_dispatch_waits_for_actual_completed_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from scripts import day38_readiness as verifier
+
     calls = []
 
     class API:
@@ -414,20 +495,36 @@ def test_self_dispatch_waits_for_actual_completed_source(
             assert path == "actions/runs/91"
             status = "in_progress" if len(calls) == 1 else "completed"
             return {
-                "id": 91, "run_attempt": 2, "head_sha": "a" * 40,
-                "head_branch": "main", "event": "push", "path": verifier.DAY38_PATH,
-                "name": verifier.DAY38_NAME, "status": status,
+                "id": 91,
+                "run_attempt": 2,
+                "head_sha": "a" * 40,
+                "head_branch": "main",
+                "event": "push",
+                "path": verifier.DAY38_PATH,
+                "name": verifier.DAY38_NAME,
+                "status": status,
                 "conclusion": "success" if status == "completed" else None,
             }
 
-    monkeypatch.setattr(verifier.time, "sleep", lambda _: None)
-    event = {"repository": {"full_name": verifier.REPO}, "inputs": {
-        "mode": "recheck", "source_commit": "a" * 40,
-        "source_run_id": "91", "source_attempt": "2",
-    }}
-    env = {"GITHUB_REPOSITORY": verifier.REPO, "GITHUB_EVENT_NAME": "workflow_dispatch",
-           "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": "a" * 40}
-    result = verifier.await_offline_completion(API(), event, env, max_checks=3, interval=0)  # type: ignore[arg-type]
+    monkeypatch.setattr("scripts.day38_readiness.time.sleep", lambda _: None)
+    event = {
+        "repository": {"full_name": verifier.REPO},
+        "inputs": {
+            "mode": "recheck",
+            "source_commit": "a" * 40,
+            "source_run_id": "91",
+            "source_attempt": "2",
+        },
+    }
+    env = {
+        "GITHUB_REPOSITORY": verifier.REPO,
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_SHA": "a" * 40,
+    }
+    result = verifier.await_offline_completion(
+        API(), event, env, max_checks=3, interval=0  # type: ignore[arg-type]
+    )
     assert result["decision"] == "OFFLINE_ORIGIN_COMPLETED"
     assert calls == ["actions/runs/91", "actions/runs/91", "commits/main"]
 
@@ -437,22 +534,42 @@ def test_self_dispatch_rejects_failure_and_source_substitution() -> None:
 
     class API:
         def get(self, path: str) -> dict[str, Any]:
-            return {"id": 91, "run_attempt": 2, "head_sha": "a" * 40,
-                    "head_branch": "main", "event": "push",
-                    "path": verifier.DAY38_PATH, "name": verifier.DAY38_NAME,
-                    "status": "completed", "conclusion": "failure"}
+            return {
+                "id": 91,
+                "run_attempt": 2,
+                "head_sha": "a" * 40,
+                "head_branch": "main",
+                "event": "push",
+                "path": verifier.DAY38_PATH,
+                "name": verifier.DAY38_NAME,
+                "status": "completed",
+                "conclusion": "failure",
+            }
 
-    event = {"repository": {"full_name": verifier.REPO}, "inputs": {
-        "mode": "recheck", "source_commit": "a" * 40,
-        "source_run_id": "91", "source_attempt": "2",
-    }}
-    env = {"GITHUB_REPOSITORY": verifier.REPO, "GITHUB_EVENT_NAME": "workflow_dispatch",
-           "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": "a" * 40}
+    event = {
+        "repository": {"full_name": verifier.REPO},
+        "inputs": {
+            "mode": "recheck",
+            "source_commit": "a" * 40,
+            "source_run_id": "91",
+            "source_attempt": "2",
+        },
+    }
+    env = {
+        "GITHUB_REPOSITORY": verifier.REPO,
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_SHA": "a" * 40,
+    }
     with pytest.raises(ValueError, match="not complete successfully"):
-        verifier.await_offline_completion(API(), event, env, max_checks=1, interval=0)  # type: ignore[arg-type]
+        verifier.await_offline_completion(
+            API(), event, env, max_checks=1, interval=0  # type: ignore[arg-type]
+        )
     event["inputs"]["source_commit"] = "b" * 40
     with pytest.raises(ValueError, match="invalid self-dispatched"):
-        verifier.await_offline_completion(API(), event, env, max_checks=1, interval=0)  # type: ignore[arg-type]
+        verifier.await_offline_completion(
+            API(), event, env, max_checks=1, interval=0  # type: ignore[arg-type]
+        )
 
 
 def test_gate_baseline_uses_existing_ci_required_path() -> None:

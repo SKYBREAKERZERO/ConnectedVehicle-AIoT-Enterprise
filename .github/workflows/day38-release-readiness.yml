@@ -258,19 +258,6 @@ jobs:
         uses: ./.github/actions/setup-ci-iac
         with:
           terraform: 'false'
-      - name: Capture normalized Day38 test sources for full-repo CI remediation
-        run: |
-          set -euo pipefail
-          ruff check --fix tests/unit/test_day38_enterprise.py tests/unit/test_day38_readiness.py || true
-          ruff format tests/unit/test_day38_enterprise.py tests/unit/test_day38_readiness.py
-          python - <<'PY'
-          import base64
-          from pathlib import Path
-          for name in ('tests/unit/test_day38_enterprise.py', 'tests/unit/test_day38_readiness.py'):
-              print('DAY38_TEST_BEGIN ' + name)
-              print(base64.b64encode(Path(name).read_bytes()).decode('ascii'))
-              print('DAY38_TEST_END ' + name)
-          PY
       - name: Run actual Ruff, formatting and mypy checks
         run: |
           set -euo pipefail
@@ -628,6 +615,7 @@ jobs:
           pytest -c scripts/iac/pytest.ini \
             tests/unit/iac/test_scan_policy.py \
             tests/unit/iac/test_day37_aws_static_root.py \
+            tests/unit/iac/test_day37_foundation_tls.py \
             tests/unit/iac/test_gate_isolation.py \
             -q --junitxml=.day38-work/policy_tests.xml
       - name: Verify non-empty JUnit evidence for genuine tests
@@ -1328,6 +1316,7 @@ jobs:
           pytest -c scripts/iac/pytest.ini \
             tests/unit/iac/test_scan_policy.py \
             tests/unit/iac/test_day37_aws_static_root.py \
+            tests/unit/iac/test_day37_foundation_tls.py \
             tests/unit/iac/test_pipeline_evidence.py \
             tests/unit/test_day38_readiness.py \
             tests/unit/test_day38_enterprise.py -q
