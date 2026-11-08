@@ -690,7 +690,7 @@ def verify_enterprise_offline_artifacts(
         "day38-fault-probes",
     )
     fault_stage = stages["day38-fault-probes"]
-    receipt = json_artifact(fault_members, "fault-probes.json")
+    receipt = strict_json(fault_members["fault-probes.json"])
     require(
         digest(fault_members["manifest.json"]) == fault_stage["manifest_sha256"]
         and digest(fault_members["fault-probes.json"]) == fault_stage["report_sha256"]

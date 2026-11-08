@@ -22,7 +22,7 @@ def test_all_12_receipts_and_hash_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = provenance(monkeypatch)
-    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    monkeypatch.chdir(Path(__file__).resolve().parents[2])
     folder = tmp_path / "proofs"
     for scenario in proof.CASES:
         proof.run_case(scenario, folder / f"probe-{scenario}.json")
