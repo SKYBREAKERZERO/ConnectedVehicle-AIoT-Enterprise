@@ -1572,7 +1572,7 @@ jobs:
     # This is a read-only observer, not a PR-required status and not AWS release.
     # workflow_run uses github.sha (default-branch verifier), NOT triggering SHA.
     name: Day38 trusted upstream observation (not PR gate)
-    if: ${{ github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+    if: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

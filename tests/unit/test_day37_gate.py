@@ -197,3 +197,114 @@ def test_main_ruleset_bypass_fails_closed() -> None:
     }
     with pytest.raises(ValueError):
         gate.verify_ruleset(rules)
+
+@pytest.mark.parametrize(
+    "damage",
+    ("wrong-candidate", "failed", "missing-stage", "wrong-attempt", "bad-digest"),
+)
+def test_day37_denies_untrusted_day38_release_proof(
+    monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    from scripts import day38_readiness as day38
+
+    monkeypatch.setenv("GH_TOKEN", "test-only-token")
+    offline: dict[str, Any] = {
+        "decision": "OFFLINE_AUDIT_PASS",
+        "candidate_sha": COMMIT,
+        "run_id": 43,
+        "run_attempt": 2,
+        "audit_sha256": "a" * 64,
+        "enterprise": {
+            "stage_count": len(day38.DAY38_REQUIRED_STAGES),
+            "final_gate": "OFFLINE_AUDIT_PASS",
+            "aggregate_sha256": "b" * 64,
+        },
+    }
+    if damage == "wrong-candidate":
+        offline["candidate_sha"] = "b" * 40
+    elif damage == "failed":
+        offline["decision"] = "BLOCKED"
+    elif damage == "missing-stage":
+        offline["enterprise"]["stage_count"] -= 1
+    elif damage == "wrong-attempt":
+        offline["run_attempt"] = 0
+    elif damage == "bad-digest":
+        offline["audit_sha256"] = "not-a-hash"
+
+    monkeypatch.setattr(day38, "verify_day38_offline", lambda *args: offline)
+    with pytest.raises(ValueError, match="Day38 protected-main offline evidence"):
+        gate.day38_admission([], COMMIT)
+
+
+def test_day37_retains_validated_day38_same_sha_and_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import day38_readiness as day38
+
+    monkeypatch.setenv("GH_TOKEN", "test-only-token")
+    proof = {
+        "decision": "OFFLINE_AUDIT_PASS",
+        "candidate_sha": COMMIT,
+        "run_id": 74,
+        "run_attempt": 2,
+        "audit_sha256": "a" * 64,
+        "enterprise": {
+            "stage_count": len(day38.DAY38_REQUIRED_STAGES),
+            "final_gate": "OFFLINE_AUDIT_PASS",
+            "aggregate_sha256": "b" * 64,
+        },
+    }
+    monkeypatch.setattr(day38, "verify_day38_offline", lambda *args: proof)
+    assert gate.day38_admission([], COMMIT) == {
+        "decision": "OFFLINE_AUDIT_PASS",
+        "candidate_sha": COMMIT,
+        "run_id": 74,
+        "run_attempt": 2,
+        "audit_sha256": "a" * 64,
+        "aggregate_sha256": "b" * 64,
+        "stage_count": len(day38.DAY38_REQUIRED_STAGES),
+    }
+
+
+def test_day37_requires_day38_gate_before_any_release_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("GITHUB_SHA", COMMIT)
+    monkeypatch.setenv("GITHUB_REPOSITORY", gate.REPO)
+    day36 = {
+        "id": 90,
+        "run_attempt": 1,
+        "run_started_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    monkeypatch.setattr(gate, "verify_ruleset", lambda _: None)
+    monkeypatch.setattr(gate, "choose_runs", lambda *_: {
+        ".github/workflows/day36.yml": day36
+    })
+
+    def fake_api(path: str) -> dict[str, Any]:
+        if path == "branches/main":
+            return {"commit": {"sha": COMMIT}}
+        if path == f"rulesets/{gate.RULESET_ID}":
+            return {}
+        if path.startswith("actions/runs?"):
+            return {"total_count": 0, "workflow_runs": []}
+        raise AssertionError("Unexpected privileged evidence access: " + path)
+
+    monkeypatch.setattr(gate, "api", fake_api)
+    def reject(*_: Any) -> dict[str, Any]:
+        raise ValueError("Day38 protected-main offline evidence is missing")
+
+    monkeypatch.setattr(gate, "day38_admission", reject)
+    with pytest.raises(ValueError, match="Day38 protected-main"):
+        gate.admission(COMMIT)
+
+
+
+def test_day37_requires_day38_verification_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="GitHub API token"):
+        gate.day38_admission([], COMMIT)

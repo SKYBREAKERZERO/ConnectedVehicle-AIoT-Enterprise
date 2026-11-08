@@ -117,7 +117,9 @@ def verify_ruleset(data: dict[str, Any]) -> None:
         (x.get("context"), x.get("integration_id"))
         for x in checks[0].get("required_status_checks", [])
     }
-    if required != {("Runtime quality gate", 15368), ("IaC quality gate", 15368)}:
+    core = {("Runtime quality gate", 15368), ("IaC quality gate", 15368)}
+    day38_check = {("Day38 offline audit gate (not AWS release)", 15368)}
+    if required not in (core, core | day38_check):
         raise ValueError("Main required status contexts changed")
     if not {"deletion", "non_fast_forward"}.issubset({r.get("type") for r in rules}):
         raise ValueError("Branch deletion/force push protection absent")
@@ -153,6 +155,49 @@ def choose_runs(rows: list[dict[str, Any]], commit: str) -> dict[str, dict[str, 
     return selected
 
 
+
+def day38_admission(rows: list[dict[str, Any]], commit: str) -> dict[str, Any]:
+    """Require the latest protected-main Day38 run and its authentic same-attempt evidence.
+
+    The observer workflow_run's green result never substitutes for the
+    original Day38 push offline gate, and a PR cannot supply a main receipt.
+    """
+    from scripts import day38_readiness as d38
+
+    token = os.environ.get("GH_TOKEN", "")
+    if not token:
+        raise ValueError("Day38 protected-main evidence requires GitHub API token")
+    offline = d38.verify_day38_offline(
+        d38.GitHub(token), rows, commit, "push", "main", commit
+    )
+    enterprise = offline.get("enterprise")
+    if not (
+        offline.get("decision") == "OFFLINE_AUDIT_PASS"
+        and offline.get("candidate_sha") == commit
+        and type(offline.get("run_id")) is int
+        and offline["run_id"] > 0
+        and type(offline.get("run_attempt")) is int
+        and offline["run_attempt"] > 0
+        and isinstance(offline.get("audit_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", offline["audit_sha256"]) is not None
+        and isinstance(enterprise, dict)
+        and enterprise.get("final_gate") == "OFFLINE_AUDIT_PASS"
+        and enterprise.get("stage_count") == len(d38.DAY38_REQUIRED_STAGES)
+        and isinstance(enterprise.get("aggregate_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", enterprise["aggregate_sha256"]) is not None
+    ):
+        raise ValueError("Latest Day38 protected-main offline evidence is incomplete")
+    return {
+        "candidate_sha": commit,
+        "run_id": offline["run_id"],
+        "run_attempt": offline["run_attempt"],
+        "audit_sha256": offline["audit_sha256"],
+        "aggregate_sha256": enterprise["aggregate_sha256"],
+        "stage_count": enterprise["stage_count"],
+        "decision": "OFFLINE_AUDIT_PASS",
+    }
+
+
 def admission(commit: str) -> dict[str, Any]:
     if (
         not SHA.fullmatch(commit)
@@ -171,6 +216,7 @@ def admission(commit: str) -> dict[str, Any]:
     if results.get("total_count", 0) > 100:
         raise ValueError("Ambiguous upstream workflow pagination")
     latest = choose_runs(rows, commit)
+    day38 = day38_admission(rows, commit)
     day36 = latest[".github/workflows/day36.yml"]
     started = datetime.fromisoformat(day36.get("run_started_at", "").replace("Z", "+00:00"))
     if not 0 <= (datetime.now(UTC) - started).total_seconds() <= 5400:
@@ -199,6 +245,7 @@ def admission(commit: str) -> dict[str, Any]:
             k: {"id": r["id"], "attempt": r["run_attempt"], "sha": r["head_sha"]}
             for k, r in latest.items()
         },
+        "day38": day38,
         "governance": "main-ruleset-24828733-verified",
         **PRODUCTION_FALSE,
     }

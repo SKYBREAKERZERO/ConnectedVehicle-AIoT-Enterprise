@@ -371,10 +371,12 @@ def verify_main_ruleset(ruleset: dict[str, Any]) -> None:
         "invalid required status rules",
     )
     actual = {(x.get("context"), x.get("integration_id")) for x in required}
+    core = {("Runtime quality gate", 15368), ("IaC quality gate", 15368)}
+    day38_check = {("Day38 offline audit gate (not AWS release)", 15368)}
     require(
         c.get("strict_required_status_checks_policy") is True
         and c.get("do_not_enforce_on_create") is False
-        and actual == {("Runtime quality gate", 15368), ("IaC quality gate", 15368)},
+        and actual in (core, core | day38_check),
         "main required statuses changed",
     )
 
