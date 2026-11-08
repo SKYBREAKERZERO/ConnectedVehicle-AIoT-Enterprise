@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -149,7 +150,7 @@ def inspect_root(root: str) -> dict[str, Any]:
 
 
 def verify_workflow_contract(path: Path) -> dict[str, Any]:
-    import yaml  # Provided by the pinned IaC test requirements.
+    yaml = importlib.import_module("yaml")  # Pinned, runtime-installed IaC dependency.
 
     cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     require(
@@ -504,7 +505,7 @@ def final_gate(needs_json: str, aggregate_path: Path, dest: Path) -> int:
             "release_authorized": False,
         }
     write(dest, result)
-    print("Day38 final offline gate: " + result["decision"])
+    print(f"Day38 final offline gate: {result['decision']}")
     return 0 if result["decision"] == "OFFLINE_AUDIT_PASS" else 1
 
 

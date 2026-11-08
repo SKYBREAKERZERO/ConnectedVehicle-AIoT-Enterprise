@@ -152,7 +152,7 @@ def fetch_url(url: str, *, token: str | None, max_bytes: int = MAX_ARCHIVE) -> b
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=15) as response:
-        raw = response.read(max_bytes + 1)
+        raw = bytes(response.read(max_bytes + 1))
     require(len(raw) <= max_bytes, "remote content exceeds bounded size")
     return raw
 
@@ -282,9 +282,15 @@ class GitHub:
         for page in range(1, 6):
             data = self.get(f"actions/runs?head_sha={candidate}&per_page=100&page={page}")
             count = data.get("total_count")
-            require(type(count) is int and 0 <= count <= MAX_RUNS, "unbounded workflow history")
+            if (
+                not isinstance(count, int)
+                or isinstance(count, bool)
+                or not 0 <= count <= MAX_RUNS
+            ):
+                raise ValueError("unbounded workflow history")
             rows = data.get("workflow_runs")
-            require(isinstance(rows, list), "invalid GitHub workflow run listing")
+            if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+                raise ValueError("invalid GitHub workflow run listing")
             collected.extend(rows)
             if len(collected) >= count:
                 break
@@ -294,25 +300,31 @@ class GitHub:
     def jobs(self, run_id: int) -> list[dict[str, Any]]:
         data = self.get(f"actions/runs/{run_id}/jobs?per_page=100")
         rows = data.get("jobs")
-        require(
-            type(data.get("total_count")) is int
-            and 0 <= data["total_count"] <= 100
-            and isinstance(rows, list)
-            and len(rows) == data["total_count"],
-            "job pagination or schema ambiguity",
-        )
+        count = data.get("total_count")
+        if (
+            not isinstance(count, int)
+            or isinstance(count, bool)
+            or not 0 <= count <= 100
+            or not isinstance(rows, list)
+            or len(rows) != count
+            or not all(isinstance(row, dict) for row in rows)
+        ):
+            raise ValueError("job pagination or schema ambiguity")
         return rows
 
     def artifacts(self, run_id: int) -> list[dict[str, Any]]:
         data = self.get(f"actions/runs/{run_id}/artifacts?per_page=100")
         rows = data.get("artifacts")
-        require(
-            type(data.get("total_count")) is int
-            and 0 <= data["total_count"] <= 100
-            and isinstance(rows, list)
-            and len(rows) == data["total_count"],
-            "artifact pagination or schema ambiguity",
-        )
+        count = data.get("total_count")
+        if (
+            not isinstance(count, int)
+            or isinstance(count, bool)
+            or not 0 <= count <= 100
+            or not isinstance(rows, list)
+            or len(rows) != count
+            or not all(isinstance(row, dict) for row in rows)
+        ):
+            raise ValueError("artifact pagination or schema ambiguity")
         return rows
 
 
@@ -330,10 +342,8 @@ def verify_main_ruleset(ruleset: dict[str, Any]) -> None:
         "unverified/active main ruleset bypass",
     )
     rules = ruleset.get("rules")
-    require(
-        isinstance(rules, list) and all(isinstance(r, dict) for r in rules),
-        "ruleset protection rules missing",
-    )
+    if not isinstance(rules, list) or not all(isinstance(r, dict) for r in rules):
+        raise ValueError("ruleset protection rules missing")
     kinds = {r.get("type") for r in rules if isinstance(r, dict)}
     require(
         {"deletion", "non_fast_forward"} <= kinds,
@@ -398,10 +408,10 @@ def selected_runs(
         # An older successful run never overrides a newer failed/pending run.
         for item in options:
             started = item.get("run_started_at")
-            require(
-                isinstance(started, str) and started.endswith("Z") and len(started) <= 40,
-                "run start timestamp missing or malformed",
-            )
+            if not (
+                isinstance(started, str) and started.endswith("Z") and len(started) <= 40
+            ):
+                raise ValueError("run start timestamp missing or malformed")
             try:
                 datetime.fromisoformat(started.replace("Z", "+00:00"))
             except ValueError as exc:
@@ -470,10 +480,8 @@ def validate_baseline(
         "baseline repository/event/run identity mismatch",
     )
     candidate = b.get("candidate_sha")
-    require(
-        isinstance(candidate, str) and SHA.fullmatch(candidate) is not None,
-        "malformed baseline candidate",
-    )
+    if not isinstance(candidate, str) or SHA.fullmatch(candidate) is None:
+        raise ValueError("malformed baseline candidate")
     if event == "push":
         require(candidate == head and b.get("ref") == "refs/heads/main", "wrong main candidate")
     else:
@@ -584,12 +592,12 @@ def verify_fault_receipt(
     else:
         require(str(p_attempt) == str(attempt), "foreign producer attempt")
     needs = receipt.get("observed_needs")
-    require(
+    if not (
         isinstance(needs, dict)
         and set(needs) == {"producer", "consumer"}
-        and all(isinstance(v, dict) for v in needs.values()),
-        "fault oracle scheduler evidence missing",
-    )
+        and all(isinstance(v, dict) for v in needs.values())
+    ):
+        raise ValueError("fault oracle scheduler evidence missing")
     producer, consumer = needs["producer"], needs["consumer"]
     p_outputs, c_outputs = producer.get("outputs"), consumer.get("outputs")
     require(
@@ -663,10 +671,8 @@ def verify_enterprise_offline_artifacts(
         "Day38 aggregate missing stage identity or non-deployment decision",
     )
     stages = report.get("stages")
-    require(
-        isinstance(stages, dict) and set(stages) == set(DAY38_REQUIRED_STAGES),
-        "Day38 mandatory stage set incomplete",
-    )
+    if not isinstance(stages, dict) or set(stages) != set(DAY38_REQUIRED_STAGES):
+        raise ValueError("Day38 mandatory stage set incomplete")
     for stage in DAY38_REQUIRED_STAGES:
         info = stages[stage]
         require(
@@ -766,7 +772,8 @@ def verify_day38_offline(
         "Upload untrusted read-only audit diagnostics",
     }
     steps = offline_jobs[0].get("steps")
-    require(isinstance(steps, list), "Day38 offline executed step evidence missing")
+    if not isinstance(steps, list):
+        raise ValueError("Day38 offline executed step evidence missing")
     matches = [s for s in steps if isinstance(s, dict) and s.get("name") in required_steps]
     require(
         len(matches) == len(required_steps)
@@ -842,17 +849,15 @@ def verify_existing(
         b_prov, b_files = read_proof(api, run, artifacts[path], baseline_name, baseline_stage)
         baseline = strict_json(b_files[baseline_file])
         candidate = validate_baseline(baseline, run, head, event, branch)
-        require(
-            b_prov is not None and b_prov["day31_commit"] == candidate,
-            "baseline sealed source differs",
-        )
+        if b_prov is None or b_prov["day31_commit"] != candidate:
+            raise ValueError("baseline sealed source differs")
         f_prov, _ = read_proof(api, run, artifacts[path], final_name, final_stage)
-        require(
-            f_prov is not None
-            and f_prov["day31_commit"] == candidate
-            and f_prov["day31_source_sha256"] == b_prov["day31_source_sha256"],
-            "final evidence source differs from baseline",
-        )
+        if (
+            f_prov is None
+            or f_prov["day31_commit"] != candidate
+            or f_prov["day31_source_sha256"] != b_prov["day31_source_sha256"]
+        ):
+            raise ValueError("final evidence source differs from baseline")
         provenance.append(f_prov)
         candidates.append(candidate)
     require(
@@ -1075,16 +1080,16 @@ def await_offline_completion(
     sha = inputs.get("source_commit")
     run_id = inputs.get("source_run_id")
     attempt = inputs.get("source_attempt")
-    require(
+    if not (
         isinstance(sha, str)
         and SHA.fullmatch(sha) is not None
         and sha == env.get("GITHUB_SHA")
         and isinstance(run_id, str)
         and re.fullmatch(r"[1-9][0-9]*", run_id)
         and isinstance(attempt, str)
-        and re.fullmatch(r"[1-9][0-9]*", attempt),
-        "invalid self-dispatched source SHA/run/attempt",
-    )
+        and re.fullmatch(r"[1-9][0-9]*", attempt)
+    ):
+        raise ValueError("invalid self-dispatched source SHA/run/attempt")
     require(1 <= max_checks <= 50 and 0 <= interval <= 10, "unsafe offline wait bounds")
     for check in range(max_checks):
         run = api.get(f"actions/runs/{run_id}")
