@@ -282,11 +282,7 @@ class GitHub:
         for page in range(1, 6):
             data = self.get(f"actions/runs?head_sha={candidate}&per_page=100&page={page}")
             count = data.get("total_count")
-            if (
-                not isinstance(count, int)
-                or isinstance(count, bool)
-                or not 0 <= count <= MAX_RUNS
-            ):
+            if not isinstance(count, int) or isinstance(count, bool) or not 0 <= count <= MAX_RUNS:
                 raise ValueError("unbounded workflow history")
             rows = data.get("workflow_runs")
             if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
@@ -408,9 +404,7 @@ def selected_runs(
         # An older successful run never overrides a newer failed/pending run.
         for item in options:
             started = item.get("run_started_at")
-            if not (
-                isinstance(started, str) and started.endswith("Z") and len(started) <= 40
-            ):
+            if not (isinstance(started, str) and started.endswith("Z") and len(started) <= 40):
                 raise ValueError("run start timestamp missing or malformed")
             try:
                 datetime.fromisoformat(started.replace("Z", "+00:00"))
