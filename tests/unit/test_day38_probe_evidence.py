@@ -7,11 +7,12 @@ from typing import Any
 
 import pytest
 
+from scripts import day38_enterprise as enterprise
 from scripts import day38_probe_evidence as proof
 
 
 def provenance(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    monkeypatch.setenv("GITHUB_REPOSITORY", proof.enterprise.REPO)
+    monkeypatch.setenv("GITHUB_REPOSITORY", enterprise.REPO)
     monkeypatch.setenv("GITHUB_SHA", "a" * 40)
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
@@ -32,7 +33,12 @@ def test_all_12_receipts_and_hash_index(
     with pytest.raises(ValueError, match="index"):
         proof.check_members(members, source["candidate_sha"], 123, 3)
     with pytest.raises(ValueError, match="incomplete"):
-        proof.check_members({k: v for k, v in members.items() if "zip-symlink" not in k}, "a" * 40, 123, 2)
+        proof.check_members(
+            {k: v for k, v in members.items() if "zip-symlink" not in k},
+            "a" * 40,
+            123,
+            2,
+        )
     bad = {**members, "probe-zip-symlink.json": b"{}"}
     with pytest.raises(ValueError, match="tamper"):
         proof.check_members(bad, "a" * 40, 123, 2)
