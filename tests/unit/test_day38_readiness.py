@@ -821,4 +821,3 @@ def test_manual_readiness_job_is_only_dispatched_from_main() -> None:
     eligibility = cfg["jobs"]["readiness"]["if"]
     assert "github.event_name == 'workflow_dispatch'" in eligibility
     assert "github.ref == 'refs/heads/main'" in eligibility
-
