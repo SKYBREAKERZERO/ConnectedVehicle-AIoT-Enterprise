@@ -1,0 +1,21 @@
+name: CI isolation fault matrix
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-fault-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  fault:
+    strategy:
+      fail-fast: false
+      matrix:
+        graph: [runtime, iac]
+        scenario: [failure, skipped, missing-artifact, tamper, old-attempt]
+    uses: ./.github/workflows/ci-fault-case.yml
+    with:
+      graph: ${{ matrix.graph }}
+      scenario: ${{ matrix.scenario }}
