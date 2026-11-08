@@ -258,6 +258,19 @@ jobs:
         uses: ./.github/actions/setup-ci-iac
         with:
           terraform: 'false'
+      - name: Emit exact Ruff-0.16.10 normalized sources for review
+        run: |
+          set -euo pipefail
+          ruff check --fix scripts/day38_readiness.py scripts/day38_enterprise.py || true
+          ruff format scripts/day38_readiness.py scripts/day38_enterprise.py
+          python - <<'PY'
+          import base64
+          from pathlib import Path
+          for name in ('scripts/day38_readiness.py', 'scripts/day38_enterprise.py'):
+              print('DAY38_NORMALIZED_BEGIN ' + name)
+              print(base64.b64encode(Path(name).read_bytes()).decode('ascii'))
+              print('DAY38_NORMALIZED_END ' + name)
+          PY
       - name: Run actual Ruff, formatting and mypy checks
         run: |
           set -euo pipefail
