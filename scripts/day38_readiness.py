@@ -679,7 +679,6 @@ def verify_enterprise_offline_artifacts(
             "Day38 stage hash or binding invalid: " + stage,
         )
 
-
     # Independently download the sealed fault stage AND the original per-case
     # receipts. An aggregate hash assertion alone is insufficient.
     _, fault_members = read_proof(

@@ -1190,6 +1190,7 @@ jobs:
           name: day38-probe-receipts-${{ github.run_id }}-${{ github.run_attempt }}
           path: .day38-probes/
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 14
       - name: Seal independent stage evidence
         run: |
