@@ -679,15 +679,47 @@ def verify_enterprise_offline_artifacts(
             "Day38 stage hash or binding invalid: " + stage,
         )
 
+    # Re-download each individual GitHub artifact; aggregate-only hashes are
+    # insufficient if a producer has substituted a stage. No PR code is run.
+    stage_bundles: dict[str, dict[str, bytes]] = {}
+    for stage in DAY38_REQUIRED_STAGES:
+        provenance, files = read_proof(
+            api,
+            run,
+            artifacts,
+            f"{stage}-{run['id']}-{run['run_attempt']}",
+            stage,
+        )
+        report_names = [name for name in files if name != "manifest.json"]
+        require(
+            len(report_names) == 1
+            and provenance is not None
+            and provenance.get("day31_commit") == candidate,
+            "Day38 individual stage unsealed or foreign: " + stage,
+        )
+        report_name = report_names[0]
+        record = strict_json(files[report_name])
+        summary = stages[stage]
+        require(
+            digest(files["manifest.json"]) == summary["manifest_sha256"]
+            and digest(files[report_name]) == summary["report_sha256"]
+            and record.get("schema_version") == "day38.stage.v1"
+            and record.get("stage") == stage
+            and record.get("decision") == "VERIFIED_BY_RUNNER"
+            and record.get("source") == binding
+            and record.get("release_authorized") is False
+            and record.get("aws_mutation_allowed") is False
+            and isinstance(record.get("proof_sha256"), str)
+            and HASH.fullmatch(record["proof_sha256"]) is not None
+            and type(record.get("proof_bytes")) is int
+            and record["proof_bytes"] > 0,
+            "Day38 individual stage hash/source/decision mismatch: " + stage,
+        )
+        stage_bundles[stage] = files
+
     # Independently download the sealed fault stage AND the original per-case
     # receipts. An aggregate hash assertion alone is insufficient.
-    _, fault_members = read_proof(
-        api,
-        run,
-        artifacts,
-        f"day38-fault-probes-{run['id']}-{run['run_attempt']}",
-        "day38-fault-probes",
-    )
+    fault_members = stage_bundles["day38-fault-probes"]
     fault_stage = stages["day38-fault-probes"]
     receipt = strict_json(fault_members["fault-probes.json"])
     require(

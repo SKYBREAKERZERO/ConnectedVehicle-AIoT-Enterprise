@@ -367,6 +367,44 @@ def test_ready_requires_verified_day38_offline_receipt(monkeypatch: pytest.Monke
         "report_sha256": digest(fault_body),
         "source": source,
     }
+    # Fabricate complete, same-attempt stage envelopes for the GitHub API mock.
+    # The trusted verifier independently checks every raw stage, not just the
+    # aggregate's claimed hashes; these fixtures are adversarially mutable.
+    stage_archives: dict[str, bytes] = {"day38-fault-probes": fault_zip}
+    for stage in d.DAY38_REQUIRED_STAGES:
+        if stage == "day38-fault-probes":
+            continue
+        stage_report = {
+            "schema_version": "day38.stage.v1",
+            "stage": stage,
+            "decision": "VERIFIED_BY_RUNNER",
+            "source": source,
+            "proof_name": "test.xml",
+            "proof_sha256": SOURCE,
+            "proof_bytes": 12,
+            "release_authorized": False,
+            "aws_mutation_allowed": False,
+        }
+        stage_body = json.dumps(stage_report).encode()
+        stage_manifest = {
+            "version": 1,
+            "stage": stage,
+            "provenance": {
+                "day31_commit": MERGE,
+                "day31_run_id": "91:1",
+                "day31_source_sha256": SOURCE,
+            },
+            "files": {"receipt.json": digest(stage_body)},
+        }
+        stage_manifest_data = json.dumps(stage_manifest).encode()
+        stage_evidence[stage] = {
+            "manifest_sha256": digest(stage_manifest_data),
+            "report_sha256": digest(stage_body),
+            "source": source,
+        }
+        stage_archives[stage] = zipped(
+            {"manifest.json": stage_manifest_data, "receipt.json": stage_body}
+        )
     aggregate = {
         "schema_version": "day38.aggregate.v1",
         "decision": "OFFLINE_STAGE_EVIDENCE_VERIFIED",
@@ -413,6 +451,12 @@ def test_ready_requires_verified_day38_offline_receipt(monkeypatch: pytest.Monke
         154: "day38-fault-probes-91-1",
         155: "day38-probe-receipts-91-1",
     }
+    for i, stage in enumerate(d.DAY38_REQUIRED_STAGES):
+        if stage == "day38-fault-probes":
+            continue
+        artifact_id = 200 + i
+        zip_payloads[artifact_id] = stage_archives[stage]
+        names[artifact_id] = f"{stage}-91-1"
     artifacts = [
         {
             "id": key,
@@ -461,6 +505,7 @@ def test_ready_requires_verified_day38_offline_receipt(monkeypatch: pytest.Monke
     assert result["decision"] == "OFFLINE_AUDIT_PASS"
     assert result["enterprise"]["stage_count"] == len(d.DAY38_REQUIRED_STAGES)
     assert result["enterprise"]["probe_count"] == 12
+    assert result["enterprise"]["stage_count"] == len(d.DAY38_REQUIRED_STAGES)
     assert result["audit_sha256"] == digest(json.dumps(receipt).encode())
     with pytest.raises(ValueError, match="missing"):
         d.verify_day38_offline(api, [], SHA, "pull_request", "feat/day38", MERGE)

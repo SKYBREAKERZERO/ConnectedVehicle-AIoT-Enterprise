@@ -104,6 +104,8 @@ def check_members(
         and verifier.HASH.fullmatch(source_hash) is not None,
         "probe index or source mismatch",
     )
+    if not isinstance(hashes, dict):
+        raise ValueError("invalid probe case hash inventory")
     for name in CASES:
         raw = members[f"probe-{name}.json"]
         record = verifier.strict_json(raw)
