@@ -266,7 +266,7 @@ jobs:
             ruff check scripts/iac scripts/day38_readiness.py scripts/day38_enterprise.py
             ruff format --check scripts/iac scripts/day38_readiness.py scripts/day38_enterprise.py
             mypy scripts/iac scripts/day38_readiness.py scripts/day38_enterprise.py
-          } > .day38-work/python-quality.log 2>&1
+          } 2>&1 | tee .day38-work/python-quality.log
           test -s .day38-work/python-quality.log
 
       - name: Bind successful command output to stage receipt
@@ -937,9 +937,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Install actual IaC and test dependencies
-        uses: ./.github/actions/setup-ci-iac
-        with:
-          terraform: 'false'
+        uses: ./.github/actions/setup-ci-runtime
       # This suite uses source-tree fixtures rather than real cloud credentials.
       # Proves release-image digest / task linkage.
       # Checks Day37 runtime recovery and scope constraints.
@@ -1156,7 +1154,8 @@ jobs:
       - name: Run independent Python negative tests
         run: |
           set -euo pipefail
-          python -m pytest tests/unit/test_day38_readiness.py \
+          python -m pytest -c scripts/iac/pytest.ini \
+            tests/unit/test_day38_readiness.py \
             tests/unit/test_day38_enterprise.py -q \
             --junitxml=.day38-work/adversarial.xml
       - name: Reject skipped or zero test count
