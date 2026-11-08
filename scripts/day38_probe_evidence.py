@@ -64,9 +64,7 @@ def run_case(name: str, output: Path) -> None:
             "schema_version": SCHEMA,
             "scenario": name,
             "decision": "DENIED_AS_EXPECTED",
-            "source": identity(
-                origin["candidate_sha"], origin["run_id"], origin["run_attempt"]
-            ),
+            "source": identity(origin["candidate_sha"], origin["run_id"], origin["run_attempt"]),
             "verifier_sha256": sha256(verifier_source.read_bytes()),
             "release_authorized": False,
         },

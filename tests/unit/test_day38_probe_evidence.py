@@ -19,9 +19,7 @@ def provenance(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return proof.identity("a" * 40, 123, 2)
 
 
-def test_all_12_receipts_and_hash_index(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_all_12_receipts_and_hash_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = provenance(monkeypatch)
     monkeypatch.chdir(Path(__file__).resolve().parents[2])
     folder = tmp_path / "proofs"
