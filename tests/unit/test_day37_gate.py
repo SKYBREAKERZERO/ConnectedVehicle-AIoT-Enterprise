@@ -198,6 +198,7 @@ def test_main_ruleset_bypass_fails_closed() -> None:
     with pytest.raises(ValueError):
         gate.verify_ruleset(rules)
 
+
 @pytest.mark.parametrize(
     "damage",
     ("wrong-candidate", "failed", "missing-stage", "wrong-attempt", "bad-digest"),
@@ -281,9 +282,7 @@ def test_day37_requires_day38_gate_before_any_release_admission(
         "run_started_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     monkeypatch.setattr(gate, "verify_ruleset", lambda _: None)
-    monkeypatch.setattr(gate, "choose_runs", lambda *_: {
-        ".github/workflows/day36.yml": day36
-    })
+    monkeypatch.setattr(gate, "choose_runs", lambda *_: {".github/workflows/day36.yml": day36})
 
     def fake_api(path: str) -> dict[str, Any]:
         if path == "branches/main":
@@ -295,13 +294,13 @@ def test_day37_requires_day38_gate_before_any_release_admission(
         raise AssertionError("Unexpected privileged evidence access: " + path)
 
     monkeypatch.setattr(gate, "api", fake_api)
+
     def reject(*_: Any) -> dict[str, Any]:
         raise ValueError("Day38 protected-main offline evidence is missing")
 
     monkeypatch.setattr(gate, "day38_admission", reject)
     with pytest.raises(ValueError, match="Day38 protected-main"):
         gate.admission(COMMIT)
-
 
 
 def test_day37_requires_day38_verification_token(monkeypatch: pytest.MonkeyPatch) -> None:

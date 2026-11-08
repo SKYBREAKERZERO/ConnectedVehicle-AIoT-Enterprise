@@ -155,7 +155,6 @@ def choose_runs(rows: list[dict[str, Any]], commit: str) -> dict[str, dict[str, 
     return selected
 
 
-
 def day38_admission(rows: list[dict[str, Any]], commit: str) -> dict[str, Any]:
     """Require the latest protected-main Day38 run and its authentic same-attempt evidence.
 
@@ -167,9 +166,7 @@ def day38_admission(rows: list[dict[str, Any]], commit: str) -> dict[str, Any]:
     token = os.environ.get("GH_TOKEN", "")
     if not token:
         raise ValueError("Day38 protected-main evidence requires GitHub API token")
-    offline = d38.verify_day38_offline(
-        d38.GitHub(token), rows, commit, "push", "main", commit
-    )
+    offline = d38.verify_day38_offline(d38.GitHub(token), rows, commit, "push", "main", commit)
     enterprise = offline.get("enterprise")
     if not (
         offline.get("decision") == "OFFLINE_AUDIT_PASS"

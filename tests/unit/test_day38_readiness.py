@@ -766,6 +766,7 @@ def test_schedule_evaluates_current_main_only(monkeypatch: pytest.MonkeyPatch) -
             {**env, "GITHUB_REF": "refs/heads/feature"},
         )
 
+
 def test_ruleset_accepts_exact_day38_required_check_when_enabled() -> None:
     from scripts import day38_readiness as d
 
@@ -815,10 +816,7 @@ def test_manual_readiness_job_is_only_dispatched_from_main() -> None:
 
     import yaml
 
-    path = (
-        Path(__file__).resolve().parents[2]
-        / ".github/workflows/day38-release-readiness.yml"
-    )
+    path = Path(__file__).resolve().parents[2] / ".github/workflows/day38-release-readiness.yml"
     cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     eligibility = cfg["jobs"]["readiness"]["if"]
     assert "github.event_name == 'workflow_dispatch'" in eligibility
