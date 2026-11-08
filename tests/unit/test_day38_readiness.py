@@ -811,8 +811,9 @@ def test_ruleset_accepts_exact_day38_required_check_when_enabled() -> None:
 
 
 def test_manual_readiness_job_is_only_dispatched_from_main() -> None:
-    import yaml
     from pathlib import Path
+
+    import yaml
 
     path = (
         Path(__file__).resolve().parents[2]
