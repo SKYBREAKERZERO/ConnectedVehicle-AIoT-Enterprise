@@ -23,8 +23,12 @@ def _single(value: Any) -> Any:
 def _resource(parsed: dict[str, Any], kind: str, name: str) -> dict[str, Any]:
     found: list[dict[str, Any]] = []
     for resource in parsed.get("resource", []):
-        for group in resource.get(kind, []):
-            if name in group:
+        instances = resource.get(kind, [])
+        if isinstance(instances, dict):
+            instances = [instances]
+        assert isinstance(instances, list), "invalid Terraform resource group"
+        for group in instances:
+            if isinstance(group, dict) and name in group:
                 value = _single(group[name])
                 assert isinstance(value, dict)
                 found.append(value)

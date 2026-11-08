@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -407,21 +407,22 @@ def test_recheck_dispatch_must_bind_source_and_mode(
         },
     }
     env = {"GITHUB_REPOSITORY": x.REPO, "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": "a" * 40}
+    api = cast(verifier.GitHub, API())
     assert (
-        verifier.evaluate(API(), "workflow_dispatch", event, env)["decision"]
+        verifier.evaluate(api, "workflow_dispatch", event, env)["decision"]
         == "READY_FOR_STAGING_REVIEW"
-    )  # type: ignore[arg-type]
+    )
     event["inputs"]["source_run_id"] = "90"
     with pytest.raises(ValueError, match="source/run/attempt mismatch"):
-        verifier.evaluate(API(), "workflow_dispatch", event, env)  # type: ignore[arg-type]
+        verifier.evaluate(api, "workflow_dispatch", event, env)
     event["inputs"]["source_run_id"] = "91"
     event["inputs"]["source_attempt"] = ""
     with pytest.raises(ValueError, match="partial post-offline"):
-        verifier.evaluate(API(), "workflow_dispatch", event, env)  # type: ignore[arg-type]
+        verifier.evaluate(api, "workflow_dispatch", event, env)
     event["inputs"]["source_attempt"] = "2"
     event["inputs"]["mode"] = "offline"
     with pytest.raises(ValueError, match="read-only recheck"):
-        verifier.evaluate(API(), "workflow_dispatch", event, env)  # type: ignore[arg-type]
+        verifier.evaluate(api, "workflow_dispatch", event, env)
 
 
 def test_companion_verifier_requires_exact_latest_day38_run(
@@ -522,9 +523,8 @@ def test_self_dispatch_waits_for_actual_completed_source(
         "GITHUB_REF": "refs/heads/main",
         "GITHUB_SHA": "a" * 40,
     }
-    result = verifier.await_offline_completion(
-        API(), event, env, max_checks=3, interval=0  # type: ignore[arg-type]
-    )
+    api = cast(verifier.GitHub, API())
+    result = verifier.await_offline_completion(api, event, env, max_checks=3, interval=0)
     assert result["decision"] == "OFFLINE_ORIGIN_COMPLETED"
     assert calls == ["actions/runs/91", "actions/runs/91", "commits/main"]
 
@@ -563,12 +563,12 @@ def test_self_dispatch_rejects_failure_and_source_substitution() -> None:
     }
     with pytest.raises(ValueError, match="not complete successfully"):
         verifier.await_offline_completion(
-            API(), event, env, max_checks=1, interval=0  # type: ignore[arg-type]
+            cast(verifier.GitHub, API()), event, env, max_checks=1, interval=0
         )
     event["inputs"]["source_commit"] = "b" * 40
     with pytest.raises(ValueError, match="invalid self-dispatched"):
         verifier.await_offline_completion(
-            API(), event, env, max_checks=1, interval=0  # type: ignore[arg-type]
+            cast(verifier.GitHub, API()), event, env, max_checks=1, interval=0
         )
 
 
