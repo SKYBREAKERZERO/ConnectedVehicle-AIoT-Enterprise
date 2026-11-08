@@ -1142,22 +1142,27 @@ jobs:
       - name: Execute all explicit negative trust-boundary probes
         run: |
           set -euo pipefail
-          mkdir -p .day38-work .day38-reports
+          mkdir -p .day38-work .day38-reports .day38-probes
           : > .day38-work/fault-probes.log
           for scenario in \
             duplicate-json nonfinite-json zip-traversal zip-symlink \
             zip-duplicate zip-oversize manifest-tamper attempt-replay \
             ruleset-bypass fault-oracle fault-consumer future-run-failure; do
-            python -m scripts.day38_enterprise probe --scenario "$scenario" \
+            python -m scripts.day38_probe_evidence run --scenario "$scenario" \
+              --output ".day38-probes/probe-$scenario.json" \
               >> .day38-work/fault-probes.log
           done
           test "$(wc -l < .day38-work/fault-probes.log)" -eq 12
+          python -m scripts.day38_probe_evidence index \
+            --folder .day38-probes --output .day38-probes/probe-index.json
+          python -m scripts.day38_probe_evidence verify --folder .day38-probes
       - name: Run independent Python negative tests
         run: |
           set -euo pipefail
           python -m pytest -c scripts/iac/pytest.ini \
             tests/unit/test_day38_readiness.py \
-            tests/unit/test_day38_enterprise.py -q \
+            tests/unit/test_day38_enterprise.py \
+            tests/unit/test_day38_probe_evidence.py -q \
             --junitxml=.day38-work/adversarial.xml
       - name: Reject skipped or zero test count
         run: |
@@ -1177,8 +1182,15 @@ jobs:
           set -euo pipefail
           python -m scripts.day38_enterprise report \
             --stage day38-fault-probes \
-            --proof .day38-work/adversarial.xml \
+            --proof .day38-probes/probe-index.json \
             --output .day38-reports/fault-probes.json
+      - name: Upload 12 individually verified probe receipts and their index
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-probe-receipts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-probes/
+          if-no-files-found: error
+          retention-days: 14
       - name: Seal independent stage evidence
         run: |
           set -euo pipefail

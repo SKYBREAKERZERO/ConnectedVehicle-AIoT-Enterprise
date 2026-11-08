@@ -679,6 +679,45 @@ def verify_enterprise_offline_artifacts(
             "Day38 stage hash or binding invalid: " + stage,
         )
 
+
+    # Independently download the sealed fault stage AND the original per-case
+    # receipts. An aggregate hash assertion alone is insufficient.
+    _, fault_members = read_proof(
+        api,
+        run,
+        artifacts,
+        f"day38-fault-probes-{run['id']}-{run['run_attempt']}",
+        "day38-fault-probes",
+    )
+    fault_stage = stages["day38-fault-probes"]
+    receipt = json_artifact(fault_members, "fault-probes.json")
+    require(
+        digest(fault_members["manifest.json"]) == fault_stage["manifest_sha256"]
+        and digest(fault_members["fault-probes.json"]) == fault_stage["report_sha256"]
+        and receipt.get("schema_version") == "day38.stage.v1"
+        and receipt.get("stage") == "day38-fault-probes"
+        and receipt.get("decision") == "VERIFIED_BY_RUNNER"
+        and receipt.get("source") == binding
+        and receipt.get("proof_name") == "probe-index.json"
+        and receipt.get("release_authorized") is False
+        and receipt.get("aws_mutation_allowed") is False,
+        "fault probe stage does not match sealed aggregate and candidate",
+    )
+    probe_artifact = locate_artifact(
+        artifacts, f"day38-probe-receipts-{run['id']}-{run['run_attempt']}", run
+    )
+    probe_files = check_zip(
+        download_artifact(probe_artifact["id"], api.token, probe_artifact["digest"][7:])
+    )
+    from scripts.day38_probe_evidence import check_members
+
+    checked = check_members(probe_files, candidate, run["id"], run["run_attempt"])
+    require(
+        receipt.get("proof_sha256") == digest(probe_files["probe-index.json"])
+        and receipt.get("proof_bytes") == len(probe_files["probe-index.json"]),
+        "fault probe evidence is not cryptographically bound to sealed stage",
+    )
+
     _, result_files = read_proof(
         api,
         run,
@@ -697,6 +736,8 @@ def verify_enterprise_offline_artifacts(
     )
     return {
         "stage_count": len(stages),
+        "probe_count": checked["count"],
+        "probe_index_sha256": digest(probe_files["probe-index.json"]),
         "aggregate_sha256": digest(content["aggregate.json"]),
         "final_gate": "OFFLINE_AUDIT_PASS",
     }

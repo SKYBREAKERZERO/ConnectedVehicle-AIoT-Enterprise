@@ -180,6 +180,9 @@ def day38_admission(rows: list[dict[str, Any]], commit: str) -> dict[str, Any]:
         and isinstance(enterprise, dict)
         and enterprise.get("final_gate") == "OFFLINE_AUDIT_PASS"
         and enterprise.get("stage_count") == len(d38.DAY38_REQUIRED_STAGES)
+        and enterprise.get("probe_count") == 12
+        and isinstance(enterprise.get("probe_index_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", enterprise["probe_index_sha256"]) is not None
         and isinstance(enterprise.get("aggregate_sha256"), str)
         and re.fullmatch(r"[0-9a-f]{64}", enterprise["aggregate_sha256"]) is not None
     ):
@@ -191,6 +194,8 @@ def day38_admission(rows: list[dict[str, Any]], commit: str) -> dict[str, Any]:
         "audit_sha256": offline["audit_sha256"],
         "aggregate_sha256": enterprise["aggregate_sha256"],
         "stage_count": enterprise["stage_count"],
+        "probe_count": enterprise["probe_count"],
+        "probe_index_sha256": enterprise["probe_index_sha256"],
         "decision": "OFFLINE_AUDIT_PASS",
     }
 

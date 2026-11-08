@@ -307,6 +307,66 @@ def test_ready_requires_verified_day38_offline_receipt(monkeypatch: pytest.Monke
         name: {"manifest_sha256": SOURCE, "report_sha256": SOURCE, "source": source}
         for name in d.DAY38_REQUIRED_STAGES
     }
+    # Independent twelve-case probe archive and the same-attempt sealed stage.
+    from scripts.day38_probe_evidence import CASES
+
+    records = {
+        name: json.dumps(
+            {
+                "schema_version": "day38.probe.v1",
+                "scenario": name,
+                "source": source,
+                "decision": "DENIED_AS_EXPECTED",
+                "verifier_sha256": SOURCE,
+                "release_authorized": False,
+            }
+        ).encode()
+        for name in CASES
+    }
+    index = {
+        "schema_version": "day38.probe-index.v1",
+        "source": source,
+        "cases": {name: digest(body) for name, body in records.items()},
+        "count": len(CASES),
+        "verifier_sha256": SOURCE,
+        "release_authorized": False,
+    }
+    index_data = json.dumps(index).encode()
+    probe_zip = zipped(
+        {
+            **{f"probe-{name}.json": body for name, body in records.items()},
+            "probe-index.json": index_data,
+        }
+    )
+    fault_receipt = {
+        "schema_version": "day38.stage.v1",
+        "stage": "day38-fault-probes",
+        "decision": "VERIFIED_BY_RUNNER",
+        "source": source,
+        "proof_name": "probe-index.json",
+        "proof_sha256": digest(index_data),
+        "proof_bytes": len(index_data),
+        "release_authorized": False,
+        "aws_mutation_allowed": False,
+    }
+    fault_body = json.dumps(fault_receipt).encode()
+    fault_manifest = {
+        "version": 1,
+        "stage": "day38-fault-probes",
+        "provenance": {
+            "day31_commit": MERGE,
+            "day31_run_id": "91:1",
+            "day31_source_sha256": SOURCE,
+        },
+        "files": {"fault-probes.json": digest(fault_body)},
+    }
+    fault_manifest_data = json.dumps(fault_manifest).encode()
+    fault_zip = zipped({"manifest.json": fault_manifest_data, "fault-probes.json": fault_body})
+    stage_evidence["day38-fault-probes"] = {
+        "manifest_sha256": digest(fault_manifest_data),
+        "report_sha256": digest(fault_body),
+        "source": source,
+    }
     aggregate = {
         "schema_version": "day38.aggregate.v1",
         "decision": "OFFLINE_STAGE_EVIDENCE_VERIFIED",
@@ -339,8 +399,20 @@ def test_ready_requires_verified_day38_offline_receipt(monkeypatch: pytest.Monke
         "aws_authorized": False,
     }
     final_zip = zipped({"decision.json": json.dumps(final_decision).encode()})
-    zip_payloads = {151: archive, 152: aggregate_zip, 153: final_zip}
-    names = {151: "day38-offline-91-1", 152: "day38-aggregate-91-1", 153: "day38-final-91-1"}
+    zip_payloads = {
+        151: archive,
+        152: aggregate_zip,
+        153: final_zip,
+        154: fault_zip,
+        155: probe_zip,
+    }
+    names = {
+        151: "day38-offline-91-1",
+        152: "day38-aggregate-91-1",
+        153: "day38-final-91-1",
+        154: "day38-fault-probes-91-1",
+        155: "day38-probe-receipts-91-1",
+    }
     artifacts = [
         {
             "id": key,
@@ -388,6 +460,7 @@ def test_ready_requires_verified_day38_offline_receipt(monkeypatch: pytest.Monke
     result = d.verify_day38_offline(api, [run], SHA, "pull_request", "feat/day38", MERGE)
     assert result["decision"] == "OFFLINE_AUDIT_PASS"
     assert result["enterprise"]["stage_count"] == len(d.DAY38_REQUIRED_STAGES)
+    assert result["enterprise"]["probe_count"] == 12
     assert result["audit_sha256"] == digest(json.dumps(receipt).encode())
     with pytest.raises(ValueError, match="missing"):
         d.verify_day38_offline(api, [], SHA, "pull_request", "feat/day38", MERGE)

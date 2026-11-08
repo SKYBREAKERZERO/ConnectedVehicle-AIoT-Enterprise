@@ -217,6 +217,8 @@ def test_day37_denies_untrusted_day38_release_proof(
         "audit_sha256": "a" * 64,
         "enterprise": {
             "stage_count": len(day38.DAY38_REQUIRED_STAGES),
+            "probe_count": 12,
+            "probe_index_sha256": "c" * 64,
             "final_gate": "OFFLINE_AUDIT_PASS",
             "aggregate_sha256": "b" * 64,
         },
@@ -251,6 +253,8 @@ def test_day37_retains_validated_day38_same_sha_and_attempt(
         "audit_sha256": "a" * 64,
         "enterprise": {
             "stage_count": len(day38.DAY38_REQUIRED_STAGES),
+            "probe_count": 12,
+            "probe_index_sha256": "c" * 64,
             "final_gate": "OFFLINE_AUDIT_PASS",
             "aggregate_sha256": "b" * 64,
         },
@@ -264,6 +268,8 @@ def test_day37_retains_validated_day38_same_sha_and_attempt(
         "audit_sha256": "a" * 64,
         "aggregate_sha256": "b" * 64,
         "stage_count": len(day38.DAY38_REQUIRED_STAGES),
+        "probe_count": 12,
+        "probe_index_sha256": "c" * 64,
     }
 
 
