@@ -11,22 +11,34 @@ in-sync rather than pending-reboot, inspect rds.force_ssl in a live SQL session,
 confirm pg_stat_ssl for a TLS session, and ensure sslmode=disable is rejected.
 Existing RDS instances may need an approved reboot before the static change applies.
 
-## Two Secrets Manager rotation blockers remain intentionally enforced
+## Secrets Manager rotation
 
-The application database credential and Redis auth Secret resources are metadata-only.
-The actual versions are administered separately. An empty Lambda, fake rotation schedule
-or Checkov waiver would claim security without rotating credentials and is prohibited.
+The Foundation root manages weekly schedules and grants invocation only to
+Secrets Manager for the matching Secret in the reviewed account. Each schedule
+uses a distinct published Lambda version. The Foundation administrator owns
+the Lambda deployments, their database/cache reachability and their scoped
+Secrets Manager, KMS and service permissions.
 
-Application: bootstrap the least-privilege app_user role and AWSCURRENT credential; then
-implement actual four-step Secrets Manager rotation using AWSPENDING, SQL password updates,
-verify/test, idempotency, rollback, scoped IAM+KMS, and VPC network connectivity.
+Before enabling schedules, the administrator must complete the reviewed initial
+Foundation and credential bootstrap. The two Secrets need valid AWSCURRENT
+credentials. Bootstrap of a new Foundation must be separately reviewed and
+sequenced ahead of rotation activation. The full Foundation plan is required
+once both handlers and credentials are ready.
 
-Redis: implement the documented ElastiCache ROTATE/SET overlap sequence, client token
-refresh, AWSPENDING/AWSCURRENT stage movement, retries and rollback without exposing
-the ephemeral Terraform auth_token_wo value or adding secrets to State/artifacts.
+- Application PostgreSQL must rotate the non-admin app_user. Use a reviewed
+  four-step handler that tests the pending login over TLS and handles retries
+  safely. Confirm running tasks can refresh credentials or coordinate their
+  replacement during the rotation window.
+- Redis uses a replication-group AUTH token. Use a reviewed handler that
+  uses ROTATE to allow overlap, tests the pending token over TLS, and coordinates
+  client refresh or task replacement before SET retires the old token. Prove
+  rollback from a partially completed rotation. Keep bootstrap token values
+  out of State and CI evidence.
 
-Only deploy aws_secretsmanager_secret_rotation after a working, reviewed, tested
-rotation function and least-privilege permissions exist. CI must continue to fail
-on both CKV2_AWS_57 findings until that work is completed.
-
-Day38 remains an offline read-only candidate, not AWS deployment approval.
+Setting rotate_immediately to false waits for the schedule and still lets AWS
+call testSecret on registration. The read-only Day37 release preflight requires
+an enabled and correctly scoped schedule, a single current version, no separate
+pending version, and a completed rotation timestamp within eight days for both
+Secrets. AWS Staging acceptance still requires observing successful real
+rotations and verifying client continuity. The CI scanner checks Terraform
+configuration, and the unit tests exercise the preflight rejection paths.

@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -242,6 +243,33 @@ def aws_json(*args: str) -> dict[str, Any]:
     return body
 
 
+def require_rotated_secret(secret: dict[str, Any], arn: str, account: str, kind: str) -> None:
+    function = (
+        rf"arn:aws:lambda:{REGION}:{account}:function:cv-ota-staging-rotate-{kind}:[1-9][0-9]*"
+    )
+    stages = secret.get("VersionIdsToStages", {})
+    day = {"application": "SUN", "redis": "WED"}[kind]
+    rules = secret.get("RotationRules", {})
+    if (
+        secret.get("ARN") != arn
+        or secret.get("DeletedDate")
+        or secret.get("RotationEnabled") is not True
+        or re.fullmatch(function, str(secret.get("RotationLambdaARN", ""))) is None
+        or rules.get("ScheduleExpression") != f"cron(0 17 ? * {day} *)"
+        or rules.get("Duration") != "2h"
+        or sum("AWSCURRENT" in labels for labels in stages.values()) != 1
+        or any("AWSPENDING" in labels and "AWSCURRENT" not in labels for labels in stages.values())
+    ):
+        raise ValueError(f"BLOCKED: {kind} Secret rotation is disabled, unbound or incomplete")
+    try:
+        rotated = datetime.fromisoformat(secret["LastRotatedDate"])
+        age = datetime.now(UTC) - rotated
+    except (KeyError, ValueError, TypeError) as exc:
+        raise ValueError(f"BLOCKED: {kind} Secret has no verified rotation timestamp") from exc
+    if not timedelta(0) <= age <= timedelta(days=8):
+        raise ValueError(f"BLOCKED: {kind} Secret rotation is stale")
+
+
 def live(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
     env = os.environ if env is None else env
     c = config(mode, env)
@@ -298,14 +326,7 @@ def live(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
         if any(g.get("VpcId") != c["vpc"] for g in groups):
             raise ValueError("BLOCKED: security group outside staging VPC")
         secret = aws_json("secretsmanager", "describe-secret", "--secret-id", c["database_secret"])
-        if secret.get("ARN") != c["database_secret"] or secret.get("DeletedDate"):
-            raise ValueError("BLOCKED: application database Secret missing or pending deletion")
-        if "AWSCURRENT" not in [
-            stage for stages in secret.get("VersionIdsToStages", {}).values() for stage in stages
-        ]:
-            raise ValueError(
-                "BLOCKED: app_user database Secret has no AWSCURRENT credentials version"
-            )
+        require_rotated_secret(secret, c["database_secret"], c["account"], "application")
         db = aws_json(
             "rds", "describe-db-instances", "--db-instance-identifier", "cv-ota-staging-postgres"
         ).get("DBInstances", [])
@@ -332,23 +353,14 @@ def live(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
             or cache[0].get("Status") != "available"
             or cache[0].get("TransitEncryptionEnabled") is not True
             or cache[0].get("AtRestEncryptionEnabled") is not True
+            or cache[0].get("AuthTokenEnabled") is not True
         ):
             raise ValueError("BLOCKED: TLS encrypted Staging Redis Foundation missing")
         if "redis_auth_secret" in c:
             auth = aws_json(
                 "secretsmanager", "describe-secret", "--secret-id", c["redis_auth_secret"]
             )
-            if (
-                auth.get("ARN") != c["redis_auth_secret"]
-                or auth.get("DeletedDate")
-                or "AWSCURRENT"
-                not in [
-                    stage
-                    for stages in auth.get("VersionIdsToStages", {}).values()
-                    for stage in stages
-                ]
-            ):
-                raise ValueError("BLOCKED: Redis auth Secret lacks reviewed current version")
+            require_rotated_secret(auth, c["redis_auth_secret"], c["account"], "redis")
     if "target_group" in c:
         tgs = aws_json(
             "elbv2", "describe-target-groups", "--target-group-arns", c["target_group"]

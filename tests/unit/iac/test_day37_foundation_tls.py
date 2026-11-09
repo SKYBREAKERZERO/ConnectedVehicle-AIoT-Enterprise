@@ -74,3 +74,32 @@ def test_foundation_rds_tls_rejects_mutations(mutation: str) -> None:
         )
     with pytest.raises(AssertionError):
         _verify(src)
+
+
+@pytest.mark.parametrize(
+    ("secret", "permission", "variable", "day"),
+    [
+        ("application", "application_rotation", "application_rotation_lambda_arn", "SUN"),
+        ("redis_auth", "redis_rotation", "redis_rotation_lambda_arn", "WED"),
+    ],
+)
+def test_foundation_secrets_have_scoped_weekly_rotation(
+    secret: str, permission: str, variable: str, day: str
+) -> None:
+    hcl2 = pytest.importorskip("hcl2", reason="Pinned HCL parser runs in IaC CI")
+    parsed = hcl2.loads(ROOT.with_name("rotation.tf").read_text(encoding="utf-8"))
+    schedule = _resource(parsed, "aws_secretsmanager_secret_rotation", secret)
+    invoke = _resource(parsed, "aws_lambda_permission", permission)
+    assert _single(schedule["secret_id"]) == f"${{aws_secretsmanager_secret.{secret}.id}}"
+    assert _single(schedule["rotation_lambda_arn"]) == f"${{var.{variable}}}"
+    assert _single(schedule["rotate_immediately"]) is False
+    assert _single(_single(schedule["depends_on"])) == f"${{aws_lambda_permission.{permission}}}"
+    rules = _single(schedule["rotation_rules"])
+    assert _single(rules["schedule_expression"]) == f"cron(0 17 ? * {day} *)"
+    assert _single(rules["duration"]) == "2h"
+    assert _single(invoke["action"]) == "lambda:InvokeFunction"
+    assert _single(invoke["principal"]) == "secretsmanager.amazonaws.com"
+    assert _single(invoke["source_account"]) == "${var.account_id}"
+    assert _single(invoke["source_arn"]) == f"${{aws_secretsmanager_secret.{secret}.arn}}"
+    assert variable in _single(invoke["function_name"])
+    assert variable in _single(invoke["qualifier"])

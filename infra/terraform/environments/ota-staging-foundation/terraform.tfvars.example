@@ -12,4 +12,6 @@ vpc_flow_log_bucket_arn = "arn:aws:s3:::REPLACE-WITH-STAGING-FLOW-LOG-DELIVERY-B
 alb_access_log_bucket_name = "replace-with-staging-alb-access-logs-bucket"
 rds_monitoring_role_arn = "arn:aws:iam::123456789012:role/REPLACE-RDS-MONITORING-ROLE"
 # The two S3 destinations need correct delivery policies before Terraform Apply.
-# Rotation of metadata-only application/Redis Secrets remains a separate Release BLOCKER.
+# Replace account and version with the reviewed, deployed rotation handlers.
+application_rotation_lambda_arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:cv-ota-staging-rotate-application:1"
+redis_rotation_lambda_arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:cv-ota-staging-rotate-redis:1"

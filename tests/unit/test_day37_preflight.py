@@ -3,11 +3,26 @@
 from __future__ import annotations
 
 import copy
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
 from scripts import day37_preflight as pf
+
+
+def rotated_secret(arn: str, kind: str) -> dict[str, Any]:
+    day = {"application": "SUN", "redis": "WED"}[kind]
+    return {
+        "ARN": arn,
+        "VersionIdsToStages": {"1": ["AWSCURRENT"]},
+        "RotationEnabled": True,
+        "RotationLambdaARN": (
+            f"arn:aws:lambda:ap-northeast-1:123456789012:function:cv-ota-staging-rotate-{kind}:7"
+        ),
+        "LastRotatedDate": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+        "RotationRules": {"ScheduleExpression": f"cron(0 17 ? * {day} *)", "Duration": "2h"},
+    }
 
 
 def env(mode: str = "deploy") -> dict[str, str]:
@@ -161,10 +176,9 @@ def test_live_aws_resources_bind_exact_account_and_vpc(monkeypatch: pytest.Monke
                 for x in ("sg-12345678", "sg-87654321", "sg-abcdef12")
             ]
         },
-        "describe-secret": {
-            "ARN": e["TF_VAR_application_database_secret_arn"],
-            "VersionIdsToStages": {"1": ["AWSCURRENT"]},
-        },
+        "describe-secret": rotated_secret(
+            e["TF_VAR_application_database_secret_arn"], "application"
+        ),
         "describe-db-instances": {
             "DBInstances": [
                 {
@@ -185,6 +199,7 @@ def test_live_aws_resources_bind_exact_account_and_vpc(monkeypatch: pytest.Monke
                     "Status": "available",
                     "TransitEncryptionEnabled": True,
                     "AtRestEncryptionEnabled": True,
+                    "AuthTokenEnabled": True,
                 }
             ]
         },
@@ -207,10 +222,7 @@ def test_live_aws_resources_bind_exact_account_and_vpc(monkeypatch: pytest.Monke
 
     def fake(*args: str) -> dict[str, Any]:
         if args[1] == "describe-secret" and args[3] == e["TF_VAR_redis_auth_secret_arn"]:
-            return {
-                "ARN": e["TF_VAR_redis_auth_secret_arn"],
-                "VersionIdsToStages": {"1": ["AWSCURRENT"]},
-            }
+            return rotated_secret(e["TF_VAR_redis_auth_secret_arn"], "redis")
         return copy.deepcopy(results["sts" if args[0] == "sts" else args[1]])
 
     monkeypatch.setattr(pf, "aws_json", fake)
@@ -257,3 +269,26 @@ def test_workflow_config_checks_precede_each_oidc_step() -> None:
         after = steps[claims[0] + 1]
         assert f"day37_preflight config --mode {mode}" in before["run"]
         assert f"day37_preflight live --mode {mode}" in after["run"]
+
+
+@pytest.mark.parametrize("kind", ["application", "redis"])
+@pytest.mark.parametrize(
+    "fault", ["disabled", "unqualified", "no-rotation", "stale", "pending", "wrong-schedule"]
+)
+def test_release_rejects_unverified_rotation(kind: str, fault: str) -> None:
+    arn = "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:test"
+    secret = rotated_secret(arn, kind)
+    if fault == "disabled":
+        secret["RotationEnabled"] = False
+    elif fault == "unqualified":
+        secret["RotationLambdaARN"] = secret["RotationLambdaARN"].rsplit(":", 1)[0]
+    elif fault == "no-rotation":
+        del secret["LastRotatedDate"]
+    elif fault == "stale":
+        secret["LastRotatedDate"] = (datetime.now(UTC) - timedelta(days=9)).isoformat()
+    elif fault == "pending":
+        secret["VersionIdsToStages"]["2"] = ["AWSPENDING"]
+    else:
+        secret["RotationRules"]["ScheduleExpression"] = "rate(365 days)"
+    with pytest.raises(ValueError, match="BLOCKED"):
+        pf.require_rotated_secret(secret, arn, "123456789012", kind)
