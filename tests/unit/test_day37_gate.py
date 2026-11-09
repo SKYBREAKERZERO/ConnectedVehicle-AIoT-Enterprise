@@ -174,7 +174,7 @@ def test_latest_failed_upstream_blocks_even_if_old_success() -> None:
                 "head_sha": COMMIT,
                 "head_branch": "main",
                 "event": "push",
-                "run_started_at": "2026-11-06T09:00:00Z",
+                "created_at": "2026-11-06T09:00:00Z",
                 "run_attempt": 1,
                 "id": i + 1,
                 "status": "completed",
@@ -182,7 +182,7 @@ def test_latest_failed_upstream_blocks_even_if_old_success() -> None:
             }
         )
     rows.append(
-        {**rows[0], "id": 99, "run_started_at": "2026-11-06T10:00:00Z", "conclusion": "failure"}
+        {**rows[0], "id": 99, "created_at": "2026-11-06T10:00:00Z", "conclusion": "failure"}
     )
     with pytest.raises(ValueError, match="latest successful"):
         gate.choose_runs(rows, COMMIT)
@@ -207,6 +207,7 @@ def test_day37_denies_untrusted_day38_release_proof(
     monkeypatch: pytest.MonkeyPatch, damage: str
 ) -> None:
     from scripts import day38_readiness as day38
+    from scripts import day39_trusted_verifier as day39
 
     monkeypatch.setenv("GH_TOKEN", "test-only-token")
     offline: dict[str, Any] = {
@@ -234,7 +235,7 @@ def test_day37_denies_untrusted_day38_release_proof(
     elif damage == "bad-digest":
         offline["audit_sha256"] = "not-a-hash"
 
-    monkeypatch.setattr(day38, "verify_day38_offline", lambda *args: offline)
+    monkeypatch.setattr(day39, "verify", lambda *args: {"day38": offline})
     with pytest.raises(ValueError, match="Day38 protected-main offline evidence"):
         gate.day38_admission([], COMMIT)
 
@@ -243,6 +244,7 @@ def test_day37_retains_validated_day38_same_sha_and_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from scripts import day38_readiness as day38
+    from scripts import day39_trusted_verifier as day39
 
     monkeypatch.setenv("GH_TOKEN", "test-only-token")
     proof = {
@@ -259,7 +261,8 @@ def test_day37_retains_validated_day38_same_sha_and_attempt(
             "aggregate_sha256": "b" * 64,
         },
     }
-    monkeypatch.setattr(day38, "verify_day38_offline", lambda *args: proof)
+    security = {"day38": proof}
+    monkeypatch.setattr(day39, "verify", lambda *args: security)
     assert gate.day38_admission([], COMMIT) == {
         "decision": "OFFLINE_AUDIT_PASS",
         "candidate_sha": COMMIT,
@@ -270,6 +273,7 @@ def test_day37_retains_validated_day38_same_sha_and_attempt(
         "stage_count": len(day38.DAY38_REQUIRED_STAGES),
         "probe_count": 12,
         "probe_index_sha256": "c" * 64,
+        "security": security,
     }
 
 

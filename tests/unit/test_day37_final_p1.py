@@ -43,6 +43,16 @@ def make(tmp: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             "release_authorized": False,
             "day36_run_id": "36",
             "day36_attempt": "2",
+            "day38": {
+                "security": {
+                    "decision": "DAY39_SECURITY_PASS",
+                    "verifier_sha": SHA,
+                    "candidate_sha": SHA,
+                    "aws_authorized": False,
+                    "production_authorized": False,
+                },
+            },
+            "runtime_security": {"digest": DIGEST},
         },
         "deploy-plan/plan-summary.json": {
             "phase": "deploy",
@@ -119,4 +129,13 @@ def test_recovery_result_does_not_unblock_failed_release(tmp_path: Path) -> None
     needs["close"]["result"] = "skipped"
     needs["recovery"]["result"] = "success"
     with pytest.raises(ValueError, match="job status"):
+        g.final("deploy", needs, tmp_path, SHA, "123", "1")
+
+
+def test_missing_day39_security_blocks_final_gate(tmp_path: Path) -> None:
+    needs, files = make(tmp_path)
+    proof = files["admission/admission.json"]
+    del proof["day38"]
+    (tmp_path / "admission/admission.json").write_text(json.dumps(proof))
+    with pytest.raises(ValueError, match="Day39 security admission"):
         g.final("deploy", needs, tmp_path, SHA, "123", "1")

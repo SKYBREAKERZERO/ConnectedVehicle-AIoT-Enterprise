@@ -49,19 +49,32 @@ jobs:
       with:
         terraform_version: '1.14.7'
         terraform_wrapper: false
+    - name: Day39 security fault injection
+      run: |
+        python -m pytest tests/unit/test_day39_trusted_verifier.py -q \
+          --junit-prefix="$GITHUB_SHA" --junitxml=.day39-reports/negative.xml
+    - name: Upload Day39 security test evidence
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day39-negative-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day39-reports/negative.xml
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
     - name: Python, evidence policy, workflow contracts and safe Terraform root
       run: |
         set -euo pipefail
         python -m compileall -q scripts/day37_gate.py scripts/day37_aws.py scripts/day37_preflight.py
-        python -m pytest tests/unit/test_day37_gate.py tests/unit/test_day37_aws.py tests/unit/test_day37_workflow.py tests/unit/test_day37_staging_static.py tests/unit/test_day37_preflight.py -q
+        python -m pytest tests/unit/test_day37_gate.py tests/unit/test_day37_aws.py tests/unit/test_day37_workflow.py tests/unit/test_day37_staging_static.py tests/unit/test_day37_preflight.py tests/unit/test_day37_final_p1.py -q
         terraform -chdir="${DAY37_TF_ROOT}" fmt -check -recursive
         terraform -chdir="${DAY37_TF_ROOT}" init -backend=false -input=false
         terraform -chdir="${DAY37_TF_ROOT}" validate -no-color
 
   admission:
-    name: '02 Protected-main, source SHA, Day35/Day36 and approval policy'
+    name: '02 Protected-main, source SHA, Day35/Day36 and Day39 security admission'
     needs: [source]
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'plan' || inputs.mode == 'bootstrap' || inputs.mode == 'deploy') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.mode == 'plan' || inputs.mode == 'bootstrap' || inputs.mode == 'deploy') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     outputs:
@@ -70,12 +83,13 @@ jobs:
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
+        ref: ${{ github.workflow_sha }}
         persist-credentials: false
         fetch-depth: 0
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.12'
-    - name: Fail closed on non-main or missing same-commit upstream success
+    - name: Verify protected-main Day39 security evidence and release prerequisites
       id: receipt
       env:
         GH_TOKEN: ${{ github.token }}
@@ -91,7 +105,8 @@ jobs:
             o.write('day36_run_id=' + d['day36_run_id'] + '\n')
             o.write('day36_attempt=' + d['day36_attempt'] + '\n')
         PY
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: day37-admission-${{ github.run_id }}-${{ github.run_attempt }}
         path: .day37/admission.json
@@ -102,7 +117,7 @@ jobs:
   publish:
     name: '04 Load verified Day36 candidate TAR, ECR push, Digest + Cosign'
     needs: [source, admission]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.admission.result == 'success' && inputs.mode == 'deploy' }}
     environment: aws-staging-publish
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -189,7 +204,7 @@ jobs:
   plan:
     name: '03 Read-only or Bootstrap saved Plan (encrypted, versioned S3)'
     needs: [source, admission]
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'plan' || inputs.mode == 'bootstrap') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.admission.result == 'success' && (inputs.mode == 'plan' || inputs.mode == 'bootstrap') }}
     environment: aws-staging-plan
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -288,7 +303,7 @@ jobs:
     - source
     - admission
     - plan
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'bootstrap' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.admission.result == 'success' && inputs.mode == 'bootstrap' }}
     environment: aws-staging-bootstrap
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -371,7 +386,7 @@ jobs:
     - source
     - admission
     - publish
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.admission.result == 'success' && inputs.mode == 'deploy' }}
     environment: aws-staging-plan
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -478,7 +493,7 @@ jobs:
     - admission
     - publish
     - deploy_plan
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.admission.result == 'success' && inputs.mode == 'deploy' }}
     environment: aws-staging-deploy
     runs-on: ubuntu-24.04
     timeout-minutes: 50
@@ -606,7 +621,7 @@ jobs:
     - publish
     - deploy_plan
     - deploy
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.admission.result == 'success' && inputs.mode == 'deploy' }}
     environment: aws-staging-verify
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -679,7 +694,7 @@ jobs:
     - deploy_plan
     - deploy
     - verify
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' && needs.verify.result == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && needs.admission.result == 'success' && inputs.mode == 'deploy' && needs.verify.result == 'success' }}
     environment: aws-staging-recovery
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -805,7 +820,7 @@ jobs:
     - deploy_plan
     - deploy
     - verify
-    if: ${{ always() && inputs.mode == 'deploy' && (needs.deploy.result == 'failure' || needs.verify.result == 'failure') && needs.publish.result
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.mode == 'deploy' && (needs.deploy.result == 'failure' || needs.verify.result == 'failure') && needs.publish.result
       == 'success' && needs.admission.result == 'success' }}
     environment: aws-staging-recovery
     runs-on: ubuntu-24.04

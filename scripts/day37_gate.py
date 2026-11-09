@@ -13,9 +13,11 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from subprocess import CalledProcessError
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from zipfile import BadZipFile
 
 REPO = "SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise"
 RULESET_ID = 24828733
@@ -136,15 +138,15 @@ def choose_runs(rows: list[dict[str, Any]], commit: str) -> dict[str, dict[str, 
             and row.get("event") in {"push", "workflow_dispatch"}
         ):
             key = (
-                row.get("run_started_at", ""),
-                int(row.get("run_attempt", 0)),
+                row["created_at"],
                 int(row.get("id", 0)),
+                int(row.get("run_attempt", 0)),
             )
             old = selected.get(path)
             if old is None or key > (
-                old.get("run_started_at", ""),
-                int(old.get("run_attempt", 0)),
+                old["created_at"],
                 int(old.get("id", 0)),
+                int(old.get("run_attempt", 0)),
             ):
                 selected[path] = row
     if set(selected) != REQUIRED_WORKFLOWS or any(
@@ -162,11 +164,13 @@ def day38_admission(rows: list[dict[str, Any]], commit: str) -> dict[str, Any]:
     original Day38 push offline gate, and a PR cannot supply a main receipt.
     """
     from scripts import day38_readiness as d38
+    from scripts import day39_trusted_verifier as d39
 
     token = os.environ.get("GH_TOKEN", "")
     if not token:
         raise ValueError("Day38 protected-main evidence requires GitHub API token")
-    offline = d38.verify_day38_offline(d38.GitHub(token), rows, commit, "push", "main", commit)
+    security = d39.verify(commit, rows)
+    offline = security["day38"]
     enterprise = offline.get("enterprise")
     if not (
         offline.get("decision") == "OFFLINE_AUDIT_PASS"
@@ -197,10 +201,13 @@ def day38_admission(rows: list[dict[str, Any]], commit: str) -> dict[str, Any]:
         "probe_count": enterprise["probe_count"],
         "probe_index_sha256": enterprise["probe_index_sha256"],
         "decision": "OFFLINE_AUDIT_PASS",
+        "security": security,
     }
 
 
 def admission(commit: str) -> dict[str, Any]:
+    from scripts import day39_trusted_verifier as d39
+
     if (
         not SHA.fullmatch(commit)
         or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
@@ -215,10 +222,11 @@ def admission(commit: str) -> dict[str, Any]:
     verify_ruleset(api(f"rulesets/{RULESET_ID}"))
     results = api(f"actions/runs?head_sha={commit}&per_page=100")
     rows = results.get("workflow_runs", [])
-    if results.get("total_count", 0) > 100:
+    if results.get("total_count") != len(rows) or len(rows) > 100:
         raise ValueError("Ambiguous upstream workflow pagination")
     latest = choose_runs(rows, commit)
     day38 = day38_admission(rows, commit)
+    runtime_security = d39.verify_runtime(commit, latest[d39.RUNTIME_PATH])
     day36 = latest[".github/workflows/day36.yml"]
     started = datetime.fromisoformat(day36.get("run_started_at", "").replace("Z", "+00:00"))
     if not 0 <= (datetime.now(UTC) - started).total_seconds() <= 5400:
@@ -236,6 +244,23 @@ def admission(commit: str) -> dict[str, Any]:
     ):
         if expected not in names:
             raise ValueError("Day36 same-attempt required proof expired or missing: " + expected)
+    fresh = api(f"actions/runs?head_sha={commit}&per_page=100")
+    fresh_rows = fresh.get("workflow_runs", [])
+    if (
+        fresh.get("total_count") != len(fresh_rows)
+        or len(fresh_rows) > 100
+        or {k: d39.run_identity(r) for k, r in choose_runs(fresh_rows, commit).items()}
+        != {k: d39.run_identity(r) for k, r in latest.items()}
+    ):
+        raise ValueError("Upstream workflow changed during release admission")
+    fresh_security = d39.newest(fresh_rows, commit)
+    if (fresh_security["id"], fresh_security["run_attempt"]) != (
+        day38["run_id"],
+        day38["run_attempt"],
+    ):
+        raise ValueError("Day38 security attempt changed during release admission")
+    if api("branches/main").get("commit", {}).get("sha") != commit:
+        raise ValueError("The release commit is no longer the current main HEAD")
     return {
         "decision": "TRUSTED_MAIN_SOURCE_ADMITTED",
         "commit": commit,
@@ -248,6 +273,7 @@ def admission(commit: str) -> dict[str, Any]:
             for k, r in latest.items()
         },
         "day38": day38,
+        "runtime_security": runtime_security,
         "governance": "main-ruleset-24828733-verified",
         **PRODUCTION_FALSE,
     }
@@ -402,6 +428,17 @@ def final(
             or a.get("release_authorized") is not False
         ):
             raise ValueError("Source admission provenance mismatch")
+        security = a.get("day38", {}).get("security", {})
+        runtime = a.get("runtime_security", {})
+        if (
+            security.get("decision") != "DAY39_SECURITY_PASS"
+            or security.get("verifier_sha") != commit
+            or security.get("candidate_sha") != commit
+            or security.get("aws_authorized") is not False
+            or security.get("production_authorized") is not False
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", str(runtime.get("digest", ""))) is None
+        ):
+            raise ValueError("Missing or mismatched Day39 security admission")
         output["proofs"]["admission.json"] = filehash(folder / "admission/admission.json")
     if mode == "plan":
         p = strict_load(folder / "plan/plan-summary.json")
@@ -525,8 +562,16 @@ def main() -> None:
                 os.environ.get("GITHUB_RUN_ID", "local"),
                 os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
             )
-    except (ValueError, KeyError, OSError, TypeError, json.JSONDecodeError) as error:
-        result = {"decision": "BLOCKED", "reason": str(error), "mode": a.mode, **PRODUCTION_FALSE}
+    except (ValueError, KeyError, OSError, TypeError, BadZipFile, CalledProcessError) as error:
+        result = {
+            "decision": "BLOCKED",
+            "reason": str(error),
+            "mode": a.mode,
+            "commit": a.commit,
+            "run_id": os.environ.get("GITHUB_RUN_ID"),
+            "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+            **PRODUCTION_FALSE,
+        }
         dump(a.output, result)
         raise SystemExit(1) from None
     dump(a.output, result)
