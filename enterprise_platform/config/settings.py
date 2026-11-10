@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     database_statement_timeout_seconds: float = Field(default=10.0, gt=0, le=3600)
     database_idle_transaction_timeout_seconds: float = Field(default=30.0, gt=0, le=3600)
 
+    redis_tls_enabled: bool = False
     redis_host: str = Field(default="localhost", min_length=1)
     redis_port: int = Field(default=16379, ge=1, le=65535)
     redis_db: int = Field(default=0, ge=0)
