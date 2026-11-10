@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import urllib.error
+import urllib.request
+from email.message import Message
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +11,7 @@ import pytest
 import yaml
 
 from scripts import day37_gate as release
+from scripts import day38_readiness as offline
 from scripts import day39_trusted_verifier as gate
 
 COMMIT = "a" * 40
@@ -21,12 +24,12 @@ def run(**changes: Any) -> dict[str, Any]:
         "run_attempt": 2,
         "head_sha": COMMIT,
         "workflow_id": 99,
-        "name": gate.offline.DAY38_NAME,
-        "path": gate.offline.DAY38_PATH,
+        "name": offline.DAY38_NAME,
+        "path": offline.DAY38_PATH,
         "event": "push",
         "head_branch": "main",
-        "repository": {"full_name": gate.offline.REPO},
-        "head_repository": {"full_name": gate.offline.REPO},
+        "repository": {"full_name": offline.REPO},
+        "head_repository": {"full_name": offline.REPO},
         "created_at": "2026-11-08T09:00:00Z",
         "run_started_at": START,
         "status": "completed",
@@ -47,12 +50,12 @@ def test_pr_modified_verifier_cannot_supply_pass(
     monkeypatch: pytest.MonkeyPatch, key: str, value: str
 ) -> None:
     for name, expected in {
-        "GITHUB_REPOSITORY": gate.offline.REPO,
+        "GITHUB_REPOSITORY": offline.REPO,
         "GITHUB_EVENT_NAME": "workflow_dispatch",
         "GITHUB_REF": "refs/heads/main",
         "GITHUB_SHA": COMMIT,
         "GITHUB_WORKFLOW_SHA": COMMIT,
-        "GITHUB_WORKFLOW_REF": f"{gate.offline.REPO}/{gate.RELEASE_PATH}@refs/heads/main",
+        "GITHUB_WORKFLOW_REF": f"{offline.REPO}/{gate.RELEASE_PATH}@refs/heads/main",
     }.items():
         monkeypatch.setenv(name, expected)
     monkeypatch.setenv(key, value)
@@ -67,7 +70,7 @@ def test_cross_commit_receipt_is_rejected(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(gate.AttemptEvidence, "get", lambda *_: selected)
     monkeypatch.setattr(gate.AttemptEvidence, "artifacts", lambda *_: [])
     monkeypatch.setattr(
-        gate.offline,
+        offline,
         "verify_day38_offline",
         lambda *_: {
             "candidate_sha": "b" * 40,
@@ -92,7 +95,7 @@ def test_older_attempt_jobs_are_rejected(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_renamed_older_attempt_artifact_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        gate.offline.GitHub,
+        offline.GitHub,
         "artifacts",
         lambda *_: [
             {
@@ -109,36 +112,38 @@ def test_renamed_older_attempt_artifact_is_rejected(monkeypatch: pytest.MonkeyPa
 def test_tampered_archive_digest_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     class Redirect:
         def open(self, *_: Any, **__: Any) -> None:
+            headers = Message()
+            headers["Location"] = "https://actions.blob.core.windows.net/result.zip"
             raise urllib.error.HTTPError(
                 "https://api.github.com",
                 302,
                 "Found",
-                {"Location": "https://actions.blob.core.windows.net/result.zip"},
+                headers,
                 None,
             )
 
-    monkeypatch.setattr(gate.offline.urllib.request, "build_opener", lambda *_: Redirect())
-    monkeypatch.setattr(gate.offline, "fetch_url", lambda *_, **__: b"tampered")
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_: Redirect())
+    monkeypatch.setattr(offline, "fetch_url", lambda *_, **__: b"tampered")
     with pytest.raises(ValueError, match="ZIP digest mismatch"):
-        gate.offline.download_artifact(1, "offline-test", hashlib.sha256(b"original").hexdigest())
+        offline.download_artifact(1, "offline-test", hashlib.sha256(b"original").hexdigest())
 
 
 def test_required_security_job_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    missing = gate.offline.DAY38_REQUIRED_JOB_NAMES[0]
+    missing = offline.DAY38_REQUIRED_JOB_NAMES[0]
     monkeypatch.setattr(
         gate.AttemptEvidence,
         "get",
         lambda *_: {
-            "total_count": len(gate.offline.DAY38_REQUIRED_JOB_NAMES) - 1,
+            "total_count": len(offline.DAY38_REQUIRED_JOB_NAMES) - 1,
             "jobs": [
                 {"name": name, "run_id": 42, "run_attempt": 2, "conclusion": "success"}
-                for name in gate.offline.DAY38_REQUIRED_JOB_NAMES
+                for name in offline.DAY38_REQUIRED_JOB_NAMES
                 if name != missing
             ],
         },
     )
     with pytest.raises(ValueError, match="missing"):
-        gate.offline.verify_day38_offline(
+        offline.verify_day38_offline(
             gate.AttemptEvidence("offline-test", run()), [run()], COMMIT, "push", "main", COMMIT
         )
 
@@ -200,7 +205,7 @@ def test_day37_denies_release_when_security_proof_is_missing(
 def test_unverifiable_environment_approval_blocks(
     monkeypatch: pytest.MonkeyPatch, allow_bypass: bool | None
 ) -> None:
-    def response(_: gate.offline.GitHub, path: str) -> dict[str, Any]:
+    def response(_: offline.GitHub, path: str) -> dict[str, Any]:
         if "deployment-branch-policies" in path:
             return {"total_count": 1, "branch_policies": [{"name": "main", "type": "branch"}]}
         return {
@@ -218,9 +223,9 @@ def test_unverifiable_environment_approval_blocks(
             ],
         }
 
-    monkeypatch.setattr(gate.offline.GitHub, "get", response)
+    monkeypatch.setattr(offline.GitHub, "get", response)
     with pytest.raises(ValueError, match="Unverified protected-main approval environment"):
-        gate.require_environment_protection(gate.offline.GitHub("offline-test"))
+        gate.require_environment_protection(offline.GitHub("offline-test"))
 
 
 def test_green_runtime_without_sealed_security_artifact_is_rejected(
@@ -228,7 +233,7 @@ def test_green_runtime_without_sealed_security_artifact_is_rejected(
 ) -> None:
     selected = run(
         path=gate.RUNTIME_PATH,
-        name=gate.offline.WORKFLOWS[gate.RUNTIME_PATH],
+        name=offline.WORKFLOWS[gate.RUNTIME_PATH],
     )
     monkeypatch.setenv("GH_TOKEN", "offline-test")
 
@@ -240,7 +245,7 @@ def test_green_runtime_without_sealed_security_artifact_is_rejected(
                 "total_count": 1,
                 "jobs": [
                     {
-                        "name": gate.offline.FINAL_JOBS[gate.RUNTIME_PATH],
+                        "name": offline.FINAL_JOBS[gate.RUNTIME_PATH],
                         "run_id": 42,
                         "run_attempt": 2,
                         "conclusion": "success",
