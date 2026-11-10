@@ -43,7 +43,7 @@ WORKFLOWS = {
     ".github/workflows/ci-fault-matrix.yml": "CI isolation fault matrix",
 }
 DAY38_PATH = ".github/workflows/day38-release-readiness.yml"
-DAY38_NAME = "Day38 enterprise IaC release readiness"
+DAY38_NAME = "Day40 enterprise IaC release readiness"
 DAY38_OFFLINE_JOB = "Day38 offline Terraform security and contract audit"
 DAY38_GATE_JOB = "Day38 offline audit gate (not AWS release)"
 DAY38_AGGREGATE_STAGE = "day38-aggregate"
