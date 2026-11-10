@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from subprocess import CalledProcessError
 from uuid import uuid4
 
 import pytest
@@ -61,12 +62,13 @@ async def test_redis_tls_overlap_and_replacement(
         name,
         "--user",
         "0:0",
+        "--entrypoint",
+        "redis-server",
         "-p",
         "127.0.0.1::6379",
         "--mount",
         f"type=bind,source={tmp_path},target=/tls,readonly",
-        "redis:7-alpine",
-        "redis-server",
+        "redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
         "--port",
         "0",
         "--tls-port",
@@ -83,7 +85,12 @@ async def test_redis_tls_overlap_and_replacement(
         old,
     )
     try:
-        port = int(docker("port", name, "6379").split(":")[-1])
+        try:
+            port = int(docker("port", name, "6379").split(":")[-1])
+        except CalledProcessError:
+            pytest.fail(
+                "Redis TLS container did not start: " + docker("logs", "--tail", "20", name)
+            )
 
         async def ping(password: str, hostname: str = "localhost") -> bool:
             resources = create_redis_resources(
