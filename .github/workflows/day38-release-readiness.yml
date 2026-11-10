@@ -27,7 +27,7 @@
 # 24. Trusted-main schedule provides eventual recheck without token-based dispatch.
 # 25. Manual recheck and workflow_run observers never rerun Terraform.
 # ============================================================================
-name: Day38 enterprise IaC release readiness
+name: Day40 enterprise IaC release readiness
 
 'on':
   pull_request:
