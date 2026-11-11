@@ -1,0 +1,64 @@
+name: Day41 Offline Rotation and Recovery
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+concurrency:
+  group: day41-offline-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: 01 Source and type contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci-runtime
+      - run: |
+          python -m ruff check .
+          python -m ruff format --check .
+          python -m mypy .
+  faults:
+    name: 02 Offline fault injection / ${{ matrix.suite }}
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [rotation, admission]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci-runtime
+      - run: python -m pytest -q tests/unit/test_day41_${{ matrix.suite }}.py --junitxml=day41-${{ matrix.suite }}.xml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() }}
+        with:
+          name: day41-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: day41-${{ matrix.suite }}.xml
+          if-no-files-found: error
+          retention-days: 14
+  final:
+    name: 03 Day41 Offline Gate
+    needs: [quality, faults]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - env:
+          QUALITY: ${{ needs.quality.result }}
+          FAULTS: ${{ needs.faults.result }}
+        run: |
+          printf 'Candidate: `%s`\n\nRun/attempt: `%s/%s`\n\nAWS Staging: **BLOCKED**\n' \
+            "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_STEP_SUMMARY"
+          test "$QUALITY" = success && test "$FAULTS" = success
