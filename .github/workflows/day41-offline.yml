@@ -5,11 +5,12 @@ name: Day41 Offline Rotation and Recovery
   push:
     branches: [main]
   merge_group:
+  workflow_call:
 
 permissions:
   contents: read
 concurrency:
-  group: day41-offline-${{ github.ref }}
+  group: day41-offline-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

@@ -6,11 +6,12 @@ name: Day40 Runtime Security Closed Loop
     branches: [main]
   merge_group:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 concurrency:
-  group: day40-runtime-security-${{ github.event_name }}-${{ github.ref }}
+  group: day40-runtime-security-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 defaults:
   run:

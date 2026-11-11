@@ -1,0 +1,56 @@
+name: Day41 Enterprise Rotation Acceptance
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: day41-enterprise-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    name: Runtime rotation and IaC
+    uses: ./.github/workflows/day40-runtime-security.yml
+  recovery:
+    name: Recovery and trusted admission fault tests
+    uses: ./.github/workflows/day41-offline.yml
+  gate:
+    name: Day41 Enterprise Evidence Gate
+    needs: [runtime, recovery]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Require both verification chains
+        env:
+          PIPELINE_NEEDS: ${{ toJSON(needs) }}
+        run: python3 -m scripts.iac.pipeline_evidence needs --expected runtime,recovery
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day40-decision-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day41/runtime
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day40-proof-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day41/aggregate
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: day41-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day41/faults
+      - name: Verify and seal enterprise acceptance
+        run: python3 -m scripts.day41_enterprise_evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day41-enterprise-${{ github.run_id }}-${{ github.run_attempt }}
+          path: day41-enterprise.json
+          if-no-files-found: error
+          retention-days: 14
