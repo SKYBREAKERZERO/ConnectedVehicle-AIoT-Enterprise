@@ -1,0 +1,56 @@
+name: Day42 Enterprise OTA Release Acceptance
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: day42-enterprise-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    name: Runtime security and infrastructure
+    uses: ./.github/workflows/day41-enterprise.yml
+  rollout:
+    name: Canary and PostgreSQL recovery
+    uses: ./.github/workflows/day42-offline.yml
+  acceptance:
+    name: Day42 Enterprise Final Gate
+    needs: [runtime, rollout]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Require both chains to succeed
+        env:
+          PIPELINE_NEEDS: ${{ toJSON(needs) }}
+        run: python3 -m scripts.iac.pipeline_evidence needs --expected runtime,rollout
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day41-enterprise-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day42/runtime
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day42-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day42/rollout
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day42-rollout-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day42/proof
+      - name: Recompute evidence and record the release boundary
+        run: python3 -m scripts.day42_enterprise_evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day42-enterprise-${{ github.run_id }}-${{ github.run_attempt }}
+          path: day42-enterprise.json
+          retention-days: 14
+          if-no-files-found: error

@@ -6,11 +6,12 @@ name: Day42 OTA Canary and Recovery Acceptance
     branches: [main]
   merge_group:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 concurrency:
-  group: day42-offline-${{ github.event_name }}-${{ github.ref }}
+  group: day42-offline-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   quality:
