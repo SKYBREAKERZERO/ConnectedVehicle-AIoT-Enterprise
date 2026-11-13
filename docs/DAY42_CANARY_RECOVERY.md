@@ -11,6 +11,12 @@ verified service rollback. An OTA incident pauses the Campaign and reconciles
 existing jobs and acknowledgements. Both recovery routes require reconciliation
 before returning FAILED_RECOVERED.
 
+The PostgreSQL integration exercise invokes the Campaign pause command with a
+stable operation ID and checks tenant-scoped job reconciliation against native
+rows. Outstanding jobs, mismatched target identities and jobs assigned to
+undispatched targets block this check. This check covers Campaign and Job rows.
+Outbox, device receipts and audit acceptance require additional observers.
+
 The control Lambda version is a deployment-time placeholder. A live adapter
 must verify the approval and signed release against a trusted store, use a
 durable lock and operation IDs, and delegate Campaign progression and pause to

@@ -15,6 +15,7 @@ CASES = {
     "test_ota_timeout_pauses_without_reverting_firmware",
     "test_ecs_rollback_failure_requires_intervention",
     "test_approval_unavailable_never_opens_wave",
+    "test_day42_pause_replay_and_native_job_reconciliation",
 }
 
 

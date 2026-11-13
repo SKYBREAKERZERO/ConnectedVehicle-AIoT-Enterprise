@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-ci-runtime
       - run: |
-          python -m pytest -q tests/unit/test_day42_rollout.py --junitxml=.day42/rollout.xml
+          python -m pytest -q tests/unit/test_day42_rollout.py tests/integration/day21/test_day42_recovery.py --junitxml=.day42/rollout.xml
           python -m scripts.iac.pipeline_evidence publish --stage day42-rollout --folder .day42 --output .sealed
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
