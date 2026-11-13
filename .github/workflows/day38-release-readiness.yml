@@ -1,0 +1,1861 @@
+# Day38 — ConnectedVehicle-AIoT-Enterprise / enterprise release readiness.
+# ============================================================================
+# Security invariants (mandatory, not advisory):
+# 01. PR, push, merge queue and manual audit never receive AWS OIDC tokens.
+# 02. workflow_run uses immutable protected-main verifier code only.
+# 03. Uploaded GitHub artifacts and all upstream jobs are untrusted claims.
+# 04. All write operations, Terraform Apply/Destroy and AWS changes are forbidden.
+# 05. A new failed or pending run overrides an older successful run.
+# 06. Exact GITHUB_SHA, run_id, attempt and approved ancestor are bound.
+# 07. Every required job has a unique, stable GitHub check-context name.
+# 08. Failures, skipped jobs, cancelled runs and missing proof BLOCK release.
+# 09. Infrastructure Secret versions and credentials never enter artifacts.
+# 10. All metadata and manifests carry explicit release_authorized=false.
+# 11. CI-on-PR is not an AWS deployment and never asserts AWS compliance.
+# 12. Publishing a green workflow_run is not equivalent to PR CI acceptance.
+# 13. A blocked Checkov exception or unresolved RDS TLS blocks final quality.
+# 14. Job identity must be immutable; no shared concurrency cancellation.
+# 15. Terraform provider init must not contact a real remote state backend.
+# 16. The final decision is offline-only; Day37 retains deployment authority.
+# 17. Fault injection tests must demonstrate the failure boundary actually fired.
+# 18. Exact same-attempt artifact hash checks prevent replay or substitution.
+# 19. Workflow files should use SHA-pinned actions and reviewable tool versions.
+# 20. No checkout of the untrusted trigger SHA in the workflow_run observer.
+# 21. A single YAML performs offline testing and trusted post-offline review.
+# 22. No workflow_run self-subscription (would trigger recursive observation).
+# 23. No job in a PR-editable workflow has actions:write or any write token.
+# 24. Trusted-main schedule provides eventual recheck without token-based dispatch.
+# 25. Manual recheck and workflow_run observers never rerun Terraform.
+# ============================================================================
+name: Day40 enterprise IaC release readiness
+
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Read-only verification of trusted main; no IaC runs or AWS access'
+        required: true
+        type: choice
+        options: [recheck]
+        default: recheck
+      source_commit:
+        description: 'Optional offline source SHA; auto-filled by post-gate dispatch'
+        required: false
+        type: string
+      source_run_id:
+        description: 'Optional offline run ID; auto-filled by post-gate dispatch'
+        required: false
+        type: string
+      source_attempt:
+        description: 'Optional offline attempt; auto-filled by post-gate dispatch'
+        required: false
+        type: string
+  schedule:
+    # A read-only fallback: upstream workflows may finish before Day38 offline.
+    # GitHub cron is best effort and may be delayed; never a release authorization.
+    - cron: '17 * * * *'
+  workflow_run:
+    workflows:
+      - IaC quality gates
+      - Runtime quality gates
+      - Day34 full OTA acceptance
+      - Day35 full OTA acceptance
+      - Day37 AWS Staging enterprise release (fail closed)
+      - Day31 trust boundary
+      - CI isolation fault matrix
+    types: [completed]
+
+# Do not give this workflow or its jobs id-token:write, deployments:write,
+# packages:write, checks:write, pull-requests:write, or contents:write.
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+# Each individual run is retained as evidence even if another event uses
+# the same commit SHA. Job/run cancellation can erase failure evidence.
+concurrency:
+  group: day38-${{ github.event_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHONUNBUFFERED: '1'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: 'false'
+  DAY38_NO_AWS_AUTHORITY: 'true'
+
+jobs:
+
+  intake:
+    name: Day38 immutable source intake
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact GitHub event source (no persisted token)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install read-only Python verifier
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Bind immutable candidate and independent ancestor
+        id: baseline
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          python -m scripts.iac.ci_baseline_policy --output .day38-work/baseline.json
+      - name: Require the correct source event and account
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise source > .day38-work/intake.json
+          python -m json.tool .day38-work/intake.json > /dev/null
+      - name: Record SHA-256 of actual baseline admission receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-source \
+            --proof .day38-work/baseline.json \
+            --output .day38-reports/source.json
+      - name: Seal source decision with same-attempt provenance
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-source \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload source proof (never a deployment credential)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  source_guard:
+    name: Day38 source provenance and workflow trust
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout event-bound source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install Python interpreter
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Verify Git identity and ancestry
+        run: |
+          set -euo pipefail
+          git diff --check
+          python -m scripts.day38_enterprise source
+          python -m scripts.iac.ci_baseline_policy \
+            --output .day38-source-verified.json
+      - name: Check source identity cannot be substituted by an old SHA
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python -m scripts.day38_enterprise source
+          echo 'Verified event-bound checkout; workflow static policy is checked separately.' \
+            >> "$GITHUB_STEP_SUMMARY"
+      - name: Record immutable source binding
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          git log -1 --format=%H
+          echo 'Source trust is prerequisite, not release approval.' >> "$GITHUB_STEP_SUMMARY"
+
+  dependencies:
+    name: Day38 pinned dependency closure and compiler
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout verified source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install pinned isolated IaC toolchain
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      - name: Check interpreter and dependency closure
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          python --version > .day38-work/dependencies.log
+          python -m pip check >> .day38-work/dependencies.log
+          python -m compileall -q scripts/day38_readiness.py
+          python -m compileall -q scripts/day38_enterprise.py
+          python -m compileall -q scripts/iac
+          python - <<'PY' >> .day38-work/dependencies.log
+          from importlib.metadata import version
+          for name in ('pytest', 'ruff', 'mypy', 'checkov'):
+              print(f'{name}: {version(name)}')
+          PY
+
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-dependencies \
+            --proof .day38-work/dependencies.log \
+            --output .day38-reports/dependencies.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-dependencies \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-dependencies-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  python_quality:
+    name: Day38 Python Ruff, formatting and strict typing
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install pinned quality tools
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      - name: Run actual Ruff, formatting and mypy checks
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          {
+            ruff check scripts/iac scripts/day38_readiness.py scripts/day38_enterprise.py
+            ruff format --check scripts/iac scripts/day38_readiness.py scripts/day38_enterprise.py
+            mypy scripts/iac scripts/day38_readiness.py scripts/day38_enterprise.py
+          } 2>&1 | tee .day38-work/python-quality.log
+          test -s .day38-work/python-quality.log
+
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-python-quality \
+            --proof .day38-work/python-quality.log \
+            --output .day38-reports/python-quality.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-python-quality \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-python-quality-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  terraform_format:
+    name: Day38 Terraform global fmt and lock inventory
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout reviewed Terraform source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install pinned Terraform version
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'true'
+      - name: Format check every root and module
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          terraform version > .day38-work/terraform-format.log
+          terraform fmt -check -recursive infra/terraform >> .day38-work/terraform-format.log
+      - name: Reject unreviewed Terraform root exclusions
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> .day38-work/terraform-format.log
+          from scripts.iac.module_contracts import GROUPS
+          groups = sorted(GROUPS)
+          assert groups == ['foundation','governance','ota','roots'], groups
+          print('Reviewed module contract groups:', ', '.join(groups))
+          PY
+
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-terraform-format \
+            --proof .day38-work/terraform-format.log \
+            --output .day38-reports/terraform-format.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-terraform-format \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-terraform-format-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  terraform_roots:
+    name: Day38 static AWS Terraform root (${{ matrix.root }})
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        root: [ota-staging, ota-staging-foundation, ota-staging-identity]
+    permissions:
+      contents: read
+    env:
+      DAY38_ROOT: ${{ matrix.root }}
+    steps:
+      - name: Checkout source without storing tokens
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install immutable Terraform CLI toolchain
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'true'
+      - name: Inspect exact AWS root and locked provider
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          python -m scripts.day38_enterprise root --name "$DAY38_ROOT" \
+            > .day38-work/root-inventory.json
+      - name: Terraform init without backend or AWS credentials
+        run: |
+          set -euo pipefail
+          root="infra/terraform/environments/$DAY38_ROOT"
+          terraform -chdir="$root" init -backend=false \
+            -lockfile=readonly -input=false -no-color \
+            > .day38-work/root-init.log 2>&1
+          test -s .day38-work/root-init.log
+      - name: Execute native Terraform validate, not a mocked parse
+        run: |
+          set -euo pipefail
+          root="infra/terraform/environments/$DAY38_ROOT"
+          terraform -chdir="$root" validate -no-color \
+            > .day38-work/root-validate.log 2>&1
+          test -s .day38-work/root-validate.log
+      - name: Prevent accidental real Plan, Apply or AWS mutation
+        run: |
+          set -euo pipefail
+          echo 'Terraform CLI performed init -backend=false and validate only.' \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bind root-specific validation to immutable stage
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage "day38-root-$DAY38_ROOT" \
+            --proof .day38-work/root-validate.log \
+            --output .day38-reports/root.json
+      - name: Seal independent root proof
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage "day38-root-$DAY38_ROOT" \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload exact-root proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-root-${{ matrix.root }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  terraform_modules:
+    name: Day38 Terraform contract group (${{ matrix.group }})
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        group: [foundation, ota, governance, roots]
+    permissions:
+      contents: read
+    env:
+      DAY38_GROUP: ${{ matrix.group }}
+    steps:
+      - name: Checkout candidate and all ancestors for trusted diff
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install isolated Terraform contracts toolchain
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'true'
+      - name: Independently bind baseline reference
+        id: baseline
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports .iac-reports
+          python -m scripts.iac.ci_baseline_policy \
+            --output .iac-reports/day31-baseline.json
+          cp .iac-reports/day31-baseline.json .day38-work/baseline.json
+      - name: Checkout exact independent ancestor baseline
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.baseline.outputs.ref }}
+          path: baseline
+          persist-credentials: false
+      - name: Execute actual reviewed Terraform module contract group
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.gate \
+            --baseline baseline \
+            --phase contracts \
+            --contract-group "$DAY38_GROUP" \
+            --report .day38-work/contracts.json
+      - name: Verify contract runner returned a nonempty report
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          d=json.load(open('.day38-work/contracts.json'))
+          assert d['status']=='passed' and d['phase']=='contracts'
+          assert d['contract_runs']>0 and d['contract_files']>0
+          PY
+      - name: Explain contract scope in human-readable summary
+        run: |
+          set -euo pipefail
+          echo "Terraform group $DAY38_GROUP: native contracts verified." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bind module test execution proof
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage "day38-module-$DAY38_GROUP" \
+            --proof .day38-work/contracts.json \
+            --output .day38-reports/contracts.json
+      - name: Seal native contract summary
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage "day38-module-$DAY38_GROUP" \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload group-isolated contract proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-module-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  security:
+    name: Day38 Checkov whole-source security gate
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact candidate and independent base history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install pinned Checkov and HCL2 parser
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'true'
+      - name: Bind actual ancestor (never select own HEAD as base)
+        id: baseline
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports .iac-reports
+          python -m scripts.iac.ci_baseline_policy \
+            --output .iac-reports/day31-baseline.json
+          cp .iac-reports/day31-baseline.json .day38-work/baseline.json
+      - name: Checkout independent ancestor
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.baseline.outputs.ref }}
+          path: baseline
+          persist-credentials: false
+      - name: Run Checkov against deployment source and CI fixture
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.gate \
+            --baseline baseline \
+            --phase security \
+            --report .day38-work/security.json
+      - name: Assert both Checkov scan targets were evaluated
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          s=json.load(open('.day38-work/security.json'))
+          assert s == {'status':'passed','phase':'security',
+                       'security_scan':'passed','scanned_sources':2}
+          PY
+      - name: Protect existing three unresolved security blockers
+        run: |
+          set -euo pipefail
+          echo 'No suppression of CKV2_AWS_57 / CKV2_AWS_69.' \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo 'Existing Checkov scan findings cause this job to FAIL.' \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-security \
+            --proof .day38-work/security.json \
+            --output .day38-reports/security.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-security \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-security-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  policy_tests:
+    name: Day38 Checkov and Terraform policy regressions
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source without granting writer privileges
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install actual IaC and test dependencies
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      # This suite uses source-tree fixtures rather than real cloud credentials.
+      # Audits skip policies and static AWS roots.
+      # Tests Checkov compensation and unknown resource denial.
+      # No deliberate Checkov skip is converted to a pass.
+      - name: Execute fixed unit and regression test contract
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          pytest -c scripts/iac/pytest.ini \
+            tests/unit/iac/test_scan_policy.py \
+            tests/unit/iac/test_day37_aws_static_root.py \
+            tests/unit/iac/test_day37_foundation_tls.py \
+            tests/unit/iac/test_gate_isolation.py \
+            -q --junitxml=.day38-work/policy_tests.xml
+      - name: Verify non-empty JUnit evidence for genuine tests
+        run: |
+          set -euo pipefail
+          test -s .day38-work/policy_tests.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('.day38-work/policy_tests.xml').getroot()
+          cases = root.findall('.//testcase')
+          assert len(cases) > 0, 'No actual executed tests'
+          assert not root.findall('.//failure')
+          assert not root.findall('.//error')
+          assert not root.findall('.//skipped')
+          PY
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-policy-tests \
+            --proof .day38-work/policy_tests.xml \
+            --output .day38-reports/policy_tests.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-policy-tests \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-policy-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  trust_tests:
+    name: Day38 GitHub trust and provenance regressions
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source without granting writer privileges
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install actual IaC and test dependencies
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      # This suite uses source-tree fixtures rather than real cloud credentials.
+      # Tests missing and tampered sources.
+      # Verifies no foreign Run Attempt can be reused.
+      # Tests cancellation, branch and approval checks.
+      - name: Execute fixed unit and regression test contract
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          pytest -c scripts/iac/pytest.ini \
+            tests/unit/iac/test_ci_baseline_policy.py \
+            tests/unit/iac/test_day31_evidence.py \
+            tests/unit/iac/test_workflow_evidence_binding.py \
+            tests/unit/iac/test_pipeline_evidence.py \
+            -q --junitxml=.day38-work/trust_tests.xml
+      - name: Verify non-empty JUnit evidence for genuine tests
+        run: |
+          set -euo pipefail
+          test -s .day38-work/trust_tests.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('.day38-work/trust_tests.xml').getroot()
+          cases = root.findall('.//testcase')
+          assert len(cases) > 0, 'No actual executed tests'
+          assert not root.findall('.//failure')
+          assert not root.findall('.//error')
+          assert not root.findall('.//skipped')
+          PY
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-trust-tests \
+            --proof .day38-work/trust_tests.xml \
+            --output .day38-reports/trust_tests.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-trust-tests \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-trust-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  recovery_tests:
+    name: Day38 rollback and drift recovery contracts
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source without granting writer privileges
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install actual IaC and test dependencies
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      # This suite uses source-tree fixtures rather than real cloud credentials.
+      # Rollback cannot erase durable reconciliation fences.
+      # State reconciliation is checked offline only.
+      # No cloud role or state write is permitted.
+      - name: Execute fixed unit and regression test contract
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          pytest -c scripts/iac/pytest.ini \
+            tests/unit/iac/test_drift_policy.py \
+            tests/unit/iac/test_state_recovery_policy.py \
+            tests/unit/iac/test_release_revalidation.py \
+            -q --junitxml=.day38-work/recovery_tests.xml
+      - name: Verify non-empty JUnit evidence for genuine tests
+        run: |
+          set -euo pipefail
+          test -s .day38-work/recovery_tests.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('.day38-work/recovery_tests.xml').getroot()
+          cases = root.findall('.//testcase')
+          assert len(cases) > 0, 'No actual executed tests'
+          assert not root.findall('.//failure')
+          assert not root.findall('.//error')
+          assert not root.findall('.//skipped')
+          PY
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-recovery-tests \
+            --proof .day38-work/recovery_tests.xml \
+            --output .day38-reports/recovery_tests.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-recovery-tests \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-recovery-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  day37_tests:
+    name: Day38 Day37 AWS staging release contracts
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source without granting writer privileges
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install actual IaC and test dependencies
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      # This suite uses source-tree fixtures rather than real cloud credentials.
+      # Checks immutable Plan digest validation and exact Apply policy.
+      # Cloud interactions are mocked or statically checked here.
+      # Only Day37 environment-protected workflow may really apply.
+      - name: Execute fixed unit and regression test contract
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          pytest -c scripts/iac/pytest.ini \
+            tests/unit/test_day37_gate.py \
+            tests/unit/test_day37_plan_transport.py \
+            tests/unit/test_day37_preflight.py \
+            tests/unit/test_day37_workflow.py \
+            -q --junitxml=.day38-work/day37_tests.xml
+      - name: Verify non-empty JUnit evidence for genuine tests
+        run: |
+          set -euo pipefail
+          test -s .day38-work/day37_tests.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('.day38-work/day37_tests.xml').getroot()
+          cases = root.findall('.//testcase')
+          assert len(cases) > 0, 'No actual executed tests'
+          assert not root.findall('.//failure')
+          assert not root.findall('.//error')
+          assert not root.findall('.//skipped')
+          PY
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-day37-tests \
+            --proof .day38-work/day37_tests.xml \
+            --output .day38-reports/day37_tests.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-day37-tests \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-day37-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  database_tests:
+    name: Day38 database roles, grants and RLS policy
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source without granting writer privileges
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install actual IaC and test dependencies
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      # This suite uses source-tree fixtures rather than real cloud credentials.
+      # Proves database policy model from repository contracts.
+      # Does not claim live RDS or PostgreSQL session tests.
+      # AWS RDS TLS remains a separately enforced Checkov rule.
+      - name: Execute fixed unit and regression test contract
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          pytest -c scripts/iac/pytest.ini \
+            tests/unit/iac/test_ota_database_policy.py \
+            tests/unit/iac/test_ota_storage_policy.py \
+            -q --junitxml=.day38-work/database_tests.xml
+      - name: Verify non-empty JUnit evidence for genuine tests
+        run: |
+          set -euo pipefail
+          test -s .day38-work/database_tests.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('.day38-work/database_tests.xml').getroot()
+          cases = root.findall('.//testcase')
+          assert len(cases) > 0, 'No actual executed tests'
+          assert not root.findall('.//failure')
+          assert not root.findall('.//error')
+          assert not root.findall('.//skipped')
+          PY
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-database-tests \
+            --proof .day38-work/database_tests.xml \
+            --output .day38-reports/database_tests.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-database-tests \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-database-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  ota_tests:
+    name: Day38 OTA authorization and recovery tests
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source without granting writer privileges
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install actual IaC and test dependencies
+        uses: ./.github/actions/setup-ci-runtime
+      # This suite uses source-tree fixtures rather than real cloud credentials.
+      # Proves release-image digest / task linkage.
+      # Checks Day37 runtime recovery and scope constraints.
+      # Physical ECU test results are not invented.
+      - name: Execute fixed unit and regression test contract
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          pytest -c scripts/iac/pytest.ini \
+            tests/unit/test_day37_release.py \
+            tests/unit/test_day37_runtime_tasks.py \
+            tests/unit/test_day37_aws.py \
+            -q --junitxml=.day38-work/ota_tests.xml
+      - name: Verify non-empty JUnit evidence for genuine tests
+        run: |
+          set -euo pipefail
+          test -s .day38-work/ota_tests.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('.day38-work/ota_tests.xml').getroot()
+          cases = root.findall('.//testcase')
+          assert len(cases) > 0, 'No actual executed tests'
+          assert not root.findall('.//failure')
+          assert not root.findall('.//error')
+          assert not root.findall('.//skipped')
+          PY
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-ota-tests \
+            --proof .day38-work/ota_tests.xml \
+            --output .day38-reports/ota_tests.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-ota-tests \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-ota-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  supply_tests:
+    name: Day38 release supply chain and evidence policy
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source without granting writer privileges
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install actual IaC and test dependencies
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      # This suite uses source-tree fixtures rather than real cloud credentials.
+      # Checks release identity and stored Plan governance.
+      # No image is built or deployed from this workflow.
+      # Supply-chain test success is not a signed-image proof.
+      - name: Execute fixed unit and regression test contract
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          pytest -c scripts/iac/pytest.ini \
+            tests/unit/iac/test_plan_admission.py \
+            tests/unit/iac/test_recovery_approval.py \
+            tests/unit/iac/test_state_integrity.py \
+            -q --junitxml=.day38-work/supply_tests.xml
+      - name: Verify non-empty JUnit evidence for genuine tests
+        run: |
+          set -euo pipefail
+          test -s .day38-work/supply_tests.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('.day38-work/supply_tests.xml').getroot()
+          cases = root.findall('.//testcase')
+          assert len(cases) > 0, 'No actual executed tests'
+          assert not root.findall('.//failure')
+          assert not root.findall('.//error')
+          assert not root.findall('.//skipped')
+          PY
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-supply-tests \
+            --proof .day38-work/supply_tests.xml \
+            --output .day38-reports/supply_tests.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-supply-tests \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-supply-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  state_tests:
+    name: Day38 state locking and isolation contracts
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source without granting writer privileges
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install actual IaC and test dependencies
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      # This suite uses source-tree fixtures rather than real cloud credentials.
+      # Checks fail-closed state registry and governance rules.
+      # No remote S3 lock is taken during offline verification.
+      # Live state-backed Plan remains Day37 responsibility.
+      - name: Execute fixed unit and regression test contract
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          pytest -c scripts/iac/pytest.ini \
+            tests/unit/iac/test_state_recovery_policy.py \
+            tests/unit/iac/test_trusted_state_registry.py \
+            tests/unit/iac/test_governance_schema.py \
+            -q --junitxml=.day38-work/state_tests.xml
+      - name: Verify non-empty JUnit evidence for genuine tests
+        run: |
+          set -euo pipefail
+          test -s .day38-work/state_tests.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('.day38-work/state_tests.xml').getroot()
+          cases = root.findall('.//testcase')
+          assert len(cases) > 0, 'No actual executed tests'
+          assert not root.findall('.//failure')
+          assert not root.findall('.//error')
+          assert not root.findall('.//skipped')
+          PY
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-state-tests \
+            --proof .day38-work/state_tests.xml \
+            --output .day38-reports/state_tests.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-state-tests \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-state-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  fault_probes:
+    name: Day38 adversarial evidence fault-injection probes
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout only the checked candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install isolated pytest dependencies, no AWS credentials
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      - name: Execute all explicit negative trust-boundary probes
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports .day38-probes
+          : > .day38-work/fault-probes.log
+          for scenario in \
+            duplicate-json nonfinite-json zip-traversal zip-symlink \
+            zip-duplicate zip-oversize manifest-tamper attempt-replay \
+            ruleset-bypass fault-oracle fault-consumer future-run-failure; do
+            python -m scripts.day38_probe_evidence run --scenario "$scenario" \
+              --output ".day38-probes/probe-$scenario.json" \
+              >> .day38-work/fault-probes.log
+          done
+          test "$(wc -l < .day38-work/fault-probes.log)" -eq 12
+          python -m scripts.day38_probe_evidence index \
+            --folder .day38-probes --output .day38-probes/probe-index.json
+          python -m scripts.day38_probe_evidence verify --folder .day38-probes
+      - name: Run independent Python negative tests
+        run: |
+          set -euo pipefail
+          python -m pytest -c scripts/iac/pytest.ini \
+            tests/unit/test_day38_readiness.py \
+            tests/unit/test_day38_enterprise.py \
+            tests/unit/test_day38_probe_evidence.py -q \
+            --junitxml=.day38-work/adversarial.xml
+      - name: Reject skipped or zero test count
+        run: |
+          set -euo pipefail
+          test -s .day38-work/adversarial.xml
+          python - <<'PY'
+          from xml.etree import ElementTree as ET
+          root = ET.parse('.day38-work/adversarial.xml').getroot()
+          assert len(root.findall('.//testcase')) >= 20
+          assert not root.findall('.//skipped')
+          assert not root.findall('.//failure')
+          assert not root.findall('.//error')
+          PY
+
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-fault-probes \
+            --proof .day38-probes/probe-index.json \
+            --output .day38-reports/fault-probes.json
+      - name: Upload 12 individually verified probe receipts and their index
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-probe-receipts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-probes/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-fault-probes \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-fault-probes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  workflow_contracts:
+    name: Day38 workflow triggers, privileges and controls
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs: [intake]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout reviewed workflow source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install YAML parser from pinned IaC dependencies
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'false'
+      - name: Parse Workflow YAML and assert no AWS write path
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-work .day38-reports
+          python -m scripts.day38_enterprise workflow \
+            --path .github/workflows/day38-release-readiness.yml \
+            > .day38-work/workflow-contract.json
+      - name: Confirm PR-ready and workflow_run gates use separate contexts
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import yaml
+          from pathlib import Path
+          d=yaml.safe_load(Path('.github/workflows/day38-release-readiness.yml').read_text())
+          jobs=d['jobs']
+          assert jobs['offline_gate']['name'] == 'Day38 offline audit gate (not AWS release)'
+          assert jobs['readiness_gate']['name'] == 'Day38 upstream readiness gate (not PR-required)'
+          assert jobs['offline_gate']['name'] != jobs['readiness_gate']['name']
+          assert jobs['readiness']['if'] is not None
+          PY
+      - name: Ensure no cloud authorization is inferred
+        run: |
+          set -euo pipefail
+          echo 'Day38 is independent from Day37 approved AWS Apply.' \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bind successful command output to stage receipt
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise report \
+            --stage day38-workflow-contracts \
+            --proof .day38-work/workflow-contract.json \
+            --output .day38-reports/workflow-contracts.json
+      - name: Seal independent stage evidence
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-workflow-contracts \
+            --folder .day38-reports \
+            --output .day38-sealed
+      - name: Upload stage result, not state or secrets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-workflow-contracts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  offline:
+    # P0 compatibility: these six step names are consumed by the trusted verifier.
+    name: Day38 offline Terraform security and contract audit
+    if: ${{ github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact event candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install dedicated IaC toolchain (pinned)
+        uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'true'
+      - name: Bind event candidate and independent ancestor baseline
+        id: baseline
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-reports .iac-reports
+          python -m scripts.iac.ci_baseline_policy --output .iac-reports/day31-baseline.json
+          cp .iac-reports/day31-baseline.json .day38-reports/baseline.json
+      - name: Checkout independent baseline without writable token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.baseline.outputs.ref }}
+          path: baseline
+          persist-credentials: false
+      - name: Validate all Terraform formatting and each AWS-only root
+        id: terraform
+        run: |
+          set -euo pipefail
+          terraform fmt -check -recursive infra/terraform
+          for root in ota-staging ota-staging-foundation ota-staging-identity; do
+            base="infra/terraform/environments/$root"
+            terraform -chdir="$base" init -backend=false \
+              -lockfile=readonly -input=false -no-color
+            terraform -chdir="$base" validate -no-color
+          done
+      - name: Run pinned offline IaC security gate (no waiver bypass)
+        id: security
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.gate --baseline baseline \
+            --phase security --report .day38-reports/security.json
+      - name: Regress trust, Checkov and Day38 fail-closed rules
+        id: regression
+        run: |
+          set -euo pipefail
+          pytest -c scripts/iac/pytest.ini \
+            tests/unit/iac/test_scan_policy.py \
+            tests/unit/iac/test_day37_aws_static_root.py \
+            tests/unit/iac/test_day37_foundation_tls.py \
+            tests/unit/iac/test_pipeline_evidence.py \
+            tests/unit/test_day38_readiness.py \
+            tests/unit/test_day38_enterprise.py -q
+      - name: Emit audit receipt even for failures
+        if: ${{ always() }}
+        env:
+          DAY38_BASELINE: ${{ steps.baseline.outcome }}
+          DAY38_TERRAFORM: ${{ steps.terraform.outcome }}
+          DAY38_SECURITY: ${{ steps.security.outcome }}
+          DAY38_REGRESSION: ${{ steps.regression.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-reports
+          python -m scripts.day38_readiness audit \
+            --output .day38-reports/day38-audit.json
+      - name: Upload untrusted read-only audit diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-offline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-reports/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  evidence:
+    # Do NOT aggregate or publish success when any mandatory producer is absent.
+    name: Day38 cross-runner evidence aggregation
+    if: ${{ always() && github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs:
+
+      - intake
+
+      - source_guard
+
+      - dependencies
+
+      - python_quality
+
+      - terraform_format
+
+      - terraform_roots
+
+      - terraform_modules
+
+      - security
+
+      - policy_tests
+
+      - trust_tests
+
+      - recovery_tests
+
+      - day37_tests
+
+      - database_tests
+
+      - ota_tests
+
+      - fault_probes
+
+      - workflow_contracts
+
+      - supply_tests
+
+      - state_tests
+
+      - offline
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout matching source and standalone evidence checker
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install Python 3.12 for source-bound validation
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Reject any failed, skipped, cancelled or missing upstream phase
+        env:
+          PIPELINE_NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence needs \
+            --expected intake,source_guard,dependencies,python_quality,terraform_format,terraform_roots,terraform_modules,security,policy_tests,trust_tests,recovery_tests,day37_tests,database_tests,ota_tests,fault_probes,workflow_contracts,supply_tests,state_tests,offline
+      # Every stage downloaded below is untrusted until the manifest is verified.
+      # These artifacts contain JSON/XML only; no Plan, State, AWS token or Secret.
+
+      - name: Download independent verified producer day38-source
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-source
+
+      - name: Download independent verified producer day38-dependencies
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-dependencies-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-dependencies
+
+      - name: Download independent verified producer day38-python-quality
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-python-quality-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-python-quality
+
+      - name: Download independent verified producer day38-terraform-format
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-terraform-format-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-terraform-format
+
+      - name: Download independent verified producer day38-root-ota-staging
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-root-ota-staging-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-root-ota-staging
+
+      - name: Download independent verified producer day38-root-ota-staging-foundation
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-root-ota-staging-foundation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-root-ota-staging-foundation
+
+      - name: Download independent verified producer day38-root-ota-staging-identity
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-root-ota-staging-identity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-root-ota-staging-identity
+
+      - name: Download independent verified producer day38-module-foundation
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-module-foundation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-module-foundation
+
+      - name: Download independent verified producer day38-module-ota
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-module-ota-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-module-ota
+
+      - name: Download independent verified producer day38-module-governance
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-module-governance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-module-governance
+
+      - name: Download independent verified producer day38-module-roots
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-module-roots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-module-roots
+
+      - name: Download independent verified producer day38-security
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-security-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-security
+
+      - name: Download independent verified producer day38-policy-tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-policy-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-policy-tests
+
+      - name: Download independent verified producer day38-trust-tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-trust-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-trust-tests
+
+      - name: Download independent verified producer day38-recovery-tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-recovery-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-recovery-tests
+
+      - name: Download independent verified producer day38-day37-tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-day37-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-day37-tests
+
+      - name: Download independent verified producer day38-database-tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-database-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-database-tests
+
+      - name: Download independent verified producer day38-ota-tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-ota-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-ota-tests
+
+      - name: Download independent verified producer day38-fault-probes
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-fault-probes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-fault-probes
+
+      - name: Download independent verified producer day38-workflow-contracts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-workflow-contracts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-workflow-contracts
+
+      - name: Download independent verified producer day38-supply-tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-supply-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-supply-tests
+
+      - name: Download independent verified producer day38-state-tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-state-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-inbound/day38-state-tests
+
+      - name: Independently recompute every producer stage manifest and SHA256
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-reports
+          python -m scripts.day38_enterprise aggregate \
+            --folder .day38-inbound \
+            --output .day38-reports/aggregate.json
+          python -m scripts.day38_enterprise verify-aggregate \
+            --input .day38-reports/aggregate.json
+      - name: Seal aggregated source-bound success proof
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence publish \
+            --stage day38-aggregate \
+            --folder .day38-reports \
+            --output .day38-aggregate-sealed
+      - name: Upload reviewable aggregate without raw untrusted files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-aggregate-sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  readiness:
+    # This is a read-only observer, not a PR-required status and not AWS release.
+    # workflow_run uses github.sha (default-branch verifier), NOT triggering SHA.
+    name: Day38 trusted upstream observation (not PR gate)
+    if: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Checkout immutable default-branch revision of verifier
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Install interpreter only, never PR dependencies
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Bounded wait for the originating protected-main offline run
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.source_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-reports
+          python -m scripts.day38_readiness await-offline \
+            --output .day38-reports/day38-origin.json
+      - name: Explain untrusted upstream identity and token boundary
+        run: |
+          set -euo pipefail
+          echo 'Read-only observation; no PR checkout, no AWS OIDC.' \
+            >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify exact latest workflow attempts and immutable artifacts
+        id: evaluate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-reports
+          python -m scripts.day38_readiness evaluate \
+            --output .day38-reports/day38-readiness.json
+      - name: Preserve READY or BLOCKED audit record
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-readiness-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-reports/day38-readiness.json
+          if-no-files-found: error
+          retention-days: 30
+
+  offline_gate:
+    # Only this stable named context may be configured as a PR-required check.
+    # It must fail on any mandatory job failure or missing aggregate artifact.
+    name: Day38 offline audit gate (not AWS release)
+    if: ${{ always() && github.event_name != 'workflow_run' && github.event_name != 'workflow_dispatch' }}
+    needs:
+
+      - intake
+
+      - source_guard
+
+      - dependencies
+
+      - python_quality
+
+      - terraform_format
+
+      - terraform_roots
+
+      - terraform_modules
+
+      - security
+
+      - policy_tests
+
+      - trust_tests
+
+      - recovery_tests
+
+      - day37_tests
+
+      - database_tests
+
+      - ota_tests
+
+      - fault_probes
+
+      - workflow_contracts
+
+      - supply_tests
+
+      - state_tests
+
+      - offline
+
+      - evidence
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout exact event candidate for final gate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install independent Python gate
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Fail closed if any mandatory job or evidence stage failed
+        env:
+          PIPELINE_NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.pipeline_evidence needs \
+            --expected intake,source_guard,dependencies,python_quality,terraform_format,terraform_roots,terraform_modules,security,policy_tests,trust_tests,recovery_tests,day37_tests,database_tests,ota_tests,fault_probes,workflow_contracts,supply_tests,state_tests,offline,evidence
+      - name: Download matching same-attempt verified aggregate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day38-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-aggregate
+      - name: Authenticate aggregate stage manifest
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-verified
+          python -m scripts.iac.pipeline_evidence consume \
+            --stage day38-aggregate \
+            --folder .day38-aggregate \
+            --output .day38-verified
+      - name: Verify exact 22-stage aggregate source/run/attempt contract
+        run: |
+          set -euo pipefail
+          python -m scripts.day38_enterprise verify-aggregate \
+            --input .day38-verified/aggregate.json
+      - name: Independently derive final release-denial-safe readiness verdict
+        id: verdict
+        env:
+          DAY38_NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-final
+          python -m scripts.day38_enterprise gate \
+            --input .day38-verified/aggregate.json \
+            --output .day38-final/decision.json
+      - name: Upload immutable non-deployment gate decision
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-final-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-final/decision.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  readiness_gate:
+    # A green workflow_run is a verified observation, never a PR check result.
+    # It must not be added to the required-status list for PR or merge_group.
+    name: Day38 upstream readiness gate (not PR-required)
+    if: ${{ always() && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') }}
+    needs: [offline, readiness]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    steps:
+      - name: Require the P0 trusted verifier and disallow PR run as substitute
+        env:
+          DAY38_OFFLINE: ${{ needs.offline.result }}
+          DAY38_READINESS: ${{ needs.readiness.result }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            workflow_run|workflow_dispatch|schedule) ;;
+            *) exit 1 ;;
+          esac
+          test "$DAY38_OFFLINE" = skipped
+          test "$DAY38_READINESS" = success
+          echo 'READY_FOR_STAGING_REVIEW; NOT an AWS deployment authorization.' \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo 'Day37 separately controls Plan, Apply, ECS and rollback.' \
+            >> "$GITHUB_STEP_SUMMARY"
+
+
+  post_offline_recheck:
+    # Read-only handoff. Completion triggers can be missed if all upstream
+    # workflows finish early; the scheduled/default-branch observer compensates.
+    # Never put actions:write in a PR-editable workflow, even on an if: push job.
+    name: Day38 protected-main post-offline read-only handoff (not PR-required)
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    needs: [offline_gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Bind protected-main source and verified offline gate
+        env:
+          DAY38_GATE: ${{ needs.offline_gate.result }}
+        run: |
+          set -euo pipefail
+          test "$DAY38_GATE" = success
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_REPOSITORY" = SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise
+          echo 'Offline PASS. Independent upstream observation remains separate.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'A scheduled or manually dispatched recheck may run after the original run completes.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Emit source-bound handoff receipt without any write token
+        run: |
+          set -euo pipefail
+          mkdir -p .day38-handoff
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          identity = {
+              'schema_version': 'day38.handoff.v1',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'candidate_sha': os.environ['GITHUB_SHA'],
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'decision': 'OFFLINE_COMPLETED_UPSTREAM_RECHECK_PENDING',
+              'release_authorized': False,
+              'aws_plan_or_apply_executed': False,
+          }
+          Path('.day38-handoff/receipt.json').write_text(
+              json.dumps(identity, sort_keys=True, indent=2) + '\n', encoding='utf-8'
+          )
+          PY
+      - name: Upload read-only source handoff evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day38-handoff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .day38-handoff/receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  diagnostics:
+    # Durable diagnostics are separate from success and never turn a failure green.
+    # The gate's result, not this job, determines enterprise acceptance.
+    name: Day38 diagnostic summary (never a release authority)
+    if: ${{ always() }}
+    needs: [offline, readiness, offline_gate, readiness_gate, evidence]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Print distinct offline and trusted-observer outcomes
+        env:
+          DAY38_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          data=json.loads(os.environ['DAY38_RESULTS'])
+          print('Day38 execution results (never approval):')
+          for key, row in sorted(data.items()):
+              print(f'{key} = {row.get("result", "missing")}')
+          if os.environ.get('GITHUB_EVENT_NAME') in {'workflow_run', 'workflow_dispatch', 'schedule'}:
+              assert data['offline_gate']['result']=='skipped'
+          else:
+              assert data['readiness_gate']['result']=='skipped'
+          PY
+      - name: State explicit cloud and production non-authority
+        run: |
+          set -euo pipefail
+          echo '## Day38 diagnostics' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Readiness observation is not Terraform Plan or Apply.' \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo 'No AWS credentials or mutable cloud state touched.' \
+            >> "$GITHUB_STEP_SUMMARY"

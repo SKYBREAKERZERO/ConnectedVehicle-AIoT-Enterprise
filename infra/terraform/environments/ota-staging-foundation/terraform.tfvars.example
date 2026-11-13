@@ -1,0 +1,17 @@
+# Foundation is a separately approved ADMINISTRATOR-only root, NOT Day37 CI.
+account_id = "123456789012" # replace
+availability_zones = ["ap-northeast-1a", "ap-northeast-1c"]
+allowed_ingress_cidrs = ["10.0.0.0/8"] # replace with reviewed VPN/VPC peers
+alb_certificate_arn = "arn:aws:acm:ap-northeast-1:123456789012:certificate/REPLACE"
+postgres_engine_version = "17.6" # verify AWS availability before apply
+# NEVER put redis_auth_token in this file; provide ephemeral TF_VAR_redis_auth_token from secure admin process.
+
+# All below are REAL administrator-managed inputs; placeholders must never be applied.
+data_kms_key_arn = "arn:aws:kms:ap-northeast-1:123456789012:key/REPLACE"
+vpc_flow_log_bucket_arn = "arn:aws:s3:::REPLACE-WITH-STAGING-FLOW-LOG-DELIVERY-BUCKET"
+alb_access_log_bucket_name = "replace-with-staging-alb-access-logs-bucket"
+rds_monitoring_role_arn = "arn:aws:iam::123456789012:role/REPLACE-RDS-MONITORING-ROLE"
+# The two S3 destinations need correct delivery policies before Terraform Apply.
+# Replace account and version with the reviewed, deployed rotation handlers.
+application_rotation_lambda_arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:cv-ota-staging-rotate-application:1"
+redis_rotation_lambda_arn = "arn:aws:lambda:ap-northeast-1:123456789012:function:cv-ota-staging-rotate-redis:1"

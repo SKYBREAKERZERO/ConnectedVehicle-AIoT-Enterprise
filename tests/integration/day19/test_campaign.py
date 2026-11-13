@@ -32,6 +32,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from connected_vehicle.ota.contracts import ECURegistration, FirmwareRegistration
+from connected_vehicle.ota.device_proof import proof_headers
 from connected_vehicle.ota.execution_contracts import SignedManifest
 from connected_vehicle.ota.publisher_keys import records
 from connected_vehicle.ota.service import OTAService
@@ -77,6 +78,7 @@ async def test_campaign_real_process_rollout_isolation_gates_and_recovery(
     )
     base = OTAService(create_session_factory(runtime))
     checks: dict[str, bool] = {}
+    vertical_trace: list[dict[str, Any]] = []
     publisher = ed25519.Ed25519PrivateKey.generate()
     trust = tmp_path / "publisher.json"
     trust.write_text(
@@ -541,6 +543,68 @@ async def test_campaign_real_process_rollout_isolation_gates_and_recovery(
             assert recovered[0]["job_status"] == "verified"
             assert all(t["job_status"] is None for t in recovered[1:])
             checks["dispatcher_crash_concurrency_single_job_per_target"] = True
+            # Two distinct claim operations race through the real HTTP API. Only
+            # the winning operation may own the job; its replay returns the same token.
+            target = recovered[0]
+            ecu = target["ecu_id"]
+            claim_path = (
+                f"/v2/vehicles/{vehicles[ecu]}/ecus/{ecu}/ota-jobs/{target['job_id']}/claim"
+            )
+            operations = [str(uuid4()), str(uuid4())]
+
+            async def claim_http(operation: str) -> httpx.Response:
+                request = client.build_request(
+                    "POST",
+                    claim_path,
+                    json={"operation_id": operation},
+                    headers={"Authorization": "Bearer " + bearer(ecu)},
+                )
+                request.headers.update(
+                    proof_headers(
+                        ecu_keys[ecu],
+                        method="POST",
+                        path=claim_path,
+                        body=request.content,
+                        tenant=tenant,
+                        vehicle=vehicles[ecu],
+                        ecu=ecu,
+                        device=devices[ecu],
+                        nonce=str(uuid4()),
+                        timestamp=str(int(time.time())),
+                    )
+                )
+                return await client.send(request)
+
+            claims = await asyncio.gather(*(claim_http(operation) for operation in operations))
+            assert sorted(response.status_code for response in claims) == [200, 409], [
+                response.text for response in claims
+            ]
+            winner = next(i for i, response in enumerate(claims) if response.status_code == 200)
+            replay = await claim_http(operations[winner])
+            assert replay.status_code == 200 and replay.json() == claims[winner].json()
+            # Persist the accepted operation in the real device journal before restart.
+            from simulators.ota_device.store import DeviceStore
+
+            (tmp_path / ("device-" + ecu)).mkdir()
+            store = DeviceStore(
+                tmp_path / ("device-" + ecu),
+                tenant=tenant,
+                vehicle=vehicles[ecu],
+                ecu=ecu,
+                device=devices[ecu],
+                ecu_type="body",
+                hardware_version="hw-1",
+            )
+            try:
+                store.prepare(target["job_id"])
+                store.db.execute(
+                    "UPDATE jobs SET operation=? WHERE id=?",
+                    (operations[winner], target["job_id"]),
+                )
+                store.db.commit()
+            finally:
+                store.close()
+            checks["concurrent_device_claim_single_owner_and_stable_replay"] = True
             await dispatch(happy)
             assert (await api("GET", f"/v2/ota/campaigns/{happy}"))["current_wave"] == 0
             await device(recovered[0])
@@ -618,6 +682,43 @@ async def test_campaign_real_process_rollout_isolation_gates_and_recovery(
                 )
             checks["canary_success_releases_wave_and_real_devices_complete"] = True
             checks["inventory_reports_audit_and_snapshot_agree"] = True
+            async with admin.connect() as connection:
+                rows = (
+                    (
+                        await connection.execute(
+                            text("""
+                    SELECT t.campaign_id,t.wave,t.job_id,t.ecu_id,t.vehicle_id,
+                      j.status,x.device_id,x.claim_operation,i.firmware_version,i.security_version,
+                      r.id AS report_id,r.payload->>'observed_sha256' AS sha256,
+                      r.payload->'installation_proof'->>'bank' AS bank,
+                      r.payload->'installation_proof'->>'boot_id' AS boot_id,
+                      r.payload->'installation_proof'->>'signature' AS boot_signature,
+                      (SELECT count(*) FROM ota_audit_events a WHERE a.tenant_id=t.tenant_id
+                        AND a.resource_id=t.job_id AND a.action='report') AS report_audit_count
+                    FROM ota_campaign_targets t
+                    JOIN ota_jobs j ON j.tenant_id=t.tenant_id AND j.id=t.job_id
+                    JOIN ota_executions x ON x.tenant_id=t.tenant_id AND x.id=t.job_id
+                    JOIN ecu_inventory i ON i.tenant_id=t.tenant_id AND i.id=t.ecu_id
+                    JOIN ota_execution_reports r ON r.tenant_id=t.tenant_id AND r.job_id=t.job_id
+                    WHERE t.campaign_id=:c AND r.payload->>'status'='succeeded'
+                    ORDER BY t.wave,t.ecu_id
+                """),
+                            dict(c=happy),
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+                vertical_trace = [dict(row) for row in rows]
+                assert len(vertical_trace) == 3
+                assert all(
+                    row["status"] == "succeeded"
+                    and row["report_audit_count"] == 2
+                    and row["bank"] in {"A", "B"}
+                    and row["boot_signature"]
+                    and row["security_version"] == 1
+                    for row in vertical_trace
+                )
             shutdown = subprocess.Popen(
                 [sys.executable, "-m", "apps.campaign", "--campaign", happy, "--interval", "1"],
                 cwd=tmp_path,
@@ -857,6 +958,7 @@ async def test_campaign_real_process_rollout_isolation_gates_and_recovery(
             day19_sha256=source_digest(),
             checks=checks,
             device_successes=4,
+            vertical_trace=vertical_trace,
             real_aws_verified=False,
             physical_boot_verified=False,
             simulated_installation=True,

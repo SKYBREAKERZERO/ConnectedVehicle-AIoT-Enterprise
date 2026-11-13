@@ -1,0 +1,15 @@
+name: Day42 Staging Acceptance Boundary
+'on':
+  workflow_dispatch:
+
+permissions: {}
+jobs:
+  acceptance:
+    name: Require a provisioned Day37-approved rollout and native receipts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Record blocked Staging acceptance
+        run: |
+          echo 'AWS Staging: **BLOCKED**. Awaiting Day37-approved execution and independent native receipts.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1

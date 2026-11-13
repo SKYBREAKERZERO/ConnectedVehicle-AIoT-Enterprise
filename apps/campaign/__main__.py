@@ -87,6 +87,7 @@ async def run(identifier: str | None, once: bool, interval: float, crash: bool =
                     with suppress(TimeoutError):
                         await asyncio.wait_for(stop.wait(), timeout=min(30, 2**failures))
                     continue
+                failures = 0
                 print(
                     json.dumps(
                         dict(
