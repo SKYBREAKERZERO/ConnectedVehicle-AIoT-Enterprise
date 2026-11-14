@@ -6,11 +6,19 @@ from contextlib import asynccontextmanager
 from connected_vehicle.remote_command.events import (
     REMOTE_COMMAND_DESTINATION,
 )
+from enterprise_platform.cache.client import (
+    create_cache_key_builder,
+    create_redis_resources,
+)
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.outbox_store import SQLAlchemyOutboxStore
 from enterprise_platform.database.runtime import runtime_database_sessions
 from enterprise_platform.messaging.sqs_runtime import (
     create_named_sqs_event_queue,
+)
+from enterprise_platform.reliability.circuit_breaker import (
+    CircuitPolicy,
+    RedisCircuitBreaker,
 )
 from enterprise_platform.reliability.outbox_dispatcher import (
     MappingOutboxDestinationResolver,
@@ -46,9 +54,20 @@ async def remote_command_outbox_runtime(
         queue = create_named_sqs_event_queue(
             queue_settings, queue_name=settings.vehicle_command_queue_name
         )
+        resources = create_redis_resources(settings)
+        circuit = RedisCircuitBreaker(
+            resources.client,
+            key=create_cache_key_builder(settings).build(
+                "outbox-circuit", REMOTE_COMMAND_DESTINATION
+            ),
+            policy=CircuitPolicy(),
+        )
         try:
             yield OutboxDispatcher(
-                store=SQLAlchemyOutboxStore(sessions),
+                store=SQLAlchemyOutboxStore(
+                    sessions, destination=REMOTE_COMMAND_DESTINATION
+                ),
+                circuit=circuit,
                 batch_size=settings.outbox_batch_size,
                 lease_seconds=settings.outbox_lease_seconds,
                 retry_policy=retry_policy,
@@ -58,3 +77,5 @@ async def remote_command_outbox_runtime(
             )
         finally:
             await queue.close()
+            await resources.client.aclose()
+            await resources.pool.disconnect()
