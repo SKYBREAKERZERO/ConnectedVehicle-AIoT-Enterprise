@@ -47,29 +47,6 @@ jobs:
           python -m ruff check .
           python -m ruff format --check .
           python -m mypy .
-      - name: Diagnostic formatter and typing output (temporary)
-        if: ${{ failure() }}
-        run: |
-          python -m ruff format .
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          paths = [
-              "connected_vehicle/remote_command/outbox_runtime.py",
-              "enterprise_platform/reliability/circuit_breaker.py",
-              "scripts/ci/outbox_evidence.py",
-              "tests/integration/reliability/test_outbox_circuit_localstack.py",
-              "tests/integration/reliability/test_outbox_circuit_pg.py",
-              "tests/unit/enterprise_platform/test_circuit_breaker.py",
-          ]
-          for name in paths:
-              print("FORMAT_JSON:" + json.dumps({
-                  "path": name,
-                  "content": Path(name).read_text(encoding="utf-8"),
-              }, ensure_ascii=True), flush=True)
-          PY
-          python -m mypy . || true
       - name: Run mandatory unit and contract tests
         run: |
           set -euo pipefail
