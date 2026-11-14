@@ -1,0 +1,68 @@
+# Trust boundary: this workflow executes code from the protected default branch,
+# NEVER from an untrusted PR checkout or downloaded Artifact.
+# This is an independent acceptance record, not automatically a PR required check.
+name: Outbox Enterprise Protected Evidence Verification
+
+'on':
+  workflow_run:
+    workflows: [Outbox Dispatcher Enterprise Runtime]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  trusted_acceptance:
+    name: OUTBOX_DELIVERY_ENTERPRISE_ACCEPTED
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    # Fail closed for forked sources and failed/cancelled upstream workflow runs.
+    steps:
+      - name: Require source identity and successful candidate CI
+        env:
+          SOURCE_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          EXPECTED_REPO: ${{ github.repository }}
+          SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$SOURCE_REPO" = "$EXPECTED_REPO"
+          test "$SOURCE_CONCLUSION" = success
+          case "$SOURCE_EVENT" in pull_request|push|merge_group|workflow_dispatch) ;; *) exit 1;; esac
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+      - name: Checkout trusted verifier from protected default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          # workflow_run executes from the default branch: never checkout source SHA.
+      - name: Download untrusted contract artifact as data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: outbox-contract-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: ci-evidence/contract
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Download untrusted PostgreSQL artifact as data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: outbox-pg-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: ci-evidence/pg
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Download untrusted delivery artifact as data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: outbox-delivery-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: ci-evidence/delivery
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Verify all evidence using protected-branch policy
+        env:
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          EXPECTED_RUN_ID: ${{ github.event.workflow_run.id }}
+          EXPECTED_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          EXPECTED_EVENT: ${{ github.event.workflow_run.event }}
+        run: python3 scripts/ci/outbox_evidence.py verify --evidence-root ci-evidence
