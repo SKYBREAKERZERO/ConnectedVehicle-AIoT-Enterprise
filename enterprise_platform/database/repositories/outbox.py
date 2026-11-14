@@ -53,6 +53,7 @@ class SQLAlchemyOutboxRepository:
         batch_size: int = 100,
         lease_seconds: int = 30,
         now: datetime | None = None,
+        destination: str | None = None,
     ) -> tuple[ClaimedOutboxEvent, ...]:
         if not 1 <= batch_size <= 1000:
             raise ValueError("Outbox batch_size must be between 1 and 1000.")
@@ -88,6 +89,11 @@ class SQLAlchemyOutboxRepository:
             .limit(batch_size)
             .with_for_update(skip_locked=True)
         )
+
+        if destination is not None:
+            if not destination or destination.strip() != destination:
+                raise ValueError("Invalid claim destination")
+            statement = statement.where(OutboxEventModel.destination == destination)
 
         result = await self._session.execute(statement)
 

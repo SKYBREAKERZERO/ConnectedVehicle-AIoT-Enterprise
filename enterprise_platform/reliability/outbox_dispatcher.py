@@ -11,6 +11,7 @@ from enterprise_platform.messaging.exceptions import MessagePublishError
 from enterprise_platform.messaging.serialization import (
     deserialize_event_envelope,
 )
+from enterprise_platform.reliability.circuit_breaker import CircuitGate
 from enterprise_platform.reliability.failure import (
     ExceptionTypeFailureClassifier,
     FailureClassifier,
@@ -150,6 +151,7 @@ class OutboxDispatcher:
         lease_seconds: int = 30,
         clock: Clock | None = None,
         random_value: RandomFunction = random.random,
+        circuit: CircuitGate | None = None,
     ) -> None:
         if not 1 <= batch_size <= 1000:
             raise ValueError("Outbox dispatcher batch_size must be between 1 and 1000.")
@@ -169,17 +171,31 @@ class OutboxDispatcher:
         self._lease_seconds = lease_seconds
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
         self._random_value = random_value
+        self._circuit = circuit
 
     async def dispatch_batch(
         self,
         *,
         now: datetime | None = None,
     ) -> OutboxDispatchBatchResult:
-        claimed_events = await self._store.claim_batch(
-            batch_size=self._batch_size,
-            lease_seconds=self._lease_seconds,
-            now=now,
-        )
+        # The circuit is acquired BEFORE a database claim so OPEN cannot
+        # consume attempts or lease tokens. Bound a protected batch to one event.
+        permit = await self._circuit.acquire() if self._circuit is not None else None
+        if permit is not None and not permit.allowed:
+            return OutboxDispatchBatchResult(0, 0, 0, 0)
+        try:
+            claimed_events = await self._store.claim_batch(
+                batch_size=1 if permit is not None else self._batch_size,
+                lease_seconds=self._lease_seconds,
+                now=now,
+            )
+        except Exception:
+            if permit is not None and self._circuit is not None:
+                await self._circuit.release(permit)
+            raise
+
+        if not claimed_events and permit is not None and self._circuit is not None:
+            await self._circuit.release(permit)
 
         published = 0
         retries_scheduled = 0
@@ -193,6 +209,11 @@ class OutboxDispatcher:
                 await publisher(event)
             except Exception as exc:
                 disposition = self._failure_classifier.classify(exc)
+                if permit is not None and self._circuit is not None:
+                    if disposition is FailureDisposition.RETRYABLE:
+                        await self._circuit.failure(permit)
+                    else:
+                        await self._circuit.release(permit)
 
                 if (
                     disposition is FailureDisposition.NON_RETRYABLE
@@ -226,6 +247,8 @@ class OutboxDispatcher:
 
                 continue
 
+            if permit is not None and self._circuit is not None:
+                await self._circuit.success(permit)
             published_at = self._now()
 
             marked = await self._store.mark_published(

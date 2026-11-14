@@ -24,8 +24,11 @@ class SQLAlchemyOutboxStore:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
+        *,
+        destination: str | None = None,
     ) -> None:
         self._session_factory = session_factory
+        self._destination = destination
 
     async def claim_batch(
         self,
@@ -41,6 +44,7 @@ class SQLAlchemyOutboxStore:
                 batch_size=batch_size,
                 lease_seconds=lease_seconds,
                 now=now,
+                destination=self._destination,
             )
 
             await uow.commit()
