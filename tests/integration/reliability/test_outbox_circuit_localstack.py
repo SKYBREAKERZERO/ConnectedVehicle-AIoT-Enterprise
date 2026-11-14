@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -9,9 +10,10 @@ from uuid import uuid4
 import boto3
 import pytest
 from botocore.config import Config
+from mypy_boto3_sqs.client import SQSClient
 from redis.asyncio import Redis
 
-from enterprise_platform.messaging.envelope import create_event_envelope
+from enterprise_platform.messaging.envelope import EventEnvelope, create_event_envelope
 from enterprise_platform.messaging.exceptions import MessagePublishError
 from enterprise_platform.messaging.serialization import serialize_event_envelope
 from enterprise_platform.reliability.circuit_breaker import (
@@ -35,8 +37,7 @@ class RecordingStore:
     next_attempt: datetime | None = None
 
     async def claim_batch(
-        self, *, batch_size: int = 100,
-        lease_seconds: int = 30, now: datetime | None = None
+        self, *, batch_size: int = 100, lease_seconds: int = 30, now: datetime | None = None
     ) -> tuple[ClaimedOutboxEvent, ...]:
         self.claims += 1
         if self.published:
@@ -44,8 +45,7 @@ class RecordingStore:
         return (replace(self.event, attempts=self.claims, claim_token=uuid4().hex),)
 
     async def mark_published(
-        self, *, outbox_id: str, claim_token: str,
-        published_at: datetime | None = None
+        self, *, outbox_id: str, claim_token: str, published_at: datetime | None = None
     ) -> bool:
         self.published = True
         return True
@@ -58,8 +58,7 @@ class RecordingStore:
         return True
 
     async def mark_failed(
-        self, *, outbox_id: str, claim_token: str,
-        failed_at: datetime, failure_code: str
+        self, *, outbox_id: str, claim_token: str, failed_at: datetime, failure_code: str
     ) -> bool:
         return True
 
@@ -93,7 +92,7 @@ def redis_client() -> Redis:
     )
 
 
-def sqs_client():
+def sqs_client() -> SQSClient:
     return boto3.client(
         "sqs",
         endpoint_url=os.environ["AWS_ENDPOINT_URL"],
@@ -102,7 +101,11 @@ def sqs_client():
     )
 
 
-def make_dispatcher(store, circuit, publisher):
+def make_dispatcher(
+    store: RecordingStore,
+    circuit: RedisCircuitBreaker,
+    publisher: Callable[[EventEnvelope], Awaitable[object]],
+) -> OutboxDispatcher:
     return OutboxDispatcher(
         store=store,
         destinations=MappingOutboxDestinationResolver({store.event.destination: publisher}),
@@ -115,9 +118,7 @@ def make_dispatcher(store, circuit, publisher):
 async def test_cb001_sqs_failures_open_breaker() -> None:
     cache = redis_client()
     key = "cb-localstack:" + uuid4().hex
-    breaker = RedisCircuitBreaker(
-        cache, key=key, policy=CircuitPolicy(failure_threshold=2)
-    )
+    breaker = RedisCircuitBreaker(cache, key=key, policy=CircuitPolicy(failure_threshold=2))
     store = new_event()
     bad_sqs = boto3.client(
         "sqs",
@@ -127,7 +128,7 @@ async def test_cb001_sqs_failures_open_breaker() -> None:
     )
     attempts = 0
 
-    async def down(_event):
+    async def down(_event: EventEnvelope) -> None:
         nonlocal attempts
         attempts += 1
         try:
@@ -155,13 +156,11 @@ async def test_cb001_sqs_failures_open_breaker() -> None:
 async def test_cb002_open_blocks_sends_without_claiming() -> None:
     cache = redis_client()
     key = "cb-block:" + uuid4().hex
-    breaker = RedisCircuitBreaker(
-        cache, key=key, policy=CircuitPolicy(failure_threshold=1)
-    )
+    breaker = RedisCircuitBreaker(cache, key=key, policy=CircuitPolicy(failure_threshold=1))
     store = new_event()
     sends = 0
 
-    async def publisher(_event):
+    async def publisher(_event: EventEnvelope) -> None:
         nonlocal sends
         sends += 1
 
@@ -182,15 +181,13 @@ async def test_cb004_sqs_recovery_closes_after_probes() -> None:
     breaker = RedisCircuitBreaker(
         cache,
         key=key,
-        policy=CircuitPolicy(
-            failure_threshold=1, open_seconds=1, successes_to_close=2
-        ),
+        policy=CircuitPolicy(failure_threshold=1, open_seconds=1, successes_to_close=2),
     )
     client = sqs_client()
     queue = client.create_queue(QueueName="cb-recovery-" + uuid4().hex)["QueueUrl"]
     store = new_event()
 
-    async def publisher(event):
+    async def publisher(event: EventEnvelope) -> None:
         client.send_message(QueueUrl=queue, MessageBody=event.event_id)
 
     try:
@@ -225,7 +222,7 @@ async def test_cb005_finops_open_does_not_block_ota() -> None:
     ota_store = new_event("ota")
     sent = 0
 
-    async def publish_ota(event):
+    async def publish_ota(event: EventEnvelope) -> None:
         nonlocal sent
         client.send_message(QueueUrl=queue, MessageBody=event.event_id)
         sent += 1
@@ -233,13 +230,11 @@ async def test_cb005_finops_open_does_not_block_ota() -> None:
     try:
         await finops.failure(await finops.acquire())
         assert not (await finops.acquire()).allowed
-        assert (await make_dispatcher(
-            ota_store, ota, publish_ota
-        ).dispatch_batch()).published == 1
+        assert (await make_dispatcher(ota_store, ota, publish_ota).dispatch_batch()).published == 1
         assert sent == 1
-        assert client.receive_message(
-            QueueUrl=queue, MaxNumberOfMessages=1, WaitTimeSeconds=1
-        ).get("Messages")
+        assert client.receive_message(QueueUrl=queue, MaxNumberOfMessages=1, WaitTimeSeconds=1).get(
+            "Messages"
+        )
     finally:
         client.delete_queue(QueueUrl=queue)
         await cache.delete(prefix + ":finops", prefix + ":ota")
@@ -251,7 +246,8 @@ async def test_cb007_backlog_recovery_respects_rate_limit() -> None:
     cache = redis_client()
     key = "cb-rate:" + uuid4().hex
     breaker = RedisCircuitBreaker(
-        cache, key=key,
+        cache,
+        key=key,
         policy=CircuitPolicy(
             failure_threshold=1,
             open_seconds=1,
@@ -277,15 +273,13 @@ async def test_cb007_backlog_recovery_respects_rate_limit() -> None:
 async def test_cb010_unknown_delivery_outcome_reconciled() -> None:
     cache = redis_client()
     key = "cb-unknown:" + uuid4().hex
-    breaker = RedisCircuitBreaker(
-        cache, key=key, policy=CircuitPolicy(failure_threshold=5)
-    )
+    breaker = RedisCircuitBreaker(cache, key=key, policy=CircuitPolicy(failure_threshold=5))
     client = sqs_client()
     queue = client.create_queue(QueueName="cb-unknown-" + uuid4().hex)["QueueUrl"]
     store = new_event()
     sends = 0
 
-    async def lost_response(event):
+    async def lost_response(event: EventEnvelope) -> None:
         nonlocal sends
         sends += 1
         client.send_message(QueueUrl=queue, MessageBody=event.event_id)
