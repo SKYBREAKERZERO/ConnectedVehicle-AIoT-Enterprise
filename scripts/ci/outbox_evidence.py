@@ -12,7 +12,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -147,7 +146,9 @@ def source_identity() -> dict[str, str]:
         "tested_sha": require_env("GITHUB_SHA", r"[a-f0-9]{40}"),
         "run_id": require_env("GITHUB_RUN_ID", r"[0-9]+"),
         "run_attempt": require_env("GITHUB_RUN_ATTEMPT", r"[0-9]+"),
-        "event": require_env("GITHUB_EVENT_NAME", r"(pull_request|push|merge_group|workflow_dispatch)"),
+        "event": require_env(
+            "GITHUB_EVENT_NAME", r"(pull_request|push|merge_group|workflow_dispatch)"
+        ),
     }
 
 
@@ -188,7 +189,9 @@ def verify(args: argparse.Namespace) -> None:
         "tested_sha": require_env("EXPECTED_SHA", r"[a-f0-9]{40}"),
         "run_id": require_env("EXPECTED_RUN_ID", r"[0-9]+"),
         "run_attempt": require_env("EXPECTED_RUN_ATTEMPT", r"[0-9]+"),
-        "event": require_env("EXPECTED_EVENT", r"(pull_request|push|merge_group|workflow_dispatch)"),
+        "event": require_env(
+            "EXPECTED_EVENT", r"(pull_request|push|merge_group|workflow_dispatch)"
+        ),
     }
     base = Path(args.evidence_root)
     for suite in REQUIRED:
