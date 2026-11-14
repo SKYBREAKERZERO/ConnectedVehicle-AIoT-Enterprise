@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from inspect import isawaitable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -25,12 +26,15 @@ class CircuitPolicy:
     min_interval_ms: int = 0
 
     def __post_init__(self) -> None:
-        if min(
-            self.failure_threshold,
-            self.open_seconds,
-            self.probe_lease_seconds,
-            self.successes_to_close,
-        ) < 1:
+        if (
+            min(
+                self.failure_threshold,
+                self.open_seconds,
+                self.probe_lease_seconds,
+                self.successes_to_close,
+            )
+            < 1
+        ):
             raise ValueError("Circuit policy values must be positive")
         if self.min_interval_ms < 0:
             raise ValueError("Circuit rate interval must be nonnegative")
@@ -55,9 +59,7 @@ class CircuitGate(Protocol):
 class InMemoryCircuitBreaker:
     """Deterministic state machine for unit tests and single-process callers."""
 
-    def __init__(
-        self, policy: CircuitPolicy, *, clock: Callable[[], float]
-    ) -> None:
+    def __init__(self, policy: CircuitPolicy, *, clock: Callable[[], float]) -> None:
         self.policy = policy
         self.clock = clock
         self.state = CircuitState.CLOSED
@@ -136,7 +138,7 @@ class InMemoryCircuitBreaker:
 
 
 class RedisEval(Protocol):
-    async def eval(self, script: str, numkeys: int, *args: object) -> object: ...
+    def eval(self, script: str, numkeys: int, *args: str) -> Awaitable[str] | str: ...
 
 
 # Redis TIME is authoritative: client clock skew cannot create extra probe permits.
@@ -212,9 +214,7 @@ return redis.error_reply('invalid circuit operation')
 class RedisCircuitBreaker:
     """Shared breaker by logical destination; all decisions are Redis-atomic."""
 
-    def __init__(
-        self, client: RedisEval, *, key: str, policy: CircuitPolicy
-    ) -> None:
+    def __init__(self, client: RedisEval, *, key: str, policy: CircuitPolicy) -> None:
         if not key or key.strip() != key or any(ord(c) < 33 for c in key):
             raise ValueError("Invalid circuit key")
         self.client = client
@@ -222,14 +222,19 @@ class RedisCircuitBreaker:
         self.policy = policy
 
     async def _act(self, action: str, token: str = "") -> str:
-        value = await self.client.eval(
-            _REDIS_SCRIPT, 1, self.key, action, token,
-            self.policy.failure_threshold,
-            self.policy.open_seconds * 1000,
-            self.policy.probe_lease_seconds * 1000,
-            self.policy.successes_to_close,
-            self.policy.min_interval_ms,
+        response = self.client.eval(
+            _REDIS_SCRIPT,
+            1,
+            self.key,
+            action,
+            token,
+            str(self.policy.failure_threshold),
+            str(self.policy.open_seconds * 1000),
+            str(self.policy.probe_lease_seconds * 1000),
+            str(self.policy.successes_to_close),
+            str(self.policy.min_interval_ms),
         )
+        value = await response if isawaitable(response) else response
         if isinstance(value, bytes):
             return value.decode("utf-8")
         if not isinstance(value, str):
