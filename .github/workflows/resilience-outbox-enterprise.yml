@@ -18,7 +18,7 @@ permissions:
 
 concurrency:
   group: outbox-enterprise-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 defaults:
   run:
@@ -95,11 +95,19 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U cluster_bootstrap -d outbox_test"
           --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ['16379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       APP_ENV: local
       DATABASE_HOST: 127.0.0.1
       DATABASE_PORT: '5432'
       DATABASE_NAME: outbox_test
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '16379'
       DATABASE_USERNAME: migration_owner
       DATABASE_PASSWORD: ci-schema-only
       BOOTSTRAP_DATABASE_USERNAME: cluster_bootstrap
@@ -203,12 +211,20 @@ jobs:
           AWS_DEFAULT_REGION: us-east-1
           SQS_ENDPOINT_STRATEGY: path
         ports: ['4566:4566']
+      redis:
+        image: redis:7-alpine
+        ports: ['16379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       APP_ENV: local
       CLOUD_RUNTIME: localstack
       DATABASE_HOST: 127.0.0.1
       DATABASE_PORT: '5432'
       DATABASE_NAME: outbox_delivery_test
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '16379'
       DATABASE_USERNAME: migration_owner
       DATABASE_PASSWORD: ci-schema-only
       BOOTSTRAP_DATABASE_USERNAME: cluster_bootstrap
