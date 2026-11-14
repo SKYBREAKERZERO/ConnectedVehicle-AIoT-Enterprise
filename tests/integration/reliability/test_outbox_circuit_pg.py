@@ -80,9 +80,7 @@ async def test_cb008_open_preserves_attempts_and_schedule() -> None:
     sessions = create_session_factory(engine)
     client = redis_client()
     key = "cb-outbox:" + uuid4().hex
-    circuit = RedisCircuitBreaker(
-        client, key=key, policy=CircuitPolicy(failure_threshold=1)
-    )
+    circuit = RedisCircuitBreaker(client, key=key, policy=CircuitPolicy(failure_threshold=1))
     event_id = "cb-test-" + uuid4().hex
     destination = "cb-destination-" + uuid4().hex
     event = create_event_envelope(
