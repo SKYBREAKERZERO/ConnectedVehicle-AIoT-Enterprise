@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from inspect import isawaitable
 from dataclasses import dataclass
 from enum import StrEnum
+from inspect import isawaitable
 from typing import Protocol
 from uuid import uuid4
 
@@ -235,10 +235,6 @@ class RedisCircuitBreaker:
             str(self.policy.min_interval_ms),
         )
         value = await response if isawaitable(response) else response
-        if isinstance(value, bytes):
-            return value.decode("utf-8")
-        if not isinstance(value, str):
-            raise RuntimeError("Invalid Redis circuit response")
         return value
 
     async def acquire(self) -> CircuitPermit:
