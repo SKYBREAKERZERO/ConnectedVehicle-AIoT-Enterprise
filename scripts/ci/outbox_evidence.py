@@ -52,9 +52,7 @@ REQUIRED = {
             "test_business_and_outbox_commit_atomically",
             "test_business_and_outbox_rollback_atomically",
         ),
-        "test_database_runtime_permissions": (
-            "test_real_postgres_runtime_permissions",
-        ),
+        "test_database_runtime_permissions": ("test_real_postgres_runtime_permissions",),
         "test_outbox_circuit_pg": (
             "test_cb003_half_open_single_probe_across_workers",
             "test_cb006_restart_restores_open_state",
@@ -63,9 +61,7 @@ REQUIRED = {
         ),
     },
     "delivery": {
-        "test_localstack_sqs_dlq": (
-            "test_localstack_sqs_redrives_failed_message_to_dlq",
-        ),
+        "test_localstack_sqs_dlq": ("test_localstack_sqs_redrives_failed_message_to_dlq",),
         "test_outbox_circuit_localstack": (
             "test_cb001_sqs_failures_open_breaker",
             "test_cb002_open_blocks_sends_without_claiming",
@@ -103,7 +99,7 @@ def report_cases(path: Path) -> tuple[str, list[tuple[str, str, str]]]:
     cases: list[tuple[str, str, str]] = []
     for case in root.iter("testcase"):
         module = (case.get("classname") or "").rsplit(".", 1)[-1]
-        name = (case.get("name") or "")
+        name = case.get("name") or ""
         if not module.startswith("test_") or not name.startswith("test_"):
             die(f"missing test identity: {path}")
         status = "passed"
@@ -127,8 +123,12 @@ def report_cases(path: Path) -> tuple[str, list[tuple[str, str, str]]]:
 
 def check_required(suite: str, cases: list[tuple[str, str, str]]) -> None:
     found = {(m, n.split("[", 1)[0]) for m, n, _ in cases}
-    missing = [(module, name) for module, names in REQUIRED[suite].items()
-               for name in names if (module, name) not in found]
+    missing = [
+        (module, name)
+        for module, names in REQUIRED[suite].items()
+        for name in names
+        if (module, name) not in found
+    ]
     if missing:
         die(f"missing mandatory {suite} cases: {missing}")
 
@@ -205,16 +205,15 @@ def verify(args: argparse.Namespace) -> None:
         except (ValueError, UnicodeDecodeError) as exc:
             die(f"invalid manifest: {suite}: {exc}")
         if not isinstance(payload, dict) or (
-            payload.get("schema") != SCHEMA or
-            payload.get("workflow") != WORKFLOW or
-            payload.get("suite") != suite or
-            payload.get("source") != expected or
-            payload.get("junit_sha256") != digest or
-            payload.get("case_count") != len(cases)
+            payload.get("schema") != SCHEMA
+            or payload.get("workflow") != WORKFLOW
+            or payload.get("suite") != suite
+            or payload.get("source") != expected
+            or payload.get("junit_sha256") != digest
+            or payload.get("case_count") != len(cases)
         ):
             die(f"inconsistent manifest/provenance: {suite}")
-        expected_cases = [{"module": m, "name": n, "status": status}
-                          for m, n, status in cases]
+        expected_cases = [{"module": m, "name": n, "status": status} for m, n, status in cases]
         if payload.get("cases") != expected_cases:
             die(f"tampered or inconsistent test list: {suite}")
         print(f"PASS {suite}: {len(cases)} verified cases, source={expected['tested_sha']}")
