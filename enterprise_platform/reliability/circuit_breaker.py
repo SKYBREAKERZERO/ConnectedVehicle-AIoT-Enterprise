@@ -22,6 +22,7 @@ class CircuitPolicy:
     open_seconds: int = 30
     probe_lease_seconds: int = 10
     successes_to_close: int = 2
+    min_interval_ms: int = 0
 
     def __post_init__(self) -> None:
         if min(
@@ -31,6 +32,8 @@ class CircuitPolicy:
             self.successes_to_close,
         ) < 1:
             raise ValueError("Circuit policy values must be positive")
+        if self.min_interval_ms < 0:
+            raise ValueError("Circuit rate interval must be nonnegative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +66,7 @@ class InMemoryCircuitBreaker:
         self.open_until = 0.0
         self.probe_token = ""
         self.probe_until = 0.0
+        self.next_allowed_ms = 0.0
         self._mutex = asyncio.Lock()
 
     async def acquire(self) -> CircuitPermit:
@@ -72,12 +76,16 @@ class InMemoryCircuitBreaker:
                 if now < self.open_until:
                     return CircuitPermit(False)
                 self.state = CircuitState.HALF_OPEN
+            if now * 1000 < self.next_allowed_ms:
+                return CircuitPermit(False)
             if self.state is CircuitState.HALF_OPEN:
                 if self.probe_token and now < self.probe_until:
                     return CircuitPermit(False)
                 self.probe_token = uuid4().hex
                 self.probe_until = now + self.policy.probe_lease_seconds
+                self.next_allowed_ms = now * 1000 + self.policy.min_interval_ms
                 return CircuitPermit(True, self.probe_token)
+            self.next_allowed_ms = now * 1000 + self.policy.min_interval_ms
             return CircuitPermit(True)
 
     async def success(self, permit: CircuitPermit) -> None:
@@ -146,13 +154,17 @@ if action == 'acquire' then
         state = 'half_open'
         redis.call('HSET', KEYS[1], 'state', state, 'successes', 0, 'probe', '')
     end
+    local next_allowed = tonumber(redis.call('HGET', KEYS[1], 'next_ms') or '0')
+    if now < next_allowed then return 'blocked' end
     if state == 'half_open' then
         local expiry = tonumber(redis.call('HGET', KEYS[1], 'probe_until') or '0')
         if token ~= '' and now < expiry then return 'blocked' end
         redis.call('HSET', KEYS[1], 'probe', ARGV[2],
-                   'probe_until', now + tonumber(ARGV[5]))
+                   'probe_until', now + tonumber(ARGV[5]),
+                   'next_ms', now + tonumber(ARGV[7]))
         return 'probe'
     end
+    redis.call('HSET', KEYS[1], 'next_ms', now + tonumber(ARGV[7]))
     return 'normal'
 end
 if action == 'release' then
@@ -216,6 +228,7 @@ class RedisCircuitBreaker:
             self.policy.open_seconds * 1000,
             self.policy.probe_lease_seconds * 1000,
             self.policy.successes_to_close,
+            self.policy.min_interval_ms,
         )
         if isinstance(value, bytes):
             return value.decode("utf-8")
