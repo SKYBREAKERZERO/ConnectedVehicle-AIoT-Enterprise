@@ -11,8 +11,8 @@ from enterprise_platform.messaging.envelope import EventEnvelope
 from enterprise_platform.reliability.failure import ExceptionTypeFailureClassifier
 from enterprise_platform.reliability.outbox_dispatcher import (
     MappingOutboxDestinationResolver,
-    OutboxDispatcher,
     OutboxDispatchBatchResult,
+    OutboxDispatcher,
 )
 from enterprise_platform.reliability.policies import RetryPolicy
 from enterprise_platform.reliability.retry import run_with_retry
