@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     outbox_max_attempts: int = Field(default=10, ge=1, le=100)
     outbox_batch_size: int = Field(default=10, ge=1, le=100)
     outbox_lease_seconds: int = Field(default=60, ge=1, le=600)
+    outbox_retry_budget_enabled: bool = True
+    outbox_retry_budget_rate_per_second: float = Field(default=20.0, gt=0, le=10_000)
+    outbox_retry_budget_burst: int = Field(default=40, ge=1, le=10_000)
+    outbox_retry_budget_defer_seconds: float = Field(default=5.0, gt=0, le=300)
     log_level: str = "INFO"
     log_format: str = "json"
     tracing_enabled: bool = True
