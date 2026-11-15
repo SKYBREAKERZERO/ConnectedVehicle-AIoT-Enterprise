@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -66,6 +67,9 @@ REQUIRED = {
             "test_cost01_pg_open_refunds_remaining_without_retry_budget",
             "test_cost01_pg_stale_token_cannot_refund_current_claim",
         ),
+    },
+    "cost": {
+        "test_outbox_cost_benchmark": ("test_cost01b_real_batch_matrix",),
     },
     "delivery": {
         "test_localstack_sqs_dlq": ("test_localstack_sqs_redrives_failed_message_to_dlq",),
@@ -140,6 +144,56 @@ def check_required(suite: str, cases: list[tuple[str, str, str]]) -> None:
         die(f"missing mandatory {suite} cases: {missing}")
 
 
+def validate_cost_report(path: Path) -> str:
+    """Fail closed on absent or self-inconsistent real benchmark measurements."""
+    raw = read_bytes(path)
+    try:
+        report = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as exc:
+        die(f"invalid cost benchmark report: {exc}")
+    if not isinstance(report, dict):
+        die("cost benchmark must be a JSON object")
+    if (
+        report.get("schema") != "outbox-cost-benchmark-v1"
+        or report.get("environment") != "github-hosted-postgres17-redis-localstack"
+        or report.get("method") != "single-worker-sequential-real-sqs"
+    ):
+        die("cost benchmark identity or schema mismatched")
+    count = report.get("event_count_per_batch")
+    if type(count) is not int or not 100 <= count <= 1000:
+        die("cost benchmark event count outside required window")
+    runs = report.get("runs")
+    if not isinstance(runs, list) or len(runs) != 4:
+        die("cost benchmark must contain four batch measurements")
+    for run, size in zip(runs, (1, 5, 10, 20), strict=True):
+        if not isinstance(run, dict) or run.get("batch_size") != size:
+            die(f"missing or unordered cost benchmark batch size: {size}")
+        claims = (count + size - 1) // size
+        exact = {
+            "event_count": count,
+            "published": count,
+            "claim_transactions": claims,
+            "published_transactions": count,
+            "redis_eval_calls": claims + count,
+            "sqs_send_calls": count,
+            "sqs_unique_received": count,
+        }
+        for key, expected in exact.items():
+            if type(run.get(key)) is not int or run[key] != expected:
+                die(f"invalid measured {key} for batch {size}")
+        for key in (
+            "elapsed_ms",
+            "process_cpu_ms",
+            "throughput_events_per_sec",
+            "sqs_send_mean_ms",
+            "sqs_send_p95_ms",
+        ):
+            value = run.get(key)
+            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                die(f"invalid cost metric {key} for batch {size}")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def require_env(name: str, pattern: str) -> str:
     value = os.environ.get(name, "")
     if not re.fullmatch(pattern, value):
@@ -175,6 +229,14 @@ def generate(args: argparse.Namespace) -> None:
     path = Path(args.junit)
     digest, cases = report_cases(path)
     check_required(args.suite, cases)
+    benchmark_sha256 = (
+        validate_cost_report(Path(args.benchmark))
+        if args.suite == "cost" and args.benchmark
+        else None
+    )
+    if args.suite == "cost" and benchmark_sha256 is None:
+        die("cost suite requires --benchmark report")
+
     payload = {
         "schema": SCHEMA,
         "workflow": WORKFLOW,
@@ -182,6 +244,7 @@ def generate(args: argparse.Namespace) -> None:
         "source": identity,
         "junit_sha256": digest,
         "case_count": len(cases),
+        "benchmark_sha256": benchmark_sha256,
         "cases": [{"module": m, "name": n, "status": status} for m, n, status in cases],
     }
     output = Path(args.output)
@@ -223,6 +286,13 @@ def verify(args: argparse.Namespace) -> None:
         expected_cases = [{"module": m, "name": n, "status": status} for m, n, status in cases]
         if payload.get("cases") != expected_cases:
             die(f"tampered or inconsistent test list: {suite}")
+        expected_benchmark = (
+            validate_cost_report(folder / "benchmark.json")
+            if suite == "cost"
+            else None
+        )
+        if payload.get("benchmark_sha256") != expected_benchmark:
+            die(f"tampered or missing benchmark data: {suite}")
         print(f"PASS {suite}: {len(cases)} verified cases, source={expected['tested_sha']}")
     print("OUTBOX ENTERPRISE EVIDENCE: ALL REQUIRED REPORTS VERIFIED")
 
@@ -233,6 +303,7 @@ def main() -> None:
     make = sub.add_parser("generate")
     make.add_argument("--suite", choices=tuple(REQUIRED), required=True)
     make.add_argument("--junit", required=True)
+    make.add_argument("--benchmark")
     make.add_argument("--output", required=True)
     verify_parser = sub.add_parser("verify")
     verify_parser.add_argument("--evidence-root", required=True)
