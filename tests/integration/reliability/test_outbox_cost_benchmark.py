@@ -13,6 +13,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from statistics import mean
+from typing import cast
 from uuid import uuid4
 
 import boto3
@@ -31,12 +32,9 @@ from enterprise_platform.database.repositories.outbox import SQLAlchemyOutboxRep
 from enterprise_platform.database.session import create_session_factory
 from enterprise_platform.database.unit_of_work import SQLAlchemyUnitOfWork
 from enterprise_platform.messaging.envelope import EventEnvelope, create_event_envelope
+from enterprise_platform.messaging.sqs import SQSClient as TransportSQSClient
 from enterprise_platform.messaging.sqs import SQSEventQueue
-from enterprise_platform.reliability.circuit_breaker import (
-    CircuitPolicy,
-    CircuitPermit,
-    RedisCircuitBreaker,
-)
+from enterprise_platform.reliability.circuit_breaker import CircuitPolicy, RedisCircuitBreaker
 from enterprise_platform.reliability.outbox import ClaimedOutboxEvent, PendingOutboxEvent
 from enterprise_platform.reliability.outbox_dispatcher import (
     MappingOutboxDestinationResolver,
@@ -98,7 +96,7 @@ def percentile_95(values: list[float]) -> float:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_cost01b_real_batch_matrix(tmp_path: Path) -> None:
+async def test_cost01b_real_batch_matrix() -> None:
     """Benchmark actual dispatches; enforce accounting, never speed thresholds."""
     report_file = os.environ.get("OUTBOX_COST_REPORT")
     assert report_file, "OUTBOX_COST_REPORT must bind the evidence output"
@@ -130,7 +128,7 @@ async def test_cost01b_real_batch_matrix(tmp_path: Path) -> None:
             destination = "cost01b-" + uuid4().hex
             key = "cost01b-circuit:" + uuid4().hex
             queue_url = client.create_queue(QueueName="cost01b-" + uuid4().hex)["QueueUrl"]
-            queue = SQSEventQueue(client, queue_url=queue_url)
+            queue = SQSEventQueue(cast(TransportSQSClient, client), queue_url=queue_url)
             store = MeasuredStore(sessions, destination=destination)
             circuit = MeasuredCircuit(cache, key=key)
             ids = ["cost01b-" + uuid4().hex for _ in range(event_count)]
@@ -229,7 +227,11 @@ async def test_cost01b_real_batch_matrix(tmp_path: Path) -> None:
                         WaitTimeSeconds=1,
                     )
                     for message in response.get("Messages", []):
-                        received.add(message["Body"].split('"event_id":"')[1].split('"')[0])
+                        parsed = json.loads(message["Body"])
+                        assert isinstance(parsed, dict)
+                        event_id = parsed.get("event_id")
+                        assert isinstance(event_id, str)
+                        received.add(event_id)
                         client.delete_message(
                             QueueUrl=queue_url,
                             ReceiptHandle=message["ReceiptHandle"],
