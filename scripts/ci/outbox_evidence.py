@@ -30,6 +30,10 @@ REQUIRED = {
         "test_outbox_dispatcher": (
             "test_dispatcher_persists_retry_with_exponential_backoff",
             "test_retry_exhaustion_is_fenced_and_persisted",
+            "test_cost01_closed_claims_full_batch_in_one_call",
+            "test_cost01_half_open_claims_only_one_probe",
+            "test_cost01_rate_limited_closed_claims_only_one",
+            "test_cost01_open_mid_batch_refunds_unattempted_claims",
         ),
         "test_transaction_recovery": (
             "test_unknown_commit_reads_durable_result_without_replaying",
@@ -58,6 +62,9 @@ REQUIRED = {
             "test_cb006_restart_restores_open_state",
             "test_cb008_open_preserves_attempts_and_schedule",
             "test_cb009_runtime_role_isolation_pg17",
+            "test_cost01_pg_closed_10_events_one_claim",
+            "test_cost01_pg_open_refunds_remaining_without_retry_budget",
+            "test_cost01_pg_stale_token_cannot_refund_current_claim",
         ),
     },
     "delivery": {
