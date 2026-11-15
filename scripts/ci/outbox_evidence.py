@@ -40,6 +40,12 @@ REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "test_cost01c_lost_batch_response_never_marks_success",
             "test_cost01c_half_open_keeps_individual_probe",
         ),
+        "test_outbox_request_reduction": (
+            "test_cost01d_idle_backoff_bounds_and_reset_contract",
+            "test_cost01d_runtime_empty_poll_uses_adaptive_path",
+            "test_cost01d_empty_outbox_does_not_call_sqs",
+            "test_cost01d_permanent_failure_does_not_generate_retry_storm",
+        ),
         "test_sqs_batch": (
             "test_cost01c_sqs_batch_20_events_two_api_calls",
             "test_cost01c_http200_partial_failures_are_mapped_by_id",
