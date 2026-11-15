@@ -31,6 +31,14 @@ class RetryBudgetPolicy:
             raise ValueError("Retry budget deferral must be finite and in (0, 300]")
 
 
+class RetryBudget(Protocol):
+    """Shared permit contract, allowing deterministic fault-injection tests."""
+
+    policy: RetryBudgetPolicy
+
+    async def acquire(self, requested: int = 1) -> int: ...
+
+
 _RETRY_BUDGET_SCRIPT = """
 local now_parts = redis.call('TIME')
 local now_ms = tonumber(now_parts[1]) * 1000 + math.floor(tonumber(now_parts[2]) / 1000)
