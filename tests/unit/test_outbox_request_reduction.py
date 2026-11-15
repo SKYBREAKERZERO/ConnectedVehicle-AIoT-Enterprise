@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 import pytest
@@ -13,7 +12,6 @@ from enterprise_platform.reliability.failure import ExceptionTypeFailureClassifi
 from enterprise_platform.reliability.outbox_dispatcher import (
     MappingOutboxDestinationResolver,
     OutboxDispatcher,
-    OutboxStore,
 )
 from enterprise_platform.reliability.policies import RetryPolicy
 from enterprise_platform.reliability.retry import run_with_retry
