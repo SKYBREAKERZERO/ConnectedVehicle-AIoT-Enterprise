@@ -50,6 +50,7 @@ REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "test_cost02_first_attempt_is_not_charged_retry_budget",
             "test_cost02_budget_denial_defers_only_retries_before_sqs",
             "test_cost02_redis_failure_denies_retries_but_not_first_send",
+            "test_cost02_cancellation_refunds_unattempted_claims",
             "test_cost02_zero_budget_never_sends_or_consumes_retry",
             "test_cost02_budget_requires_fenced_deferrer",
             "test_cost02_invalid_budget_policy_is_rejected",
