@@ -61,6 +61,7 @@ jobs:
             tests/unit/enterprise_platform/test_circuit_breaker.py \
             tests/unit/enterprise_platform/test_sqs_batch.py \
             tests/unit/enterprise_platform/test_retry_guard.py \
+            tests/unit/enterprise_platform/test_retry_budget.py \
             tests/unit/test_outbox_request_reduction.py \
             --junitxml=.outbox-contract/results.xml
       - name: Bind contract report to execution identity
@@ -358,6 +359,32 @@ jobs:
           path: ci-evidence/retry/
           if-no-files-found: warn
           retention-days: 30
+      - name: Run real Redis fleet budget and PostgreSQL/LocalStack deferral tests
+        run: |
+          set -euo pipefail
+          mkdir -p .outbox-budget
+          python -m pytest -q --strict-markers \
+            tests/integration/reliability/test_retry_budget_runtime.py \
+            --junitxml=.outbox-budget/results.xml
+      - name: Bind global retry budget report to execution identity
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-evidence/budget
+          if test -f .outbox-budget/results.xml; then
+            cp .outbox-budget/results.xml ci-evidence/budget/results.xml
+            python scripts/ci/outbox_evidence.py generate \
+              --suite budget --junit ci-evidence/budget/results.xml \
+              --output ci-evidence/budget/manifest.json
+          fi
+      - name: Upload global retry budget evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: outbox-budget-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-evidence/budget/
+          if-no-files-found: warn
+          retention-days: 30
       - name: Bind delivery report to execution identity
         if: ${{ always() }}
         run: |
@@ -587,6 +614,11 @@ jobs:
         with:
           name: outbox-retry-${{ github.run_id }}-${{ github.run_attempt }}
           path: ci-evidence/retry
+      - name: Download global retry budget report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: outbox-budget-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-evidence/budget
       - name: Verify report hashes, source identity and mandatory cases
         env:
           EXPECTED_REPOSITORY: ${{ github.repository }}
