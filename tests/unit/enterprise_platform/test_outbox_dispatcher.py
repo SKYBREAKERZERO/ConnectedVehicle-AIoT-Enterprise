@@ -6,6 +6,11 @@ from uuid import uuid4
 
 import pytest
 
+from enterprise_platform.reliability.circuit_breaker import (
+    CircuitPolicy,
+    CircuitState,
+    InMemoryCircuitBreaker,
+)
 from enterprise_platform.messaging.envelope import (
     EventEnvelope,
     create_event_envelope,
@@ -39,6 +44,7 @@ class FakeOutboxStore:
     mark_failed_result: bool = True
     mark_published_result: bool = True
     schedule_retry_result: bool = True
+    released_calls: list[tuple[ClaimedOutboxEvent, ...]] = field(default_factory=list)
 
     claim_calls: list[
         tuple[
@@ -79,7 +85,13 @@ class FakeOutboxStore:
             )
         )
 
-        return self.claimed_events
+        return self.claimed_events[:batch_size]
+
+    async def release_unattempted(
+        self, *, claims: tuple[ClaimedOutboxEvent, ...]
+    ) -> int:
+        self.released_calls.append(claims)
+        return len(claims)
 
     async def mark_published(
         self,
@@ -522,3 +534,109 @@ async def test_poison_outbox_does_not_block_later_valid_events() -> None:
     ).dispatch_batch()
     assert result.failed == 1 and result.published == 1
     assert published == [valid.event_id]
+
+
+@pytest.mark.asyncio
+async def test_cost01_closed_claims_full_batch_in_one_call() -> None:
+    claims = tuple(create_claimed_event()[0] for _ in range(10))
+    store = FakeOutboxStore(claimed_events=claims)
+    breaker = InMemoryCircuitBreaker(CircuitPolicy(), clock=lambda: 100.0)
+    sent: list[str] = []
+
+    async def publisher(event: EventEnvelope) -> None:
+        sent.append(event.event_id)
+
+    dispatcher = OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": publisher}),
+        retry_policy=create_retry_policy(),
+        batch_size=10,
+        circuit=breaker,
+    )
+    result = await dispatcher.dispatch_batch()
+    assert result.claimed == result.published == 10
+    assert result.released_unattempted == 0
+    assert len(sent) == 10
+    assert len(store.claim_calls) == 1
+    assert store.claim_calls[0][0] == 10
+
+
+@pytest.mark.asyncio
+async def test_cost01_half_open_claims_only_one_probe() -> None:
+    now = [100.0]
+    breaker = InMemoryCircuitBreaker(
+        CircuitPolicy(failure_threshold=1, open_seconds=1),
+        clock=lambda: now[0],
+    )
+    await breaker.failure(await breaker.acquire())
+    now[0] += 1.1
+    store = FakeOutboxStore(
+        claimed_events=tuple(create_claimed_event()[0] for _ in range(10))
+    )
+
+    async def publisher(_event: EventEnvelope) -> None:
+        return None
+
+    result = await OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": publisher}),
+        retry_policy=create_retry_policy(),
+        batch_size=10,
+        circuit=breaker,
+    ).dispatch_batch()
+    assert result.claimed == result.published == 1
+    assert store.claim_calls[0][0] == 1
+    assert breaker.state == CircuitState.HALF_OPEN
+
+
+@pytest.mark.asyncio
+async def test_cost01_rate_limited_closed_claims_only_one() -> None:
+    breaker = InMemoryCircuitBreaker(
+        CircuitPolicy(min_interval_ms=1000), clock=lambda: 100.0
+    )
+    store = FakeOutboxStore(
+        claimed_events=tuple(create_claimed_event()[0] for _ in range(10))
+    )
+
+    async def publisher(_event: EventEnvelope) -> None:
+        return None
+
+    result = await OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": publisher}),
+        retry_policy=create_retry_policy(),
+        batch_size=10,
+        circuit=breaker,
+    ).dispatch_batch()
+    assert result.claimed == 1
+    assert store.claim_calls[0][0] == 1
+
+
+@pytest.mark.asyncio
+async def test_cost01_open_mid_batch_refunds_unattempted_claims() -> None:
+    claims = tuple(create_claimed_event()[0] for _ in range(5))
+    store = FakeOutboxStore(claimed_events=claims)
+    breaker = InMemoryCircuitBreaker(
+        CircuitPolicy(failure_threshold=1), clock=lambda: 100.0
+    )
+    sends: list[str] = []
+
+    async def fail(event: EventEnvelope) -> None:
+        sends.append(event.event_id)
+        raise MessagePublishError()
+
+    result = await OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": fail}),
+        retry_policy=create_retry_policy(),
+        batch_size=5,
+        circuit=breaker,
+    ).dispatch_batch()
+    assert result.claimed == 5
+    assert result.published == 0
+    assert result.retries_scheduled == 1
+    assert result.released_unattempted == 4
+    assert result.stale_claims == 0
+    assert len(sends) == 1
+    assert store.released_calls == [claims[1:]]
+    assert breaker.state == CircuitState.OPEN
