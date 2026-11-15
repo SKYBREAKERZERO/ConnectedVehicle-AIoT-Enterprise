@@ -200,7 +200,7 @@ jobs:
           retention-days: 30
 
   delivery_runtime:
-    name: 03 LocalStack fault injection and business isolation
+    name: 03 LocalStack delivery and invalid-retry fault injection
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:
@@ -331,6 +331,32 @@ jobs:
             tests/integration/messaging/test_localstack_sqs.py \
             tests/integration/reliability/test_outbox_circuit_localstack.py \
             --junitxml=.outbox-delivery/results.xml
+      - name: Run mandatory invalid-retry suppression end-to-end tests
+        run: |
+          set -euo pipefail
+          mkdir -p .outbox-retry
+          python -m pytest -q --strict-markers \
+            tests/integration/reliability/test_invalid_retry_suppression.py \
+            --junitxml=.outbox-retry/results.xml
+      - name: Bind retry suppression report to execution identity
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-evidence/retry
+          if test -f .outbox-retry/results.xml; then
+            cp .outbox-retry/results.xml ci-evidence/retry/results.xml
+            python scripts/ci/outbox_evidence.py generate \
+              --suite retry --junit ci-evidence/retry/results.xml \
+              --output ci-evidence/retry/manifest.json
+          fi
+      - name: Upload retry suppression evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: outbox-retry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-evidence/retry/
+          if-no-files-found: warn
+          retention-days: 30
       - name: Bind delivery report to execution identity
         if: ${{ always() }}
         run: |
@@ -555,6 +581,11 @@ jobs:
         with:
           name: outbox-cost-${{ github.run_id }}-${{ github.run_attempt }}
           path: ci-evidence/cost
+      - name: Download invalid-retry suppression report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: outbox-retry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-evidence/retry
       - name: Verify report hashes, source identity and mandatory cases
         env:
           EXPECTED_REPOSITORY: ${{ github.repository }}
