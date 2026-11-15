@@ -8,9 +8,9 @@ from uuid import uuid4
 
 import pytest
 
-from enterprise_platform.messaging.envelope import create_event_envelope
-from enterprise_platform.messaging.sqs import SQSBatchSendResult
+from enterprise_platform.messaging.envelope import EventEnvelope, create_event_envelope
 from enterprise_platform.messaging.serialization import serialize_event_envelope
+from enterprise_platform.messaging.sqs import SQSBatchSendResult
 from enterprise_platform.reliability.outbox import ClaimedOutboxEvent
 from enterprise_platform.reliability.outbox_dispatcher import (
     MappingOutboxDestinationResolver,
@@ -110,11 +110,9 @@ def dispatcher(store: RecordingStore, budget: FakeBudget) -> OutboxDispatcher:
         raise AssertionError("Batch send required")
 
     async def batched(
-        events: tuple[object, ...],
+        events: tuple[EventEnvelope, ...],
     ) -> tuple[SQSBatchSendResult, ...]:
-        return tuple(
-            SQSBatchSendResult(getattr(event, "event_id"), "sent") for event in events
-        )
+        return tuple(SQSBatchSendResult(event.event_id, "sent") for event in events)
 
     return OutboxDispatcher(
         store=store,
@@ -184,10 +182,13 @@ async def test_cost02_zero_budget_never_sends_or_consumes_retry() -> None:
 
 def test_cost02_budget_requires_fenced_deferrer() -> None:
     store = RecordingStore(make_claims((2,)))
+    async def single(_event: EventEnvelope) -> None:
+        raise AssertionError("Must not send when budget construction fails")
+
     with pytest.raises(ValueError, match="fenced"):
         OutboxDispatcher(
             store=store,
-            destinations=MappingOutboxDestinationResolver({"vehicle-command": store.mark_published}),
+            destinations=MappingOutboxDestinationResolver({"vehicle-command": single}),
             retry_policy=RetryPolicy(),
             retry_budget=FakeBudget(grant=1),
         )
