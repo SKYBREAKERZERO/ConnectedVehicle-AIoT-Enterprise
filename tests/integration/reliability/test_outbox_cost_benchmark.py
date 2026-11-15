@@ -156,13 +156,16 @@ async def test_cost01b_real_batch_matrix() -> None:
                         )
                     await uow.commit()
 
-                async def publisher(event: EventEnvelope) -> str:
+                async def publisher(
+                    event: EventEnvelope,
+                    *,
+                    target_queue: SQSEventQueue = queue,
+                    timings: list[float] = message_latencies_ms,
+                ) -> str:
                     nonlocal sqs_sends
                     start = time.perf_counter_ns()
-                    message_id = await queue.send_event(event)
-                    message_latencies_ms.append(
-                        (time.perf_counter_ns() - start) / 1_000_000
-                    )
+                    message_id = await target_queue.send_event(event)
+                    timings.append((time.perf_counter_ns() - start) / 1_000_000)
                     sqs_sends += 1
                     return message_id
 
