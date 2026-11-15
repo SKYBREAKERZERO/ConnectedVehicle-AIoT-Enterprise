@@ -45,7 +45,13 @@ def _sdk_error(code: str) -> ClientError:
     return ClientError(
         {
             "Error": {"Code": code, "Message": "synthetic"},
-            "ResponseMetadata": {"HTTPStatusCode": 400},
+            "ResponseMetadata": {
+                "HTTPStatusCode": 400,
+                "RequestId": "test-retry-guard",
+                "HostId": "test-retry-guard",
+                "HTTPHeaders": {},
+                "RetryAttempts": 0,
+            },
         },
         "SendMessage",
     )
