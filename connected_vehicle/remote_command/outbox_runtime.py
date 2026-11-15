@@ -62,9 +62,13 @@ async def remote_command_outbox_runtime(
             ),
             policy=CircuitPolicy(),
         )
+        store = SQLAlchemyOutboxStore(sessions, destination=REMOTE_COMMAND_DESTINATION)
         try:
             yield OutboxDispatcher(
-                store=SQLAlchemyOutboxStore(sessions, destination=REMOTE_COMMAND_DESTINATION),
+                store=store,
+                batch_publisher=queue.send_events_batch,
+                batch_mark_published=store.mark_published_batch,
+                batch_destination=REMOTE_COMMAND_DESTINATION,
                 circuit=circuit,
                 batch_size=settings.outbox_batch_size,
                 lease_seconds=settings.outbox_lease_seconds,
