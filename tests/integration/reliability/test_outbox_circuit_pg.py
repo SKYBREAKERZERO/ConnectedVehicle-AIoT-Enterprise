@@ -394,3 +394,58 @@ async def test_cost01_pg_stale_token_cannot_refund_current_claim() -> None:
                 delete(OutboxEventModel).where(OutboxEventModel.event_id == event_id)
             )
         await engine.dispose()
+
+
+
+@pytest.mark.integration
+async def test_cost01c_pg_batch_ack_rejects_stale_token() -> None:
+    """A partial fenced UPDATE must not mark another worker's claim published."""
+    engine = create_database_engine(get_settings())
+    sessions = create_session_factory(engine)
+    ids = ["cost01c-fence-" + uuid4().hex for _ in range(3)]
+    destination = "cost01c-fence-" + uuid4().hex
+    store = SQLAlchemyOutboxStore(sessions, destination=destination)
+    try:
+        async with SQLAlchemyUnitOfWork(sessions) as uow:
+            repository = SQLAlchemyOutboxRepository(uow.session)
+            for event_id in ids:
+                event = create_event_envelope(
+                    event_id=event_id,
+                    event_type="vehicle.command.requested",
+                    source="cost01c-pg-fencing",
+                    payload={"vehicle_id": "VIN-COST01C", "command": "lock"},
+                )
+                repository.add(PendingOutboxEvent.from_event(event, destination=destination))
+            await uow.commit()
+        claims = await store.claim_batch(batch_size=3, lease_seconds=60)
+        assert len(claims) == 3
+        stale = replace(claims[1], claim_token=str(uuid4()))
+        accepted = await store.mark_published_batch(
+            claims=(claims[0], stale, claims[2]), published_at=datetime.now(UTC)
+        )
+        assert set(accepted) == {claims[0].id, claims[2].id}
+        assert await store.mark_published_batch(
+            claims=(claims[0], stale, claims[2]), published_at=datetime.now(UTC)
+        ) == ()
+        async with sessions() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(OutboxEventModel).where(OutboxEventModel.event_id.in_(ids))
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            state = {row.id: row for row in rows}
+            assert state[claims[0].id].status == "published"
+            assert state[claims[2].id].status == "published"
+            assert state[claims[1].id].status == "processing"
+            assert state[claims[1].id].claim_token == claims[1].claim_token
+            assert state[claims[1].id].attempts == 1
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                delete(OutboxEventModel).where(OutboxEventModel.event_id.in_(ids))
+            )
+        await engine.dispose()
