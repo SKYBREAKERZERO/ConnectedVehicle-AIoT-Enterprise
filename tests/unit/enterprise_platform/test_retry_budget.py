@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -27,10 +28,13 @@ class FakeBudget:
         default_factory=lambda: RetryBudgetPolicy(rate_per_second=1, burst=2)
     )
     fail: bool = False
+    cancel: bool = False
     requests: list[int] = field(default_factory=list)
 
     async def acquire(self, requested: int = 1) -> int:
         self.requests.append(requested)
+        if self.cancel:
+            raise asyncio.CancelledError()
         if self.fail:
             raise ConnectionError("redis unavailable")
         return min(self.grant, requested)
@@ -165,6 +169,17 @@ async def test_cost02_redis_failure_denies_retries_but_not_first_send() -> None:
     assert result.retry_budget_deferred == 2
     assert store.published == [claims[1].id]
     assert store.deferred == [(claims[0].id, claims[2].id)]
+
+
+@pytest.mark.asyncio
+async def test_cost02_cancellation_refunds_unattempted_claims() -> None:
+    claims = make_claims((1, 2, 2))
+    store = RecordingStore(claims)
+    budget = FakeBudget(grant=1, cancel=True)
+    with pytest.raises(asyncio.CancelledError):
+        await dispatcher(store, budget).dispatch_batch()
+    assert store.released == [claim.id for claim in claims]
+    assert store.published == []
 
 
 @pytest.mark.asyncio
