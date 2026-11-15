@@ -1,0 +1,44 @@
+name: Day41 Staging Rotation Admission
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: day41-staging-rotation
+  cancel-in-progress: false
+
+jobs:
+  trusted-admission:
+    name: Protected-main evidence and approval prerequisites
+    if: ${{ github.repository == 'SKYBREAKERZERO/ConnectedVehicle-AIoT-Enterprise' && github.ref == 'refs/heads/main' && github.ref_protected }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Independently verify upstream evidence and refuse live execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -m scripts.day41_admission
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() }}
+        with:
+          name: day41-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: day41-admission.json
+          if-no-files-found: error
+          retention-days: 14
+  final:
+    name: Day41 AWS Staging remains blocked
+    needs: trusted-admission
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - run: |
+          echo 'AWS Staging: BLOCKED. No live executor or independent AWS receipts are installed.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1

@@ -1,0 +1,250 @@
+name: Day37 AWS staging governance (contracts only)
+'on':
+  workflow_dispatch:
+    inputs:
+      pr:
+        type: number
+        required: true
+        default: 15
+        description: PR whose real protected-main readiness is inspected
+  pull_request:
+    branches:
+    - main
+    types:
+    - labeled
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+concurrency:
+  group: day37-contracts-${{ github.ref }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  admission:
+    name: 01 admission contracts only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - name: Execute rejection contracts (not AWS execution)
+      run: python -m pytest tests/unit/test_day37_release.py -k test_admission_denies_invalid_request -q --junitxml=.day37/admission.xml
+    - name: Observe real protected-main blockers, read-only
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ inputs.pr || github.event.pull_request.number }}
+      run: python -m scripts.day37_release inspect --pr "$PR_NUMBER" --output .day37/readiness.json
+    - name: Bind actual JUnit and sanitized plan summary
+      run: python -m scripts.day37_release receipt --phase admission --junit .day37/admission.xml --output .day37/admission.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-admission-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'day37-contracts' }}
+  artifact:
+    name: 02 artifact contracts only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - name: Execute rejection contracts (not AWS execution)
+      run: python -m pytest tests/unit/test_day37_release.py -k test_artifact_denies_invalid_request -q --junitxml=.day37/artifact.xml
+    - name: Bind actual JUnit and sanitized plan summary
+      run: python -m scripts.day37_release receipt --phase artifact --junit .day37/artifact.xml --output .day37/artifact.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-artifact-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    needs:
+    - admission
+  identity:
+    name: 03 identity contracts only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - name: Execute rejection contracts (not AWS execution)
+      run: python -m pytest tests/unit/test_day37_release.py -k test_identity_denies_invalid_request -q --junitxml=.day37/identity.xml
+    - name: Bind actual JUnit and sanitized plan summary
+      run: python -m scripts.day37_release receipt --phase identity --junit .day37/identity.xml --output .day37/identity.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-identity-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    needs:
+    - admission
+  plan:
+    name: 04 plan contracts only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      with:
+        terraform_version: 1.14.7
+        terraform_wrapper: false
+    - name: Execute rejection contracts (not AWS execution)
+      run: python -m pytest tests/unit/test_day37_release.py -k test_plan_denies_invalid_request -q --junitxml=.day37/plan.xml
+    - name: Validate and mock-plan the staged blueprint, never real AWS
+      run: 'terraform -chdir=infra/terraform/modules/ota-staging init -backend=false -lockfile=readonly -input=false
+
+        terraform -chdir=infra/terraform/modules/ota-staging validate -no-color
+
+        terraform -chdir=infra/terraform/modules/ota-staging test -json > "$RUNNER_TEMP/day37-terraform.jsonl"
+
+        python -m scripts.day37_release terraform-summary --input "$RUNNER_TEMP/day37-terraform.jsonl" --output .day37/terraform-summary.json'
+    - name: Bind actual JUnit and sanitized plan summary
+      run: python -m scripts.day37_release receipt --phase plan --junit .day37/plan.xml --terraform-report .day37/terraform-summary.json
+        --output .day37/plan.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-plan-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    needs:
+    - artifact
+    - identity
+  deploy:
+    name: 05 deploy contracts only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - name: Execute rejection contracts (not AWS execution)
+      run: python -m pytest tests/unit/test_day37_release.py -k test_deploy_denies_invalid_request -q --junitxml=.day37/deploy.xml
+    - name: Bind actual JUnit and sanitized plan summary
+      run: python -m scripts.day37_release receipt --phase deploy --junit .day37/deploy.xml --output .day37/deploy.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    needs:
+    - admission
+    - artifact
+    - identity
+    - plan
+  rollback:
+    name: 06 rollback contracts only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - name: Execute rejection contracts (not AWS execution)
+      run: python -m pytest tests/unit/test_day37_release.py -k test_rollback_denies_invalid_request -q --junitxml=.day37/rollback.xml
+    - name: Bind actual JUnit and sanitized plan summary
+      run: python -m scripts.day37_release receipt --phase rollback --junit .day37/rollback.xml --output .day37/rollback.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day37-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    needs:
+    - deploy
+  gate:
+    name: 07 Independent readiness gate (blocked until live prerequisites)
+    needs:
+    - admission
+    - artifact
+    - identity
+    - plan
+    - deploy
+    - rollback
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event.label.name == 'day37-contracts') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ needs.admission.result == 'success' && needs.artifact.result == 'success' && needs.identity.result == 'success'
+        && needs.plan.result == 'success' && needs.deploy.result == 'success' && needs.rollback.result == 'success' }}
+      with:
+        name: day37-admission-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37-verify
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ needs.admission.result == 'success' && needs.artifact.result == 'success' && needs.identity.result == 'success'
+        && needs.plan.result == 'success' && needs.deploy.result == 'success' && needs.rollback.result == 'success' }}
+      with:
+        name: day37-artifact-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37-verify
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ needs.admission.result == 'success' && needs.artifact.result == 'success' && needs.identity.result == 'success'
+        && needs.plan.result == 'success' && needs.deploy.result == 'success' && needs.rollback.result == 'success' }}
+      with:
+        name: day37-identity-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37-verify
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ needs.admission.result == 'success' && needs.artifact.result == 'success' && needs.identity.result == 'success'
+        && needs.plan.result == 'success' && needs.deploy.result == 'success' && needs.rollback.result == 'success' }}
+      with:
+        name: day37-plan-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37-verify
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ needs.admission.result == 'success' && needs.artifact.result == 'success' && needs.identity.result == 'success'
+        && needs.plan.result == 'success' && needs.deploy.result == 'success' && needs.rollback.result == 'success' }}
+      with:
+        name: day37-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37-verify
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ needs.admission.result == 'success' && needs.artifact.result == 'success' && needs.identity.result == 'success'
+        && needs.plan.result == 'success' && needs.deploy.result == 'success' && needs.rollback.result == 'success' }}
+      with:
+        name: day37-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37-verify
+    - name: Recompute all contracts and preserve actual readiness blockers
+      if: ${{ always() }}
+      env:
+        PIPELINE_NEEDS: ${{ toJSON(needs) }}
+      run: python -m scripts.day37_release gate --folder .day37-verify --output day37-aws-staging-acceptance.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: ${{ always() }}
+      with:
+        name: day37-final-${{ github.run_id }}-${{ github.run_attempt }}
+        path: day37-aws-staging-acceptance.json
+        if-no-files-found: error
+        retention-days: 7

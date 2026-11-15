@@ -6,7 +6,8 @@ from alembic.script import ScriptDirectory
 
 def test_single_published_ota_migration_line() -> None:
     scripts = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert scripts.get_heads() == ["a05e127c349b"]
+    assert scripts.get_heads() == ["b16f238d45ac"]
+    assert scripts.get_revision("b16f238d45ac").down_revision == "a05e127c349b"
     assert scripts.get_revision("a05e127c349b").down_revision == "f94d016b238a"
     assert scripts.get_revision("f94d016b238a").down_revision == "e83c904a127f"
     assert scripts.get_revision("e83c904a127f").down_revision == "d72fa60b319e"

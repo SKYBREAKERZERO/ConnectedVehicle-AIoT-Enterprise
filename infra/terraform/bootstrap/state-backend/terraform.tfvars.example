@@ -1,0 +1,13 @@
+# LocalStack state backend bootstrap only.
+
+project_name = "connected-vehicle"
+environment  = "local"
+
+aws_region       = "ap-northeast-1"
+aws_endpoint_url = "http://127.0.0.1:4566"
+
+# Dedicated Terraform state bucket.
+# Keep separate from OTA firmware and application buckets.
+state_bucket_name = "connected-vehicle-local-tfstate"
+
+owner = "connected-vehicle-platform"

@@ -55,8 +55,8 @@ def reports() -> dict[str, Any]:
         }
         for name, revision, state in (
             ("restored", "a37e610c952d", catalog),
-            ("upgraded", "a05e127c349b", new),
-            ("repeat", "a05e127c349b", new),
+            ("upgraded", "b16f238d45ac", new),
+            ("repeat", "b16f238d45ac", new),
         )
     ]
     summaries: list[dict[str, Any]] = []
@@ -151,7 +151,7 @@ def reports() -> dict[str, Any]:
             "data_after_failure": data,
             "revision_before": "a37e610c952d",
             "revision_after_failure": "a37e610c952d",
-            "retry_revision": "a05e127c349b",
+            "retry_revision": "b16f238d45ac",
         },
         "migration-scale-locks": {
             "postgres_lock_wait_observed": True,

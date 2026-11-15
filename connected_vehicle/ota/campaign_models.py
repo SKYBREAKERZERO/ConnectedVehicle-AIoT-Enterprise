@@ -39,6 +39,8 @@ class CampaignModel(Base):
     wave_timeout_seconds: Mapped[int]
     current_wave: Mapped[int] = mapped_column(server_default="-1")
     wave_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dispatch_owner: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
+    dispatch_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     snapshot_sha256: Mapped[str | None] = mapped_column(String(64))
     pause_reason: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[str] = mapped_column(Text)
@@ -59,6 +61,16 @@ class CampaignModel(Base):
         CheckConstraint("observation_seconds BETWEEN 0 AND 3600"),
         CheckConstraint("wave_timeout_seconds BETWEEN 30 AND 86400"),
         CheckConstraint("current_wave>=-1"),
+        CheckConstraint(
+            "(dispatch_owner IS NULL) = (dispatch_until IS NULL)", name="ck_campaign_dispatch_lease"
+        ),
+        Index(
+            "ix_campaign_dispatch_available",
+            "tenant_id",
+            "updated_at",
+            "id",
+            postgresql_where=text("status='running'"),
+        ),
         Index("ix_campaign_running", "tenant_id", "status", "id"),
     )
 

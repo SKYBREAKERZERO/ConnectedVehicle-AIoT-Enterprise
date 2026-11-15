@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -54,3 +55,23 @@ def test_gate_subprocesses_cannot_inherit_real_cloud_credentials(
     assert env["AWS_EC2_METADATA_DISABLED"] == "true"
     assert Path(env["TF_CLI_CONFIG_FILE"]).is_relative_to(tmp_path)
     assert not Path(env["AWS_SHARED_CREDENTIALS_FILE"]).exists()
+
+
+def test_copied_root_backend_cannot_escape_or_contact_cloud() -> None:
+    from scripts.iac.gate import require_local_backends
+
+    require_local_backends(
+        [
+            {},
+            {"terraform": [{"backend": [{"local": {"path": "terraform.tfstate"}}]}]},
+            {"terraform": [{"backend": [{"local": {"path": ["terraform.tfstate"]}}]}]},
+        ]
+    )
+    backends: list[dict[str, Any]] = [
+        {"s3": {"bucket": "real"}},
+        {"local": {"path": "../outside.tfstate"}},
+        {"local": {}},
+    ]
+    for backend in backends:
+        with pytest.raises(RuntimeError):
+            require_local_backends([{"terraform": [{"backend": [backend]}]}])

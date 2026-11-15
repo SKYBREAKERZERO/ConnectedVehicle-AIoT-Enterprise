@@ -1,0 +1,105 @@
+name: Isolated CI fault case
+on:
+  workflow_call:
+    inputs:
+      graph:
+        type: string
+        required: true
+      scenario:
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  producer:
+    # Expected failures are confined to this probe; the mandatory oracle must pass.
+    continue-on-error: true
+    if: inputs.scenario != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      operation: ${{ steps.produce.outcome }}
+      bundle: fault-input-${{ inputs.graph }}-${{ inputs.scenario }}-${{ github.run_attempt }}
+      attempt: ${{ github.run_attempt }}
+    env:
+      FAULT_GRAPH: ${{ inputs.graph }}
+      FAULT_SCENARIO: ${{ inputs.scenario }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: produce
+        run: python3 -m scripts.iac.pipeline_fault_probe produce
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.scenario == 'old-attempt'
+        with:
+          name: fault-history-${{ inputs.graph }}-${{ github.run_attempt }}
+          path: .fault-history
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.scenario != 'missing-artifact'
+        with:
+          name: fault-input-${{ inputs.graph }}-${{ inputs.scenario }}-${{ github.run_attempt }}
+          path: .fault-bundle
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+  consumer:
+    continue-on-error: true
+    if: ${{ always() }}
+    needs: [producer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      FAULT_GRAPH: ${{ inputs.graph }}
+      FAULT_SCENARIO: ${{ inputs.scenario }}
+    outputs:
+      guard: ${{ steps.guard.outcome }}
+      download: ${{ steps.download.outcome }}
+      verify: ${{ steps.verify.outcome }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: guard
+        env:
+          FAULT_NEEDS: ${{ toJSON(needs) }}
+        run: python3 -m scripts.iac.pipeline_fault_probe guard
+      - id: download
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ inputs.scenario == 'old-attempt' && github.run_attempt > 1 && format('fault-history-{0}-1', inputs.graph) || needs.producer.outputs.bundle }}
+          path: .fault-input
+      - id: verify
+        env:
+          FAULT_GRAPH: ${{ inputs.graph }}
+        run: |
+          case "$FAULT_GRAPH" in
+            runtime) stage=runtime-core ;;
+            iac) stage=iac-policy ;;
+            *) exit 1 ;;
+          esac
+          python3 -m scripts.iac.pipeline_evidence consume --stage "$stage" --folder .fault-input --output .fault-output
+  oracle:
+    if: ${{ always() }}
+    needs: [producer, consumer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      FAULT_GRAPH: ${{ inputs.graph }}
+      FAULT_SCENARIO: ${{ inputs.scenario }}
+      FAULT_NEEDS: ${{ toJSON(needs) }}
+      FAULT_HISTORY_ATTEMPT: ${{ inputs.scenario == 'old-attempt' && github.run_attempt > 1 && '1' || '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 -m scripts.iac.pipeline_fault_probe check
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fault-result-${{ inputs.graph }}-${{ inputs.scenario }}-${{ github.run_attempt }}
+          path: fault-result.json
+          if-no-files-found: error
+          retention-days: 7

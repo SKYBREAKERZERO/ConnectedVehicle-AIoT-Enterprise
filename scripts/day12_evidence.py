@@ -56,7 +56,7 @@ CATALOG_SECTIONS = {
     "sequences",
 }
 LEGACY = "a37e610c952d"
-HEAD = "a05e127c349b"
+HEAD = "b16f238d45ac"
 
 
 def source_commit() -> str:

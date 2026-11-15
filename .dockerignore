@@ -1,0 +1,14 @@
+**
+!Dockerfile
+!pyproject.toml
+!README.md
+!apps/**
+!connected_vehicle/**
+!enterprise_platform/**
+!simulators/**
+!infra/staging/requirements/**
+**/__pycache__
+**/*.pyc
+**/.env*
+**/*.pem
+**/*.key

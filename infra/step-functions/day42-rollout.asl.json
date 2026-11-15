@@ -1,0 +1,306 @@
+{
+  "Comment": "Day42 Standard workflow template. Requires a trusted idempotent Staging adapter.",
+  "StartAt": "Initialize",
+  "TimeoutSeconds": 3600,
+  "States": {
+    "BLOCKED": {
+      "Type": "Pass",
+      "Result": {
+        "status": "BLOCKED"
+      },
+      "End": true
+    },
+    "RELEASE_ACCEPTED": {
+      "Type": "Pass",
+      "Result": {
+        "status": "RELEASE_ACCEPTED"
+      },
+      "End": true
+    },
+    "FAILED_RECOVERED": {
+      "Type": "Pass",
+      "Result": {
+        "status": "FAILED_RECOVERED"
+      },
+      "End": true
+    },
+    "RECOVERY_REQUIRED": {
+      "Type": "Pass",
+      "Result": {
+        "status": "RECOVERY_REQUIRED"
+      },
+      "End": true
+    },
+    "Initialize": {
+      "Type": "Pass",
+      "Result": {
+        "wave": 1
+      },
+      "Next": "Admission"
+    },
+    "Admission": {
+      "Type": "Task",
+      "Resource": "${control_lambda_version_arn}",
+      "Parameters": {
+        "operation": "admit",
+        "execution_id.$": "$$.Execution.Id",
+        "release.$": "$$.Execution.Input",
+        "wave.$": "$.wave"
+      },
+      "TimeoutSeconds": 30,
+      "ResultPath": "$.observation",
+      "Next": "AdmissionResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "BLOCKED"
+        }
+      ]
+    },
+    "AdmissionResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.observation.status",
+          "StringEquals": "ADMITTED",
+          "Next": "OpenWave"
+        }
+      ],
+      "Default": "BLOCKED"
+    },
+    "OpenWave": {
+      "Type": "Task",
+      "Resource": "${control_lambda_version_arn}",
+      "Parameters": {
+        "operation": "open_wave",
+        "execution_id.$": "$$.Execution.Id",
+        "release.$": "$$.Execution.Input",
+        "wave.$": "$.wave"
+      },
+      "TimeoutSeconds": 30,
+      "ResultPath": "$.observation",
+      "Next": "OpenResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "StopExpansion"
+        }
+      ]
+    },
+    "OpenResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.observation.status",
+          "StringEquals": "OPENED",
+          "Next": "ObservationWindow"
+        }
+      ],
+      "Default": "StopExpansion"
+    },
+    "ObservationWindow": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "ObserveWave"
+    },
+    "ObserveWave": {
+      "Type": "Task",
+      "Resource": "${control_lambda_version_arn}",
+      "Parameters": {
+        "operation": "observe_wave",
+        "execution_id.$": "$$.Execution.Id",
+        "release.$": "$$.Execution.Input",
+        "wave.$": "$.wave"
+      },
+      "TimeoutSeconds": 30,
+      "ResultPath": "$.observation",
+      "Next": "WaveResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "StopExpansion"
+        }
+      ]
+    },
+    "WaveResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.observation.status",
+          "StringEquals": "CANARY_PASSED",
+          "Next": "AdvanceWave"
+        },
+        {
+          "Variable": "$.observation.status",
+          "StringEquals": "ALL_WAVES_PASSED",
+          "Next": "VerifyFinal"
+        }
+      ],
+      "Default": "StopExpansion"
+    },
+    "AdvanceWave": {
+      "Type": "Pass",
+      "Parameters": {
+        "wave.$": "States.MathAdd($.wave, 1)"
+      },
+      "Next": "WaveLimit"
+    },
+    "WaveLimit": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.wave",
+          "NumericLessThanEquals": 20,
+          "Next": "OpenWave"
+        }
+      ],
+      "Default": "StopExpansion"
+    },
+    "VerifyFinal": {
+      "Type": "Task",
+      "Resource": "${control_lambda_version_arn}",
+      "Parameters": {
+        "operation": "verify_final",
+        "execution_id.$": "$$.Execution.Id",
+        "release.$": "$$.Execution.Input",
+        "wave.$": "$.wave"
+      },
+      "TimeoutSeconds": 30,
+      "ResultPath": "$.observation",
+      "Next": "FinalResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "StopExpansion"
+        }
+      ]
+    },
+    "FinalResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.observation.status",
+          "StringEquals": "VERIFIED",
+          "Next": "RELEASE_ACCEPTED"
+        }
+      ],
+      "Default": "StopExpansion"
+    },
+    "StopExpansion": {
+      "Type": "Task",
+      "Resource": "${control_lambda_version_arn}",
+      "Parameters": {
+        "operation": "stop_expansion",
+        "execution_id.$": "$$.Execution.Id",
+        "release.$": "$$.Execution.Input",
+        "wave.$": "$.wave"
+      },
+      "TimeoutSeconds": 30,
+      "ResultPath": "$.observation",
+      "Next": "StopResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "RECOVERY_REQUIRED"
+        }
+      ]
+    },
+    "StopResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.observation.status",
+          "StringEquals": "ECS_STOPPED",
+          "Next": "RevertECS"
+        },
+        {
+          "Variable": "$.observation.status",
+          "StringEquals": "OTA_PAUSED",
+          "Next": "Reconcile"
+        }
+      ],
+      "Default": "RECOVERY_REQUIRED"
+    },
+    "RevertECS": {
+      "Type": "Task",
+      "Resource": "${control_lambda_version_arn}",
+      "Parameters": {
+        "operation": "revert_verified_ecs",
+        "execution_id.$": "$$.Execution.Id",
+        "release.$": "$$.Execution.Input",
+        "wave.$": "$.wave"
+      },
+      "TimeoutSeconds": 30,
+      "ResultPath": "$.observation",
+      "Next": "RevertResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "RECOVERY_REQUIRED"
+        }
+      ]
+    },
+    "RevertResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.observation.status",
+          "StringEquals": "ECS_REVERTED",
+          "Next": "Reconcile"
+        }
+      ],
+      "Default": "RECOVERY_REQUIRED"
+    },
+    "Reconcile": {
+      "Type": "Task",
+      "Resource": "${control_lambda_version_arn}",
+      "Parameters": {
+        "operation": "reconcile",
+        "execution_id.$": "$$.Execution.Id",
+        "release.$": "$$.Execution.Input",
+        "wave.$": "$.wave"
+      },
+      "TimeoutSeconds": 30,
+      "ResultPath": "$.observation",
+      "Next": "RecoveryResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "RECOVERY_REQUIRED"
+        }
+      ]
+    },
+    "RecoveryResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.observation.status",
+          "StringEquals": "RECONCILED",
+          "Next": "FAILED_RECOVERED"
+        }
+      ],
+      "Default": "RECOVERY_REQUIRED"
+    }
+  }
+}

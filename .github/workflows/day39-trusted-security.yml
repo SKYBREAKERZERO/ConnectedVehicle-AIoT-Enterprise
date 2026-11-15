@@ -1,0 +1,263 @@
+name: Day39 enterprise security acceptance
+'on':
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: day39-offline-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  PYTHONUTF8: '1'
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: 'false'
+  AWS_EC2_METADATA_DISABLED: 'true'
+
+jobs:
+  intake:
+    name: 01 Candidate and protected baseline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      baseline: ${{ steps.baseline.outputs.ref }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - id: baseline
+        run: python -m scripts.iac.ci_baseline_policy --output .iac-reports/day31-baseline.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day39-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .iac-reports/day31-baseline.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  quality:
+    name: 02 Verifier code and release contracts
+    needs: intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci-runtime
+      - name: Lint, format, type-check and verify the Day37 DAG
+        run: |
+          set -euo pipefail
+          files=(scripts/day37_gate.py scripts/day39_trusted_verifier.py scripts/day39_ci_evidence.py)
+          python -m ruff check "${files[@]}" tests/unit/test_day39_trusted_verifier.py
+          python -m ruff format --check "${files[@]}" tests/unit/test_day39_trusted_verifier.py
+          python -m mypy "${files[@]}"
+          python -m pytest -q tests/unit/test_day37_workflow.py tests/unit/test_day37_final_p1.py
+
+  faults:
+    name: 03 Evidence replay and admission fault injection
+    needs: intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci-runtime
+      - name: Execute and seal day39-faults
+        run: |
+          set -euo pipefail
+          mkdir -p .reports
+          python -m pytest -q tests/unit/test_day39_trusted_verifier.py tests/unit/test_day38_readiness.py --junitxml=.reports/faults.xml
+          python -m scripts.iac.pipeline_evidence publish --stage day39-faults --folder .reports --output .sealed
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: proof-day39-faults-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  contracts:
+    name: 04 IaC permission and policy contracts
+    needs: intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci-iac
+      - name: Execute and seal day39-contracts
+        run: |
+          set -euo pipefail
+          mkdir -p .reports
+          python -m pytest -c scripts/iac/pytest.ini -q \
+            tests/unit/iac/test_day37_aws_static_root.py tests/unit/iac/test_day37_foundation_tls.py \
+            tests/unit/iac/test_scan_policy.py tests/unit/iac/test_pipeline_evidence.py \
+            --junitxml=.reports/contracts.xml
+          python -m scripts.iac.pipeline_evidence publish --stage day39-contracts --folder .reports --output .sealed
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: proof-day39-contracts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  terraform:
+    name: 05 Terraform native validation / ${{ matrix.root }}
+    needs: intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        root: [ota-staging, ota-staging-foundation, ota-staging-identity]
+    env:
+      TF_ROOT: infra/terraform/environments/${{ matrix.root }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: '1.14.7'
+          terraform_wrapper: false
+      - name: Execute and seal day39-${{ matrix.root }}
+        run: |
+          set -euo pipefail
+          mkdir -p .reports
+          terraform -chdir="$TF_ROOT" fmt -check -recursive
+          terraform -chdir="$TF_ROOT" init -backend=false -lockfile=readonly -input=false -no-color
+          terraform -chdir="$TF_ROOT" validate -json > .reports/validate.json
+          python -m scripts.iac.pipeline_evidence publish --stage day39-${{ matrix.root }} --folder .reports --output .sealed
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: proof-day39-${{ matrix.root }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  scan:
+    name: 06 Checkov deployment source and CI fixture
+    needs: intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-ci-iac
+        with:
+          terraform: 'true'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: day39-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .iac-reports
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.intake.outputs.baseline }}
+          path: baseline
+          persist-credentials: false
+      - name: Run mandatory scan
+        run: |
+          set -euo pipefail
+          python -m scripts.iac.gate --baseline baseline --phase security --report .reports/checkov.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          actual = json.loads(Path('.reports/checkov.json').read_bytes())
+          if actual != {'status': 'passed', 'phase': 'security',
+                        'security_scan': 'passed', 'scanned_sources': 2}:
+              raise SystemExit('Incomplete deployment-source and fixture scan')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() && hashFiles('.reports/checkov.json') != '' }}
+        with:
+          name: day39-checkov-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .reports/checkov.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  evidence:
+    name: 07 Independently verify same-attempt reports
+    needs: [faults, contracts, terraform]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: proof-day39-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .incoming
+      - name: Validate all mandatory test and Terraform bundles
+        run: |
+          set -euo pipefail
+          for stage in day39-faults day39-contracts day39-ota-staging day39-ota-staging-foundation day39-ota-staging-identity; do
+            mkdir -p .input
+            mv ".incoming/proof-$stage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" ".input/$stage"
+          done
+          python -m scripts.day39_ci_evidence assemble --folder .input --output .reports/aggregate.json
+          python -m scripts.iac.pipeline_evidence publish --stage day39-aggregate --folder .reports --output .sealed
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day39-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  gate:
+    name: 08 Day39 final offline security gate
+    needs: [intake, quality, faults, contracts, terraform, scan, evidence]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: ${{ needs.evidence.result == 'success' }}
+        with:
+          name: day39-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .verified
+      - name: Record PASS or BLOCKED
+        if: ${{ !cancelled() }}
+        env:
+          PIPELINE_NEEDS: ${{ toJSON(needs) }}
+        run: python -m scripts.day39_ci_evidence finalize --folder .verified --output .final/decision.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() && hashFiles('.final/decision.json') != '' }}
+        with:
+          name: day39-decision-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .final/decision.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

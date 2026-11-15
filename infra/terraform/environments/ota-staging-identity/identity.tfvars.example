@@ -1,0 +1,12 @@
+# TEMPLATE ONLY. Account, policy permissions and KMS / S3 State must be independently reviewed.
+account_id               = "000000000000"
+github_oidc_provider_arn = "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"
+permissions_boundary_arn = "arn:aws:iam::000000000000:policy/cv-ota-staging-boundary"
+reviewed_policy_arns = {
+  plan      = "arn:aws:iam::000000000000:policy/cv-ota-staging/plan"
+  bootstrap = "arn:aws:iam::000000000000:policy/cv-ota-staging/bootstrap"
+  publish   = "arn:aws:iam::000000000000:policy/cv-ota-staging/publish"
+  deploy    = "arn:aws:iam::000000000000:policy/cv-ota-staging/deploy"
+  verify    = "arn:aws:iam::000000000000:policy/cv-ota-staging/verify"
+  recovery  = "arn:aws:iam::000000000000:policy/cv-ota-staging/recovery"
+}

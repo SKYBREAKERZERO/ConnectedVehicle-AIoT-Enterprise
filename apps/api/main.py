@@ -15,6 +15,7 @@ from apps.api.routers.remote_command import (
     router as remote_command_router,
 )
 from apps.api.service_auth import ServiceTokenMiddleware
+from connected_vehicle.ota.campaign_metrics import CampaignMetrics
 from enterprise_platform.config.settings import get_settings
 from enterprise_platform.database.credentials import load_runtime_database_settings
 from enterprise_platform.database.engine import (
@@ -74,7 +75,12 @@ def create_app() -> FastAPI:
 
     app.middleware("http")(http_observability_middleware)
 
-    configure_metrics(app, settings)
+    campaign_metrics = CampaignMetrics(settings.database_tenant_id)
+
+    async def collect_campaign_metrics() -> bytes:
+        return await campaign_metrics.collect(getattr(app.state, "session_factory", None))
+
+    configure_metrics(app, settings, extra=collect_campaign_metrics)
 
     configure_tracing(
         app,

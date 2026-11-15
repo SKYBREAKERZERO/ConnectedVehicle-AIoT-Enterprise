@@ -1,0 +1,32 @@
+# LocalStack OTA infrastructure only.
+
+project_name = "connected-vehicle"
+environment  = "local"
+tenant_id    = "tenant-a"
+
+aws_region       = "ap-northeast-1"
+aws_endpoint_url = "http://127.0.0.1:4566"
+
+owner = "connected-vehicle-platform"
+
+# Existing API role for this tenant.
+# Replace with the role name, not its ARN.
+api_runtime_role_name = "REPLACE_WITH_EXISTING_TENANT_API_ROLE"
+
+# Existing application database secret for this tenant.
+# Replace with its actual LocalStack ARN.
+application_database_secret_arn = "arn:aws:secretsmanager:ap-northeast-1:000000000000:secret:REPLACE_WITH_EXISTING_TENANT_DATABASE_SECRET"
+
+# Actual KMS key encrypting that database secret.
+# This is separate from the new OTA encryption keys.
+application_database_kms_key_arn = "arn:aws:kms:ap-northeast-1:000000000000:key/REPLACE-WITH-EXISTING-DATABASE-KEY-ID"
+
+# Exact firmware object keys approved for reading.
+artifact_keys = [
+  "firmware/tenant-a/body-ecu/1.0.0/firmware.bin",
+  "firmware/tenant-a/gateway-ecu/1.0.0/firmware.bin",
+]
+# Dedicated Campaign credential provisioned by trusted database bootstrap.
+# Must differ from the API secret; Terraform does not create PostgreSQL users or GRANTs.
+campaign_database_secret_arn = "arn:aws:secretsmanager:ap-northeast-1:000000000000:secret:REPLACE_WITH_DEDICATED_CAMPAIGN_DATABASE_SECRET"
+campaign_database_kms_key_arn = "arn:aws:kms:ap-northeast-1:000000000000:key/REPLACE-WITH-CAMPAIGN-DATABASE-KEY-ID"
