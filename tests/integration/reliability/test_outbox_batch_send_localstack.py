@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 import boto3
@@ -52,7 +52,7 @@ class CountingBatchClient:
         self.batch_calls += 1
         return cast(
             SQSBatchSendResponse,
-            self.client.send_message_batch(QueueUrl=QueueUrl, Entries=Entries),
+            cast(Any, self.client).send_message_batch(QueueUrl=QueueUrl, Entries=Entries),
         )
 
     def send_message(self, *, QueueUrl: str, MessageBody: str) -> dict[str, str]:
@@ -87,9 +87,7 @@ class CountingStore(SQLAlchemyOutboxStore):
         self, *, claims: tuple[ClaimedOutboxEvent, ...], published_at: datetime
     ) -> tuple[str, ...]:
         self.batch_update_transactions += 1
-        return await super().mark_published_batch(
-            claims=claims, published_at=published_at
-        )
+        return await super().mark_published_batch(claims=claims, published_at=published_at)
 
     async def mark_published(
         self, *, outbox_id: str, claim_token: str, published_at: datetime | None = None
@@ -151,9 +149,7 @@ async def test_cost01c_real_twenty_events_two_sqs_calls_two_pg_updates() -> None
         circuit = RedisCircuitBreaker(redis, key=key, policy=CircuitPolicy())
         dispatcher = OutboxDispatcher(
             store=store,
-            destinations=MappingOutboxDestinationResolver(
-                {destination: queue.send_event}
-            ),
+            destinations=MappingOutboxDestinationResolver({destination: queue.send_event}),
             batch_publisher=queue.send_events_batch,
             batch_mark_published=store.mark_published_batch,
             batch_destination=destination,
@@ -199,9 +195,7 @@ async def test_cost01c_real_twenty_events_two_sqs_calls_two_pg_updates() -> None
                 received_id = body.get("event_id")
                 assert isinstance(received_id, str)
                 received.add(received_id)
-                sqs.delete_message(
-                    QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
-                )
+                sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"])
         assert received == set(ids)
         print(
             "COST01C_REAL=events:20 claim:1 send_api:2 pg_publish_update:2 "

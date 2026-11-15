@@ -396,7 +396,6 @@ async def test_cost01_pg_stale_token_cannot_refund_current_claim() -> None:
         await engine.dispose()
 
 
-
 @pytest.mark.integration
 async def test_cost01c_pg_batch_ack_rejects_stale_token() -> None:
     """A partial fenced UPDATE must not mark another worker's claim published."""
@@ -424,9 +423,12 @@ async def test_cost01c_pg_batch_ack_rejects_stale_token() -> None:
             claims=(claims[0], stale, claims[2]), published_at=datetime.now(UTC)
         )
         assert set(accepted) == {claims[0].id, claims[2].id}
-        assert await store.mark_published_batch(
-            claims=(claims[0], stale, claims[2]), published_at=datetime.now(UTC)
-        ) == ()
+        assert (
+            await store.mark_published_batch(
+                claims=(claims[0], stale, claims[2]), published_at=datetime.now(UTC)
+            )
+            == ()
+        )
         async with sessions() as session:
             rows = (
                 (

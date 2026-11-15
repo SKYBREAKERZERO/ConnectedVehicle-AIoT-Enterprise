@@ -372,24 +372,18 @@ class OutboxDispatcher:
                 opened = False
                 if valid:
                     try:
-                        outcomes = await self._batch_publisher(
-                            tuple(event for _, event in valid)
-                        )
-                        if (
-                            len(outcomes) != len(valid)
-                            or any(
-                                result.event_id != event.event_id
-                                or result.status not in {"sent", "retryable", "permanent"}
-                                for (_, event), result in zip(valid, outcomes, strict=True)
-                            )
+                        outcomes = await self._batch_publisher(tuple(event for _, event in valid))
+                        if len(outcomes) != len(valid) or any(
+                            result.event_id != event.event_id
+                            or result.status not in {"sent", "retryable", "permanent"}
+                            for (_, event), result in zip(valid, outcomes, strict=True)
                         ):
                             raise MessagePublishError()
                     except MessagePublishError:
                         # HTTP response missing or invalid: none may be marked
                         # successful. Re-delivery is expected (at-least-once).
                         outcomes = tuple(
-                            SQSBatchSendResult(event.event_id, "retryable")
-                            for _, event in valid
+                            SQSBatchSendResult(event.event_id, "retryable") for _, event in valid
                         )
 
                     successful = tuple(

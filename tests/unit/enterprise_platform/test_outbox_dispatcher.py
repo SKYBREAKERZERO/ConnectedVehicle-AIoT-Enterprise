@@ -677,9 +677,7 @@ async def test_cost01c_dispatcher_batches_20_into_two_sends_and_two_updates() ->
 async def test_cost01c_partial_failure_commits_only_success_and_refunds_tail() -> None:
     claims = tuple(create_claimed_event()[0] for _ in range(12))
     store = FakeOutboxStore(claimed_events=claims)
-    breaker = InMemoryCircuitBreaker(
-        CircuitPolicy(failure_threshold=1), clock=lambda: 100.0
-    )
+    breaker = InMemoryCircuitBreaker(CircuitPolicy(failure_threshold=1), clock=lambda: 100.0)
     calls = 0
 
     async def publish_one(_event: EventEnvelope) -> None:
@@ -722,9 +720,7 @@ async def test_cost01c_partial_failure_commits_only_success_and_refunds_tail() -
 async def test_cost01c_lost_batch_response_never_marks_success() -> None:
     claims = tuple(create_claimed_event()[0] for _ in range(12))
     store = FakeOutboxStore(claimed_events=claims)
-    breaker = InMemoryCircuitBreaker(
-        CircuitPolicy(failure_threshold=1), clock=lambda: 100.0
-    )
+    breaker = InMemoryCircuitBreaker(CircuitPolicy(failure_threshold=1), clock=lambda: 100.0)
 
     async def publish_one(_event: EventEnvelope) -> None:
         raise AssertionError("Batch path required")
@@ -760,9 +756,7 @@ async def test_cost01c_half_open_keeps_individual_probe() -> None:
     )
     await breaker.failure(await breaker.acquire())
     now[0] += 1.1
-    store = FakeOutboxStore(
-        claimed_events=tuple(create_claimed_event()[0] for _ in range(10))
-    )
+    store = FakeOutboxStore(claimed_events=tuple(create_claimed_event()[0] for _ in range(10)))
     singles = 0
 
     async def publish_one(_event: EventEnvelope) -> None:
