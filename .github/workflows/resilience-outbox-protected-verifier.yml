@@ -58,6 +58,13 @@ jobs:
           path: ci-evidence/delivery
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
+      - name: Download untrusted Cost-01B metrics as data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: outbox-cost-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          path: ci-evidence/cost
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
       - name: Verify all evidence using protected-branch policy
         env:
           EXPECTED_REPOSITORY: ${{ github.repository }}
