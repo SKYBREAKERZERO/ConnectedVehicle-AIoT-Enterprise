@@ -221,9 +221,9 @@ async def test_cost01b_real_batch_matrix() -> None:
                     for message in response.get("Messages", []):
                         parsed = json.loads(message["Body"])
                         assert isinstance(parsed, dict)
-                        event_id = parsed.get("event_id")
-                        assert isinstance(event_id, str)
-                        received.add(event_id)
+                        received_id = parsed.get("event_id")
+                        assert isinstance(received_id, str)
+                        received.add(received_id)
                         client.delete_message(
                             QueueUrl=queue_url,
                             ReceiptHandle=message["ReceiptHandle"],

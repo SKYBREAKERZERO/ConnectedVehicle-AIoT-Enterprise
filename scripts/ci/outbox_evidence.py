@@ -22,7 +22,7 @@ MAX_BYTES = 10 * 1024 * 1024
 MAX_CASES = 10_000
 
 # Each case must appear in the named pytest module, not just anywhere in a report.
-REQUIRED = {
+REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
     "contract": {
         "test_reliability_retry": (
             "test_retry_delay_applies_symmetric_jitter",
