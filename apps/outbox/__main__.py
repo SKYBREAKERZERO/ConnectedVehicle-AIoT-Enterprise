@@ -5,6 +5,7 @@ import asyncio
 from connected_vehicle.remote_command.outbox_runtime import remote_command_outbox_runtime
 from enterprise_platform.config.settings import get_settings
 from enterprise_platform.observability.logging import configure_logging
+from enterprise_platform.reliability.outbox_dispatcher import OutboxDispatchBatchResult
 from enterprise_platform.reliability.policies import RetryPolicy
 from enterprise_platform.runtime.process import run_async, run_worker, termination_signals
 
@@ -29,6 +30,10 @@ async def serve() -> None:
                 error_delay=settings.worker_error_delay_seconds,
                 shutdown_timeout=settings.worker_shutdown_timeout_seconds,
                 operation_timeout=settings.worker_operation_timeout_seconds,
+                idle_result=lambda result: (
+                    isinstance(result, OutboxDispatchBatchResult) and result.claimed == 0
+                ),
+                max_idle_poll_interval=max(5.0, settings.worker_poll_interval_seconds),
             )
 
 
