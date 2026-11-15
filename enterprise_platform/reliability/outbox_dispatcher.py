@@ -8,10 +8,12 @@ from typing import Protocol
 
 from enterprise_platform.messaging.envelope import EventEnvelope
 from enterprise_platform.messaging.exceptions import MessagePublishError
+from enterprise_platform.messaging.serialization import EventSerializationError
+from enterprise_platform.messaging.sqs import SQSBatchSendResult
 from enterprise_platform.messaging.serialization import (
     deserialize_event_envelope,
 )
-from enterprise_platform.reliability.circuit_breaker import CircuitGate
+from enterprise_platform.reliability.circuit_breaker import CircuitGate, CircuitPermit
 from enterprise_platform.reliability.failure import (
     ExceptionTypeFailureClassifier,
     FailureClassifier,
@@ -29,6 +31,17 @@ OutboxPublishFunction = Callable[
     [EventEnvelope],
     Awaitable[object],
 ]
+
+OutboxBatchPublishFunction = Callable[
+    [tuple[EventEnvelope, ...]], Awaitable[tuple[SQSBatchSendResult, ...]]
+]
+
+
+class OutboxBatchMarkFunction(Protocol):
+    async def __call__(
+        self, *, claims: tuple[ClaimedOutboxEvent, ...], published_at: datetime
+    ) -> tuple[str, ...]: ...
+
 
 Clock = Callable[[], datetime]
 RandomFunction = Callable[[], float]
@@ -155,6 +168,9 @@ class OutboxDispatcher:
         clock: Clock | None = None,
         random_value: RandomFunction = random.random,
         circuit: CircuitGate | None = None,
+        batch_publisher: OutboxBatchPublishFunction | None = None,
+        batch_mark_published: OutboxBatchMarkFunction | None = None,
+        batch_destination: str | None = None,
     ) -> None:
         if not 1 <= batch_size <= 1000:
             raise ValueError("Outbox dispatcher batch_size must be between 1 and 1000.")
@@ -175,6 +191,20 @@ class OutboxDispatcher:
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
         self._random_value = random_value
         self._circuit = circuit
+        batch_configured = any(
+            value is not None
+            for value in (batch_publisher, batch_mark_published, batch_destination)
+        )
+        if batch_configured and (
+            batch_publisher is None
+            or batch_mark_published is None
+            or not batch_destination
+            or batch_destination.strip() != batch_destination
+        ):
+            raise ValueError("Batch mode requires destination, publisher and acknowledger")
+        self._batch_publisher = batch_publisher
+        self._batch_mark_published = batch_mark_published
+        self._batch_destination = batch_destination
 
     async def dispatch_batch(
         self,
@@ -205,6 +235,15 @@ class OutboxDispatcher:
             if permit is not None and self._circuit is not None:
                 await self._circuit.release(permit)
             return OutboxDispatchBatchResult(0, 0, 0, 0)
+
+        if (
+            self._batch_publisher is not None
+            and self._batch_mark_published is not None
+            and len(claimed_events) > 1
+            and (permit is None or (not permit.token and permit.max_batch > 1))
+            and all(item.destination == self._batch_destination for item in claimed_events)
+        ):
+            return await self._dispatch_sqs_batches(claimed_events, permit)
 
         published = 0
         retries_scheduled = 0
@@ -284,6 +323,130 @@ class OutboxDispatcher:
 
         return OutboxDispatchBatchResult(
             claimed=len(claimed_events),
+            published=published,
+            retries_scheduled=retries_scheduled,
+            stale_claims=stale_claims,
+            failed=failed,
+            released_unattempted=released,
+        )
+
+    async def _dispatch_sqs_batches(
+        self,
+        claims: tuple[ClaimedOutboxEvent, ...],
+        permit: CircuitPermit | None,
+    ) -> OutboxDispatchBatchResult:
+        """Track per-entry outcomes and batch-commit only acknowledged successes.
+
+        Once a subbatch is attempted, all its entries may have unknown outcomes
+        on HTTP response loss. Never refund an attempted subbatch. Only the
+        untouched tail can be released if the circuit opens or the task stops.
+        """
+        assert self._batch_publisher is not None
+        assert self._batch_mark_published is not None
+        published = 0
+        retries_scheduled = 0
+        stale_claims = 0
+        failed = 0
+        released = 0
+        attempted = 0
+        try:
+            for offset in range(0, len(claims), 10):
+                group = claims[offset : offset + 10]
+                attempted = offset + len(group)
+                valid: list[tuple[ClaimedOutboxEvent, EventEnvelope]] = []
+                for claimed in group:
+                    try:
+                        event = deserialize_event_envelope(claimed.event_body)
+                    except EventSerializationError:
+                        updated = await self._store.mark_failed(
+                            outbox_id=claimed.id,
+                            claim_token=claimed.claim_token,
+                            failed_at=self._now(),
+                            failure_code="non_retryable",
+                        )
+                        failed += int(updated)
+                        stale_claims += int(not updated)
+                    else:
+                        valid.append((claimed, event))
+
+                opened = False
+                if valid:
+                    try:
+                        outcomes = await self._batch_publisher(
+                            tuple(event for _, event in valid)
+                        )
+                        if (
+                            len(outcomes) != len(valid)
+                            or any(
+                                result.event_id != event.event_id
+                                or result.status not in {"sent", "retryable", "permanent"}
+                                for (_, event), result in zip(valid, outcomes, strict=True)
+                            )
+                        ):
+                            raise MessagePublishError()
+                    except MessagePublishError:
+                        # HTTP response missing or invalid: none may be marked
+                        # successful. Re-delivery is expected (at-least-once).
+                        outcomes = tuple(
+                            SQSBatchSendResult(event.event_id, "retryable")
+                            for _, event in valid
+                        )
+
+                    successful = tuple(
+                        claimed
+                        for (claimed, _), result in zip(valid, outcomes, strict=True)
+                        if result.status == "sent"
+                    )
+                    if successful:
+                        updated_ids = set(
+                            await self._batch_mark_published(
+                                claims=successful, published_at=self._now()
+                            )
+                        )
+                        published += len(updated_ids)
+                        stale_claims += len(successful) - len(updated_ids)
+
+                    for (claimed, _), result in zip(valid, outcomes, strict=True):
+                        if result.status == "sent":
+                            continue
+                        terminal = (
+                            result.status == "permanent"
+                            or claimed.attempts >= self._retry_policy.max_attempts
+                        )
+                        if terminal:
+                            code = (
+                                "non_retryable"
+                                if result.status == "permanent"
+                                else "retry_exhausted"
+                            )
+                            updated = await self._store.mark_failed(
+                                outbox_id=claimed.id,
+                                claim_token=claimed.claim_token,
+                                failed_at=self._now(),
+                                failure_code=code,
+                            )
+                            failed += int(updated)
+                            stale_claims += int(not updated)
+                        else:
+                            updated = await self._schedule_retry(claimed)
+                            retries_scheduled += int(updated)
+                            stale_claims += int(not updated)
+
+                    if permit is not None and self._circuit is not None:
+                        if any(result.status == "retryable" for result in outcomes):
+                            opened = await self._circuit.failure(permit)
+                        else:
+                            await self._circuit.success(permit)
+                if opened:
+                    break
+        finally:
+            untouched = claims[attempted:]
+            if untouched:
+                released = await self._store.release_unattempted(claims=untouched)
+                stale_claims += len(untouched) - released
+
+        return OutboxDispatchBatchResult(
+            claimed=len(claims),
             published=published,
             retries_scheduled=retries_scheduled,
             stale_claims=stale_claims,
