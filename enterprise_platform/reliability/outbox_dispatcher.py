@@ -262,7 +262,15 @@ class OutboxDispatcher:
                 try:
                     allowed_count = await self._retry_budget.acquire(len(retries))
                 except Exception:
+                    # Redis unavailability/invalid permits deny ALL retry sends.
                     allowed_count = 0
+                except BaseException:
+                    # Cancellation can arrive after PG Claim but before any send.
+                    # Refund only unattempted live leases; never burn attempts.
+                    await self._store.release_unattempted(claims=claimed_events)
+                    if permit is not None and self._circuit is not None:
+                        await self._circuit.release(permit)
+                    raise
                 denied = retries[allowed_count:]
                 if denied:
                     try:
