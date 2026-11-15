@@ -60,6 +60,7 @@ jobs:
             tests/unit/test_transaction_recovery.py \
             tests/unit/enterprise_platform/test_circuit_breaker.py \
             tests/unit/enterprise_platform/test_sqs_batch.py \
+            tests/unit/enterprise_platform/test_retry_guard.py \
             tests/unit/test_outbox_request_reduction.py \
             --junitxml=.outbox-contract/results.xml
       - name: Bind contract report to execution identity
