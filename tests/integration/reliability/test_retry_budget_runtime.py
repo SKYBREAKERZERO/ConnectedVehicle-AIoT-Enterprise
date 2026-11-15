@@ -120,21 +120,15 @@ async def test_cost02_real_pg_redis_localstack_fleet_retry_defers_without_attemp
         def worker(store: SQLAlchemyOutboxStore, redis: Redis) -> OutboxDispatcher:
             return OutboxDispatcher(
                 store=store,
-                destinations=MappingOutboxDestinationResolver(
-                    {destination: queue.send_event}
-                ),
+                destinations=MappingOutboxDestinationResolver({destination: queue.send_event}),
                 retry_policy=RetryPolicy(max_attempts=5),
                 batch_size=3,
                 lease_seconds=60,
-                circuit=RedisCircuitBreaker(
-                    redis, key=circuit_key, policy=CircuitPolicy()
-                ),
+                circuit=RedisCircuitBreaker(redis, key=circuit_key, policy=CircuitPolicy()),
                 batch_publisher=queue.send_events_batch,
                 batch_mark_published=store.mark_published_batch,
                 batch_destination=destination,
-                retry_budget=RedisRetryBudget(
-                    redis, key=budget_key, policy=budget_policy
-                ),
+                retry_budget=RedisRetryBudget(redis, key=budget_key, policy=budget_policy),
                 retry_deferrer=store.defer_unattempted,
             )
 
@@ -175,9 +169,9 @@ async def test_cost02_real_pg_redis_localstack_fleet_retry_defers_without_attemp
             for message in messages:
                 payload = json.loads(message["Body"])
                 assert isinstance(payload, dict)
-                event_id = payload.get("event_id")
-                assert isinstance(event_id, str)
-                received.add(event_id)
+                received_id = payload.get("event_id")
+                assert isinstance(received_id, str)
+                received.add(received_id)
                 sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"])
             if len(received) == 2:
                 break
