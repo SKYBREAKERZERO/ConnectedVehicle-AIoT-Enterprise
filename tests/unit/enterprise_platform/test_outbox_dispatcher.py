@@ -16,6 +16,7 @@ from enterprise_platform.messaging.exceptions import (
 from enterprise_platform.messaging.serialization import (
     serialize_event_envelope,
 )
+from enterprise_platform.messaging.sqs import SQSBatchSendResult
 from enterprise_platform.reliability.circuit_breaker import (
     CircuitPolicy,
     CircuitState,
@@ -45,6 +46,7 @@ class FakeOutboxStore:
     mark_published_result: bool = True
     schedule_retry_result: bool = True
     released_calls: list[tuple[ClaimedOutboxEvent, ...]] = field(default_factory=list)
+    batch_mark_calls: list[tuple[ClaimedOutboxEvent, ...]] = field(default_factory=list)
 
     claim_calls: list[
         tuple[
@@ -107,6 +109,12 @@ class FakeOutboxStore:
         )
 
         return self.mark_published_result
+
+    async def mark_published_batch(
+        self, *, claims: tuple[ClaimedOutboxEvent, ...], published_at: datetime
+    ) -> tuple[str, ...]:
+        self.batch_mark_calls.append(claims)
+        return tuple(item.id for item in claims)
 
     async def mark_failed(
         self,
@@ -630,3 +638,152 @@ async def test_cost01_open_mid_batch_refunds_unattempted_claims() -> None:
     assert len(sends) == 1
     assert store.released_calls == [claims[1:]]
     assert breaker.state == CircuitState.OPEN
+
+
+@pytest.mark.asyncio
+async def test_cost01c_dispatcher_batches_20_into_two_sends_and_two_updates() -> None:
+    claims = tuple(create_claimed_event()[0] for _ in range(20))
+    store = FakeOutboxStore(claimed_events=claims)
+    breaker = InMemoryCircuitBreaker(CircuitPolicy(), clock=lambda: 100.0)
+    batch_sizes: list[int] = []
+
+    async def publish_one(_event: EventEnvelope) -> None:
+        raise AssertionError("CLOSED must not use per-message SendMessage")
+
+    async def batch_send(
+        events: tuple[EventEnvelope, ...],
+    ) -> tuple[SQSBatchSendResult, ...]:
+        batch_sizes.append(len(events))
+        return tuple(SQSBatchSendResult(e.event_id, "sent") for e in events)
+
+    result = await OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": publish_one}),
+        retry_policy=create_retry_policy(),
+        batch_size=20,
+        circuit=breaker,
+        batch_publisher=batch_send,
+        batch_mark_published=store.mark_published_batch,
+        batch_destination="vehicle-command",
+    ).dispatch_batch()
+    assert result.claimed == result.published == 20
+    assert result.retries_scheduled == result.failed == result.stale_claims == 0
+    assert batch_sizes == [10, 10]
+    assert [len(batch) for batch in store.batch_mark_calls] == [10, 10]
+    assert store.mark_calls == []
+
+
+@pytest.mark.asyncio
+async def test_cost01c_partial_failure_commits_only_success_and_refunds_tail() -> None:
+    claims = tuple(create_claimed_event()[0] for _ in range(12))
+    store = FakeOutboxStore(claimed_events=claims)
+    breaker = InMemoryCircuitBreaker(
+        CircuitPolicy(failure_threshold=1), clock=lambda: 100.0
+    )
+    calls = 0
+
+    async def publish_one(_event: EventEnvelope) -> None:
+        raise AssertionError("Batch path required")
+
+    async def batch_send(
+        events: tuple[EventEnvelope, ...],
+    ) -> tuple[SQSBatchSendResult, ...]:
+        nonlocal calls
+        calls += 1
+        assert len(events) == 10
+        return tuple(
+            SQSBatchSendResult(event.event_id, "retryable" if index >= 8 else "sent")
+            for index, event in enumerate(events)
+        )
+
+    result = await OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": publish_one}),
+        retry_policy=create_retry_policy(),
+        batch_size=12,
+        circuit=breaker,
+        batch_publisher=batch_send,
+        batch_mark_published=store.mark_published_batch,
+        batch_destination="vehicle-command",
+    ).dispatch_batch()
+    assert calls == 1
+    assert result.claimed == 12
+    assert result.published == 8
+    assert result.retries_scheduled == 2
+    assert result.released_unattempted == 2
+    assert result.stale_claims == result.failed == 0
+    assert store.batch_mark_calls == [claims[:8]]
+    assert store.released_calls == [claims[10:]]
+    assert {item[0] for item in store.retry_calls} == {claims[8].id, claims[9].id}
+    assert breaker.state is CircuitState.OPEN
+
+
+@pytest.mark.asyncio
+async def test_cost01c_lost_batch_response_never_marks_success() -> None:
+    claims = tuple(create_claimed_event()[0] for _ in range(12))
+    store = FakeOutboxStore(claimed_events=claims)
+    breaker = InMemoryCircuitBreaker(
+        CircuitPolicy(failure_threshold=1), clock=lambda: 100.0
+    )
+
+    async def publish_one(_event: EventEnvelope) -> None:
+        raise AssertionError("Batch path required")
+
+    async def batch_send(
+        events: tuple[EventEnvelope, ...],
+    ) -> tuple[SQSBatchSendResult, ...]:
+        assert len(events) == 10
+        raise MessagePublishError()
+
+    result = await OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": publish_one}),
+        retry_policy=create_retry_policy(),
+        batch_size=12,
+        circuit=breaker,
+        batch_publisher=batch_send,
+        batch_mark_published=store.mark_published_batch,
+        batch_destination="vehicle-command",
+    ).dispatch_batch()
+    assert result.published == result.failed == 0
+    assert result.retries_scheduled == 10
+    assert result.released_unattempted == 2
+    assert store.batch_mark_calls == []
+    assert store.released_calls == [claims[10:]]
+
+
+@pytest.mark.asyncio
+async def test_cost01c_half_open_keeps_individual_probe() -> None:
+    now = [100.0]
+    breaker = InMemoryCircuitBreaker(
+        CircuitPolicy(failure_threshold=1, open_seconds=1), clock=lambda: now[0]
+    )
+    await breaker.failure(await breaker.acquire())
+    now[0] += 1.1
+    store = FakeOutboxStore(
+        claimed_events=tuple(create_claimed_event()[0] for _ in range(10))
+    )
+    singles = 0
+
+    async def publish_one(_event: EventEnvelope) -> None:
+        nonlocal singles
+        singles += 1
+
+    async def batch_send(
+        events: tuple[EventEnvelope, ...],
+    ) -> tuple[SQSBatchSendResult, ...]:
+        raise AssertionError("HALF_OPEN cannot use batch send")
+
+    result = await OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": publish_one}),
+        retry_policy=create_retry_policy(),
+        batch_size=10,
+        circuit=breaker,
+        batch_publisher=batch_send,
+        batch_mark_published=store.mark_published_batch,
+        batch_destination="vehicle-command",
+    ).dispatch_batch()
+    assert result.claimed == result.published == 1
+    assert singles == 1
+    assert store.batch_mark_calls == []
