@@ -28,9 +28,12 @@ def test_cost01d_idle_backoff_bounds_and_reset_contract() -> None:
         for n in range(1, 8)
     ]
     assert intervals == [2.0, 4.0, 5.0, 5.0, 5.0, 5.0, 5.0]
-    assert bounded_idle_poll_delay(
-        base_interval=1.0, max_interval=5.0, consecutive_idle=4, jitter_value=0.0
-    ) == 4.0
+    assert (
+        bounded_idle_poll_delay(
+            base_interval=1.0, max_interval=5.0, consecutive_idle=4, jitter_value=0.0
+        )
+        == 4.0
+    )
     with pytest.raises(ValueError):
         bounded_idle_poll_delay(
             base_interval=1.0, max_interval=0.5, consecutive_idle=1, jitter_value=0.5
