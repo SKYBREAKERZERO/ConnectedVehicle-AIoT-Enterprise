@@ -20,7 +20,6 @@ from enterprise_platform.messaging.serialization import (
     serialize_event_envelope,
 )
 
-
 # Deliberately narrow allowlist. Throttling, transient KMS errors and
 # unknown remote codes stay retryable; do not infer permanence from HTTP 400.
 _NON_RETRYABLE_SQS_SEND_CODES = frozenset(
