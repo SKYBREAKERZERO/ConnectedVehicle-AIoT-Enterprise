@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from enterprise_platform.database.models.outbox import (
@@ -53,6 +53,7 @@ class SQLAlchemyOutboxRepository:
         batch_size: int = 100,
         lease_seconds: int = 30,
         now: datetime | None = None,
+        destination: str | None = None,
     ) -> tuple[ClaimedOutboxEvent, ...]:
         if not 1 <= batch_size <= 1000:
             raise ValueError("Outbox batch_size must be between 1 and 1000.")
@@ -89,6 +90,11 @@ class SQLAlchemyOutboxRepository:
             .with_for_update(skip_locked=True)
         )
 
+        if destination is not None:
+            if not destination or destination.strip() != destination:
+                raise ValueError("Invalid claim destination")
+            statement = statement.where(OutboxEventModel.destination == destination)
+
         result = await self._session.execute(statement)
 
         models = list(result.scalars())
@@ -119,6 +125,78 @@ class SQLAlchemyOutboxRepository:
             )
 
         return tuple(claimed)
+
+    async def release_unattempted(self, *, claims: tuple[ClaimedOutboxEvent, ...]) -> int:
+        """Refund only never-sent claims whose token and live lease still match.
+
+        A single UPDATE releases the remaining batch atomically. A stale token
+        or expired lease cannot undo a later worker's claim or publication.
+        """
+        if not claims:
+            return 0
+        if len(claims) > 1000:
+            raise ValueError("Outbox release batch exceeds 1000")
+        pairs = [(item.id, item.claim_token) for item in claims]
+        if any(not ident or not token for ident, token in pairs):
+            raise ValueError("Outbox release requires ID and claim token")
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("Duplicate outbox release claims")
+
+        statement = (
+            update(OutboxEventModel)
+            .where(
+                tuple_(OutboxEventModel.id, OutboxEventModel.claim_token).in_(pairs),
+                OutboxEventModel.status == OutboxStatus.PROCESSING.value,
+                OutboxEventModel.attempts > 0,
+                OutboxEventModel.lease_expires_at > func.clock_timestamp(),
+            )
+            .values(
+                status=OutboxStatus.PENDING.value,
+                attempts=OutboxEventModel.attempts - 1,
+                claim_token=None,
+                lease_expires_at=None,
+            )
+            .returning(OutboxEventModel.id)
+        )
+        result = await self._session.execute(statement)
+        return len(result.scalars().all())
+
+    async def defer_unattempted(
+        self, *, claims: tuple[ClaimedOutboxEvent, ...], available_at: datetime
+    ) -> int:
+        """Atomically defer never-sent budget-denied events and refund this claim.
+
+        A stale token, replaced claim or expired lease cannot change the row.
+        No SQS request has been made for any of these claims.
+        """
+        if not claims:
+            return 0
+        if len(claims) > 1000 or available_at.tzinfo is None:
+            raise ValueError("Invalid retry-budget deferral")
+        pairs = [(item.id, item.claim_token) for item in claims]
+        if any(not ident or not token for ident, token in pairs):
+            raise ValueError("Deferral requires valid ID and claim token")
+        if len(set(pairs)) != len(pairs) or len({item.id for item in claims}) != len(claims):
+            raise ValueError("Duplicate retry-budget deferral claims")
+
+        result = await self._session.execute(
+            update(OutboxEventModel)
+            .where(
+                tuple_(OutboxEventModel.id, OutboxEventModel.claim_token).in_(pairs),
+                OutboxEventModel.status == OutboxStatus.PROCESSING.value,
+                OutboxEventModel.attempts > 0,
+                OutboxEventModel.lease_expires_at > func.clock_timestamp(),
+            )
+            .values(
+                status=OutboxStatus.PENDING.value,
+                attempts=OutboxEventModel.attempts - 1,
+                claim_token=None,
+                lease_expires_at=None,
+                available_at=available_at,
+            )
+            .returning(OutboxEventModel.id)
+        )
+        return len(result.scalars().all())
 
     async def mark_published(
         self,
@@ -162,6 +240,42 @@ class SQLAlchemyOutboxRepository:
         result = await self._session.execute(statement)
 
         return result.scalar_one_or_none() is not None
+
+    async def mark_published_batch(
+        self,
+        *,
+        claims: tuple[ClaimedOutboxEvent, ...],
+        published_at: datetime,
+    ) -> tuple[str, ...]:
+        """One fenced UPDATE for successfully acknowledged SQS batch entries."""
+        if not claims:
+            return ()
+        if len(claims) > 1000:
+            raise ValueError("Publish batch exceeds 1000")
+        if published_at.tzinfo is None:
+            raise ValueError("Outbox published_at must be timezone-aware")
+        pairs = [(item.id, item.claim_token) for item in claims]
+        if any(not ident or not token for ident, token in pairs):
+            raise ValueError("Outbox ID and claim token must not be empty")
+        if len(set(pairs)) != len(pairs) or len({c.id for c in claims}) != len(claims):
+            raise ValueError("Duplicate outbox batch IDs or tokens")
+        result = await self._session.execute(
+            update(OutboxEventModel)
+            .where(
+                tuple_(OutboxEventModel.id, OutboxEventModel.claim_token).in_(pairs),
+                OutboxEventModel.status == OutboxStatus.PROCESSING.value,
+                OutboxEventModel.lease_expires_at > published_at,
+                OutboxEventModel.lease_expires_at > func.clock_timestamp(),
+            )
+            .values(
+                status=OutboxStatus.PUBLISHED.value,
+                claim_token=None,
+                lease_expires_at=None,
+                published_at=published_at,
+            )
+            .returning(OutboxEventModel.id)
+        )
+        return tuple(result.scalars().all())
 
     async def schedule_retry(
         self,

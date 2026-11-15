@@ -12,6 +12,13 @@ class MessagePublishError(MessagingError):
         super().__init__("The message could not be published.")
 
 
+class PermanentMessagePublishError(MessagingError):
+    """Known non-retryable SQS rejection; requires repair, not another send."""
+
+    def __init__(self) -> None:
+        super().__init__("The message was permanently rejected by SQS.")
+
+
 class MessageReceiveError(MessagingError):
     """Raised when messages cannot be received."""
 

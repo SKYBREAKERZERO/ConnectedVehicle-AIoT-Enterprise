@@ -24,8 +24,11 @@ class SQLAlchemyOutboxStore:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
+        *,
+        destination: str | None = None,
     ) -> None:
         self._session_factory = session_factory
+        self._destination = destination
 
     async def claim_batch(
         self,
@@ -41,11 +44,33 @@ class SQLAlchemyOutboxStore:
                 batch_size=batch_size,
                 lease_seconds=lease_seconds,
                 now=now,
+                destination=self._destination,
             )
 
             await uow.commit()
 
             return claimed
+
+    async def release_unattempted(self, *, claims: tuple[ClaimedOutboxEvent, ...]) -> int:
+        if not claims:
+            return 0
+        async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            repository = SQLAlchemyOutboxRepository(uow.session)
+            released = await repository.release_unattempted(claims=claims)
+            await uow.commit()
+            return released
+
+    async def defer_unattempted(
+        self, *, claims: tuple[ClaimedOutboxEvent, ...], available_at: datetime
+    ) -> int:
+        if not claims:
+            return 0
+        async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            deferred = await SQLAlchemyOutboxRepository(uow.session).defer_unattempted(
+                claims=claims, available_at=available_at
+            )
+            await uow.commit()
+            return deferred
 
     async def mark_published(
         self,
@@ -65,6 +90,21 @@ class SQLAlchemyOutboxStore:
 
             await uow.commit()
 
+            return updated
+
+    async def mark_published_batch(
+        self,
+        *,
+        claims: tuple[ClaimedOutboxEvent, ...],
+        published_at: datetime,
+    ) -> tuple[str, ...]:
+        if not claims:
+            return ()
+        async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            updated = await SQLAlchemyOutboxRepository(uow.session).mark_published_batch(
+                claims=claims, published_at=published_at
+            )
+            await uow.commit()
             return updated
 
     async def schedule_retry(
