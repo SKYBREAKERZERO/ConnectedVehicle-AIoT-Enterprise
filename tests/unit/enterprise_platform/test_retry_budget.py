@@ -110,8 +110,9 @@ def make_claims(attempts: tuple[int, ...]) -> tuple[ClaimedOutboxEvent, ...]:
 
 
 def dispatcher(store: RecordingStore, budget: FakeBudget) -> OutboxDispatcher:
-    async def single(_event: object) -> None:
-        raise AssertionError("Batch send required")
+    async def single(_event: EventEnvelope) -> None:
+        # A single first-attempt event is valid after retry budget denial.
+        return None
 
     async def batched(
         events: tuple[EventEnvelope, ...],
