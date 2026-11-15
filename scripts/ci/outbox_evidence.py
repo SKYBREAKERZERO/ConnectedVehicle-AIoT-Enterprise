@@ -46,6 +46,14 @@ REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "test_cost01d_empty_outbox_does_not_call_sqs",
             "test_cost01d_permanent_failure_does_not_generate_retry_storm",
         ),
+        "test_retry_budget": (
+            "test_cost02_first_attempt_is_not_charged_retry_budget",
+            "test_cost02_budget_denial_defers_only_retries_before_sqs",
+            "test_cost02_redis_failure_denies_retries_but_not_first_send",
+            "test_cost02_zero_budget_never_sends_or_consumes_retry",
+            "test_cost02_budget_requires_fenced_deferrer",
+            "test_cost02_invalid_budget_policy_is_rejected",
+        ),
         "test_retry_guard": (
             "test_retryguard_sqs_permanent_client_error_stops_without_retry",
             "test_retryguard_sqs_transient_client_error_remains_retryable",
@@ -95,6 +103,13 @@ REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
         "test_outbox_cost_benchmark": ("test_cost01b_real_batch_matrix",),
         "test_outbox_batch_send_localstack": (
             "test_cost01c_real_twenty_events_two_sqs_calls_two_pg_updates",
+        ),
+    },
+    "budget": {
+        "test_retry_budget_runtime": (
+            "test_cost02_real_redis_multiworker_atomic_global_cap",
+            "test_cost02_real_pg_redis_localstack_fleet_retry_defers_without_attempt_loss",
+            "test_cost02_real_pg_stale_claim_cannot_defer_or_refund",
         ),
     },
     "retry": {
