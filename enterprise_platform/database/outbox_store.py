@@ -60,6 +60,18 @@ class SQLAlchemyOutboxStore:
             await uow.commit()
             return released
 
+    async def defer_unattempted(
+        self, *, claims: tuple[ClaimedOutboxEvent, ...], available_at: datetime
+    ) -> int:
+        if not claims:
+            return 0
+        async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            deferred = await SQLAlchemyOutboxRepository(uow.session).defer_unattempted(
+                claims=claims, available_at=available_at
+            )
+            await uow.commit()
+            return deferred
+
     async def mark_published(
         self,
         *,
