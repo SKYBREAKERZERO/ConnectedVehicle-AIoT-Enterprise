@@ -12,6 +12,7 @@ from enterprise_platform.messaging.envelope import (
 )
 from enterprise_platform.messaging.exceptions import (
     MessagePublishError,
+    PermanentMessagePublishError,
 )
 from enterprise_platform.messaging.serialization import (
     serialize_event_envelope,
@@ -781,3 +782,29 @@ async def test_cost01c_half_open_keeps_individual_probe() -> None:
     assert result.claimed == result.published == 1
     assert singles == 1
     assert store.batch_mark_calls == []
+
+
+@pytest.mark.asyncio
+async def test_retryguard_dispatcher_permanent_sdk_error_is_terminal_once() -> None:
+    claim, _ = create_claimed_event()
+    store = FakeOutboxStore(claimed_events=(claim,))
+    circuit = InMemoryCircuitBreaker(CircuitPolicy(failure_threshold=1), clock=lambda: 100.0)
+    attempted: list[str] = []
+
+    async def publisher(event: EventEnvelope) -> None:
+        attempted.append(event.event_id)
+        raise PermanentMessagePublishError()
+
+    result = await OutboxDispatcher(
+        store=store,
+        destinations=MappingOutboxDestinationResolver({"vehicle-command": publisher}),
+        retry_policy=create_retry_policy(),
+        batch_size=10,
+        circuit=circuit,
+    ).dispatch_batch()
+    assert attempted == [claim.event_id]
+    assert result.claimed == result.failed == 1
+    assert result.published == result.retries_scheduled == 0
+    assert store.retry_calls == []
+    assert store.failed_calls == [(claim.id, "non_retryable")]
+    assert circuit.state is CircuitState.CLOSED
