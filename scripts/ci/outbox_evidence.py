@@ -91,6 +91,12 @@ REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "test_cost01c_real_twenty_events_two_sqs_calls_two_pg_updates",
         ),
     },
+    "retry": {
+        "test_invalid_retry_suppression": (
+            "test_invalid_retry_sender_fault_is_terminal_but_throttle_is_delayed",
+            "test_invalid_retry_lost_response_does_not_ack_or_hot_loop",
+        ),
+    },
     "delivery": {
         "test_localstack_sqs_dlq": ("test_localstack_sqs_redrives_failed_message_to_dlq",),
         "test_outbox_circuit_localstack": (
