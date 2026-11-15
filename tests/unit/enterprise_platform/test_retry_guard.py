@@ -8,7 +8,7 @@ from typing import cast
 import pytest
 from botocore.exceptions import ClientError, ReadTimeoutError
 
-from enterprise_platform.messaging.envelope import create_event_envelope
+from enterprise_platform.messaging.envelope import EventEnvelope, create_event_envelope
 from enterprise_platform.messaging.exceptions import (
     MessagePublishError,
     PermanentMessagePublishError,
@@ -32,7 +32,7 @@ class FailingSendClient:
         raise self.error
 
 
-def _event():
+def _event() -> EventEnvelope:
     return create_event_envelope(
         event_id="retryguard-event-001",
         event_type="vehicle.command.requested",
@@ -43,7 +43,10 @@ def _event():
 
 def _sdk_error(code: str) -> ClientError:
     return ClientError(
-        {"Error": {"Code": code, "Message": "synthetic"}, "ResponseMetadata": {"HTTPStatusCode": 400}},
+        {
+            "Error": {"Code": code, "Message": "synthetic"},
+            "ResponseMetadata": {"HTTPStatusCode": 400},
+        },
         "SendMessage",
     )
 
