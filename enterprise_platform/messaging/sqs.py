@@ -12,12 +12,37 @@ from enterprise_platform.messaging.exceptions import (
     MessageDeleteError,
     MessagePublishError,
     MessageReceiveError,
+    PermanentMessagePublishError,
 )
 from enterprise_platform.messaging.serialization import (
     EventSerializationError,
     deserialize_event_envelope,
     serialize_event_envelope,
 )
+
+
+# Deliberately narrow allowlist. Throttling, transient KMS errors and
+# unknown remote codes stay retryable; do not infer permanence from HTTP 400.
+_NON_RETRYABLE_SQS_SEND_CODES = frozenset(
+    {
+        "AccessDenied",
+        "AccessDeniedException",
+        "AWS.SimpleQueueService.NonExistentQueue",
+        "InvalidMessageContents",
+        "InvalidParameterValue",
+        "InvalidSecurity",
+        "KmsAccessDenied",
+        "KmsInvalidKeyUsage",
+        "KmsNotFound",
+        "QueueDoesNotExist",
+        "UnsupportedOperation",
+    }
+)
+
+
+def _is_permanent_send_rejection(error: ClientError) -> bool:
+    code = error.response.get("Error", {}).get("Code", "")
+    return isinstance(code, str) and code in _NON_RETRYABLE_SQS_SEND_CODES
 
 
 class SQSSendResponse(TypedDict):
@@ -131,7 +156,11 @@ class SQSEventQueue:
                 QueueUrl=self._queue_url,
                 MessageBody=body,
             )
-        except (BotoCoreError, ClientError) as exc:
+        except ClientError as exc:
+            if _is_permanent_send_rejection(exc):
+                raise PermanentMessagePublishError() from exc
+            raise MessagePublishError() from exc
+        except BotoCoreError as exc:
             raise MessagePublishError() from exc
 
         message_id = response.get("MessageId")
