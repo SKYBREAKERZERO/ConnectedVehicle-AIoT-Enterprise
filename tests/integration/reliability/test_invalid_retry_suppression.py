@@ -189,9 +189,9 @@ async def exercise_fault(mode: Literal["partial", "lost"]) -> None:
             for message in messages:
                 body = json.loads(message["Body"])
                 assert isinstance(body, dict)
-                event_id = body.get("event_id")
-                assert isinstance(event_id, str)
-                received.add(event_id)
+                received_event_id = body.get("event_id")
+                assert isinstance(received_event_id, str)
+                received.add(received_event_id)
                 sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"])
             if received == expected_received:
                 break
