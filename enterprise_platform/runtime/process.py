@@ -69,9 +69,7 @@ async def run_worker(
 ) -> None:
     if (idle_result is None) != (max_idle_poll_interval is None):
         raise ValueError("Adaptive polling needs both idle_result and max_idle_poll_interval")
-    if max_idle_poll_interval is not None and not (
-        0 < poll_interval <= max_idle_poll_interval
-    ):
+    if max_idle_poll_interval is not None and not (0 < poll_interval <= max_idle_poll_interval):
         raise ValueError("Invalid adaptive polling bounds")
     with recovery_scope("worker"):
         await _run_worker(
