@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import signal
 from contextlib import suppress
 from math import isfinite
@@ -10,7 +11,9 @@ from typing import Protocol, cast
 
 from connected_vehicle.remote_command.outbox_runtime import remote_command_outbox_runtime
 from enterprise_platform.config.settings import Settings, get_settings
+from enterprise_platform.reliability.outbox_dispatcher import OutboxDispatchBatchResult
 from enterprise_platform.reliability.policies import RetryPolicy
+from enterprise_platform.runtime.process import bounded_idle_poll_delay
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +67,23 @@ async def run(settings: Settings | None = None) -> None:
     async with remote_command_outbox_runtime(settings, retry_policy) as resource:
         dispatcher = resolve_dispatcher(resource)
         logger.info("Outbox dispatcher started")
+        consecutive_idle = 0
         while not stop.is_set():
             # Unexpected failures are fatal: the process supervisor can restart
             # the worker, rather than silently dropping events.
-            await dispatcher.dispatch_batch()
-            await _sleep_or_stop(stop, interval)
+            result = await dispatcher.dispatch_batch()
+            if isinstance(result, OutboxDispatchBatchResult) and result.claimed == 0:
+                consecutive_idle += 1
+                delay = bounded_idle_poll_delay(
+                    base_interval=interval,
+                    max_interval=max(5.0, interval),
+                    consecutive_idle=consecutive_idle,
+                    jitter_value=random.random(),
+                )
+            else:
+                consecutive_idle = 0
+                delay = interval
+            await _sleep_or_stop(stop, delay)
     logger.info("Outbox dispatcher stopped")
 
 
