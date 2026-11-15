@@ -287,9 +287,7 @@ def verify(args: argparse.Namespace) -> None:
         if payload.get("cases") != expected_cases:
             die(f"tampered or inconsistent test list: {suite}")
         expected_benchmark = (
-            validate_cost_report(folder / "benchmark.json")
-            if suite == "cost"
-            else None
+            validate_cost_report(folder / "benchmark.json") if suite == "cost" else None
         )
         if payload.get("benchmark_sha256") != expected_benchmark:
             die(f"tampered or missing benchmark data: {suite}")

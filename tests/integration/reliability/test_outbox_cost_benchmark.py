@@ -44,9 +44,7 @@ from enterprise_platform.reliability.policies import RetryPolicy
 
 
 class MeasuredStore(SQLAlchemyOutboxStore):
-    def __init__(
-        self, sessions: async_sessionmaker[AsyncSession], *, destination: str
-    ) -> None:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession], *, destination: str) -> None:
         super().__init__(sessions, destination=destination)
         self.claim_transactions = 0
         self.published_transactions = 0
@@ -171,9 +169,7 @@ async def test_cost01b_real_batch_matrix() -> None:
 
                 dispatcher = OutboxDispatcher(
                     store=store,
-                    destinations=MappingOutboxDestinationResolver(
-                        {destination: publisher}
-                    ),
+                    destinations=MappingOutboxDestinationResolver({destination: publisher}),
                     retry_policy=RetryPolicy(max_attempts=3),
                     batch_size=batch_size,
                     lease_seconds=60,
@@ -199,27 +195,20 @@ async def test_cost01b_real_batch_matrix() -> None:
                 assert sqs_sends == event_count
                 assert store.claim_transactions == math.ceil(event_count / batch_size)
                 assert store.published_transactions == event_count
-                assert circuit.redis_eval_calls == (
-                    store.claim_transactions + event_count
-                )
+                assert circuit.redis_eval_calls == (store.claim_transactions + event_count)
 
                 async with sessions() as session:
                     rows = (
                         (
                             await session.execute(
-                                select(OutboxEventModel).where(
-                                    OutboxEventModel.event_id.in_(ids)
-                                )
+                                select(OutboxEventModel).where(OutboxEventModel.event_id.in_(ids))
                             )
                         )
                         .scalars()
                         .all()
                     )
                 assert len(rows) == event_count
-                assert all(
-                    row.status == "published" and row.attempts == 1
-                    for row in rows
-                )
+                assert all(row.status == "published" and row.attempts == 1 for row in rows)
 
                 for _ in range(event_count // 5 + 20):
                     if len(received) >= event_count:
@@ -253,9 +242,7 @@ async def test_cost01b_real_batch_matrix() -> None:
                         "sqs_unique_received": len(received),
                         "elapsed_ms": round(elapsed_ms, 3),
                         "process_cpu_ms": round(process_cpu_ms, 3),
-                        "throughput_events_per_sec": round(
-                            event_count * 1000 / elapsed_ms, 3
-                        ),
+                        "throughput_events_per_sec": round(event_count * 1000 / elapsed_ms, 3),
                         "sqs_send_mean_ms": round(mean(message_latencies_ms), 3),
                         "sqs_send_p95_ms": percentile_95(message_latencies_ms),
                     }
@@ -263,9 +250,7 @@ async def test_cost01b_real_batch_matrix() -> None:
             finally:
                 async with engine.begin() as connection:
                     await connection.execute(
-                        delete(OutboxEventModel).where(
-                            OutboxEventModel.event_id.in_(ids)
-                        )
+                        delete(OutboxEventModel).where(OutboxEventModel.event_id.in_(ids))
                     )
                 await cache.delete(key)
                 client.delete_queue(QueueUrl=queue_url)
