@@ -52,7 +52,7 @@ def bounded_idle_poll_delay(
         raise ValueError("Idle count must be positive")
     if not 0.0 <= jitter_value <= 1.0:
         raise ValueError("Idle jitter must be between zero and one")
-    capped = min(max_interval, base_interval * (2 ** min(consecutive_idle, 12)))
+    capped = min(max_interval, base_interval * (2.0 ** min(consecutive_idle, 12)))
     return max(base_interval, capped * (0.8 + 0.2 * jitter_value))
 
 
