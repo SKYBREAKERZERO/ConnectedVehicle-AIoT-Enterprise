@@ -54,6 +54,10 @@ class OutboxStore(Protocol):
         now: datetime | None = None,
     ) -> tuple[ClaimedOutboxEvent, ...]: ...
 
+    async def release_unattempted(
+        self, *, claims: tuple[ClaimedOutboxEvent, ...]
+    ) -> int: ...
+
     async def mark_published(
         self,
         *,
@@ -135,6 +139,7 @@ class OutboxDispatchBatchResult:
     retries_scheduled: int
     stale_claims: int
     failed: int = 0
+    released_unattempted: int = 0
 
 
 class OutboxDispatcher:
@@ -178,89 +183,106 @@ class OutboxDispatcher:
         *,
         now: datetime | None = None,
     ) -> OutboxDispatchBatchResult:
-        # The circuit is acquired BEFORE a database claim so OPEN cannot
-        # consume attempts or lease tokens. Bound a protected batch to one event.
+        # Acquire before touching PostgreSQL. A CLOSED permit authorizes a
+        # bounded batch; HALF_OPEN / rate-limited permits authorize only one.
         permit = await self._circuit.acquire() if self._circuit is not None else None
         if permit is not None and not permit.allowed:
             return OutboxDispatchBatchResult(0, 0, 0, 0)
+
+        capacity = self._batch_size
+        if permit is not None:
+            capacity = min(capacity, max(1, permit.max_batch))
         try:
             claimed_events = await self._store.claim_batch(
-                batch_size=1 if permit is not None else self._batch_size,
+                batch_size=capacity,
                 lease_seconds=self._lease_seconds,
                 now=now,
             )
-        except Exception:
+        except BaseException:
             if permit is not None and self._circuit is not None:
                 await self._circuit.release(permit)
             raise
 
-        if not claimed_events and permit is not None and self._circuit is not None:
-            await self._circuit.release(permit)
+        if not claimed_events:
+            if permit is not None and self._circuit is not None:
+                await self._circuit.release(permit)
+            return OutboxDispatchBatchResult(0, 0, 0, 0)
 
         published = 0
         retries_scheduled = 0
         stale_claims = 0
         failed = 0
+        released = 0
+        started_count = 0
 
-        for claimed in claimed_events:
-            try:
-                event = deserialize_event_envelope(claimed.event_body)
-                publisher = self._destinations.resolve(claimed.destination)
-                await publisher(event)
-            except Exception as exc:
-                disposition = self._failure_classifier.classify(exc)
-                if permit is not None and self._circuit is not None:
-                    if disposition is FailureDisposition.RETRYABLE:
-                        await self._circuit.failure(permit)
-                    else:
-                        await self._circuit.release(permit)
+        try:
+            for index, claimed in enumerate(claimed_events):
+                # After this point the external send outcome may be unknown.
+                # Never refund this claim, even if the operation is cancelled.
+                started_count = index + 1
+                opened = False
+                try:
+                    event = deserialize_event_envelope(claimed.event_body)
+                    publisher = self._destinations.resolve(claimed.destination)
+                    await publisher(event)
+                except Exception as exc:
+                    disposition = self._failure_classifier.classify(exc)
+                    if permit is not None and self._circuit is not None:
+                        if disposition is FailureDisposition.RETRYABLE:
+                            opened = await self._circuit.failure(permit)
+                        else:
+                            await self._circuit.release(permit)
 
-                if (
-                    disposition is FailureDisposition.NON_RETRYABLE
-                    or claimed.attempts >= self._retry_policy.max_attempts
-                ):
-                    code = (
-                        "non_retryable"
-                        if disposition is FailureDisposition.NON_RETRYABLE
-                        else "retry_exhausted"
-                    )
-                    updated = await self._store.mark_failed(
-                        outbox_id=claimed.id,
-                        claim_token=claimed.claim_token,
-                        failed_at=self._now(),
-                        failure_code=code,
-                    )
-                    if updated:
-                        failed += 1
+                    if (
+                        disposition is FailureDisposition.NON_RETRYABLE
+                        or claimed.attempts >= self._retry_policy.max_attempts
+                    ):
+                        code = (
+                            "non_retryable"
+                            if disposition is FailureDisposition.NON_RETRYABLE
+                            else "retry_exhausted"
+                        )
+                        updated = await self._store.mark_failed(
+                            outbox_id=claimed.id,
+                            claim_token=claimed.claim_token,
+                            failed_at=self._now(),
+                            failure_code=code,
+                        )
+                        if updated:
+                            failed += 1
+                        else:
+                            stale_claims += 1
                     else:
-                        stale_claims += 1
+                        updated = await self._schedule_retry(claimed)
+                        if updated:
+                            retries_scheduled += 1
+                        else:
+                            stale_claims += 1
+
+                    if opened:
+                        # Any remaining events have not been sent. Revoke their
+                        # claims atomically with lease-token fencing and refund
+                        # exactly the attempts added by this claim.
+                        break
                     continue
 
-                retry_scheduled = await self._schedule_retry(
-                    claimed,
-                )
+                if permit is not None and self._circuit is not None:
+                    await self._circuit.success(permit)
 
-                if retry_scheduled:
-                    retries_scheduled += 1
+                marked = await self._store.mark_published(
+                    outbox_id=claimed.id,
+                    claim_token=claimed.claim_token,
+                    published_at=self._now(),
+                )
+                if marked:
+                    published += 1
                 else:
                     stale_claims += 1
-
-                continue
-
-            if permit is not None and self._circuit is not None:
-                await self._circuit.success(permit)
-            published_at = self._now()
-
-            marked = await self._store.mark_published(
-                outbox_id=claimed.id,
-                claim_token=claimed.claim_token,
-                published_at=published_at,
-            )
-
-            if marked:
-                published += 1
-            else:
-                stale_claims += 1
+        finally:
+            remaining = claimed_events[started_count:]
+            if remaining:
+                released = await self._store.release_unattempted(claims=remaining)
+                stale_claims += len(remaining) - released
 
         return OutboxDispatchBatchResult(
             claimed=len(claimed_events),
@@ -268,6 +290,7 @@ class OutboxDispatcher:
             retries_scheduled=retries_scheduled,
             stale_claims=stale_claims,
             failed=failed,
+            released_unattempted=released,
         )
 
     async def _schedule_retry(
