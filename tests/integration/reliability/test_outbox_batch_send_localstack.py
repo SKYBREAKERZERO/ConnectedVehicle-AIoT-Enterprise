@@ -26,8 +26,10 @@ from enterprise_platform.database.unit_of_work import SQLAlchemyUnitOfWork
 from enterprise_platform.messaging.envelope import create_event_envelope
 from enterprise_platform.messaging.sqs import (
     SQSBatchSendResponse,
-    SQSClient as TransportClient,
     SQSEventQueue,
+)
+from enterprise_platform.messaging.sqs import (
+    SQSClient as TransportClient,
 )
 from enterprise_platform.reliability.circuit_breaker import CircuitPolicy, RedisCircuitBreaker
 from enterprise_platform.reliability.outbox import ClaimedOutboxEvent, PendingOutboxEvent
