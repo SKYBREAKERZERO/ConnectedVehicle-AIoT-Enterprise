@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from enterprise_platform.database.models.outbox import (
@@ -125,6 +125,43 @@ class SQLAlchemyOutboxRepository:
             )
 
         return tuple(claimed)
+
+    async def release_unattempted(
+        self, *, claims: tuple[ClaimedOutboxEvent, ...]
+    ) -> int:
+        """Refund only never-sent claims whose token and live lease still match.
+
+        A single UPDATE releases the remaining batch atomically. A stale token
+        or expired lease cannot undo a later worker's claim or publication.
+        """
+        if not claims:
+            return 0
+        if len(claims) > 1000:
+            raise ValueError("Outbox release batch exceeds 1000")
+        pairs = [(item.id, item.claim_token) for item in claims]
+        if any(not ident or not token for ident, token in pairs):
+            raise ValueError("Outbox release requires ID and claim token")
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("Duplicate outbox release claims")
+
+        statement = (
+            update(OutboxEventModel)
+            .where(
+                tuple_(OutboxEventModel.id, OutboxEventModel.claim_token).in_(pairs),
+                OutboxEventModel.status == OutboxStatus.PROCESSING.value,
+                OutboxEventModel.attempts > 0,
+                OutboxEventModel.lease_expires_at > func.clock_timestamp(),
+            )
+            .values(
+                status=OutboxStatus.PENDING.value,
+                attempts=OutboxEventModel.attempts - 1,
+                claim_token=None,
+                lease_expires_at=None,
+            )
+            .returning(OutboxEventModel.id)
+        )
+        result = await self._session.execute(statement)
+        return len(result.scalars().all())
 
     async def mark_published(
         self,
