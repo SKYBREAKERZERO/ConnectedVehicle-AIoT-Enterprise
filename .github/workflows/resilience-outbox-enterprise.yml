@@ -18,7 +18,8 @@ permissions:
 
 concurrency:
   group: outbox-enterprise-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Preserve complete same-attempt evidence for each candidate run.
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -59,6 +60,7 @@ jobs:
             tests/unit/test_transaction_recovery.py \
             tests/unit/enterprise_platform/test_circuit_breaker.py \
             tests/unit/enterprise_platform/test_sqs_batch.py \
+            tests/unit/test_outbox_request_reduction.py \
             --junitxml=.outbox-contract/results.xml
       - name: Bind contract report to execution identity
         if: ${{ always() }}
@@ -350,7 +352,7 @@ jobs:
           retention-days: 30
 
   cost_benchmark:
-    name: 04 Cost-01B real batch efficiency benchmarks
+    name: 04 Real Batch Claim, SQS Batch Send and PG Batch Update benchmark
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     services:
@@ -501,7 +503,7 @@ jobs:
               --benchmark ci-evidence/cost/benchmark.json \
               --output ci-evidence/cost/manifest.json
           fi
-      - name: Upload Cost-01B benchmark evidence
+      - name: Upload cost and request-efficiency benchmark evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
