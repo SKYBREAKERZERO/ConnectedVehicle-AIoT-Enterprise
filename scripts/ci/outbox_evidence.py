@@ -35,6 +35,16 @@ REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "test_cost01_half_open_claims_only_one_probe",
             "test_cost01_rate_limited_closed_claims_only_one",
             "test_cost01_open_mid_batch_refunds_unattempted_claims",
+            "test_cost01c_dispatcher_batches_20_into_two_sends_and_two_updates",
+            "test_cost01c_partial_failure_commits_only_success_and_refunds_tail",
+            "test_cost01c_lost_batch_response_never_marks_success",
+            "test_cost01c_half_open_keeps_individual_probe",
+        ),
+        "test_sqs_batch": (
+            "test_cost01c_sqs_batch_20_events_two_api_calls",
+            "test_cost01c_http200_partial_failures_are_mapped_by_id",
+            "test_cost01c_invalid_or_missing_batch_response_fails_closed",
+            "test_cost01c_fifo_without_group_contract_is_rejected",
         ),
         "test_transaction_recovery": (
             "test_unknown_commit_reads_durable_result_without_replaying",
@@ -66,10 +76,14 @@ REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "test_cost01_pg_closed_10_events_one_claim",
             "test_cost01_pg_open_refunds_remaining_without_retry_budget",
             "test_cost01_pg_stale_token_cannot_refund_current_claim",
+            "test_cost01c_pg_batch_ack_rejects_stale_token",
         ),
     },
     "cost": {
         "test_outbox_cost_benchmark": ("test_cost01b_real_batch_matrix",),
+        "test_outbox_batch_send_localstack": (
+            "test_cost01c_real_twenty_events_two_sqs_calls_two_pg_updates",
+        ),
     },
     "delivery": {
         "test_localstack_sqs_dlq": ("test_localstack_sqs_redrives_failed_message_to_dlq",),
