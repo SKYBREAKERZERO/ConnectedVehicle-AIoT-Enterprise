@@ -459,6 +459,32 @@ jobs:
             tests/integration/reliability/test_outbox_cost_benchmark.py \
             --junitxml=.outbox-cost/results.xml
           test -s .outbox-cost/benchmark.json
+      - name: Publish measured batch efficiency summary
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path('.outbox-cost/benchmark.json').read_text())
+          print('COST01B_ACTUAL_METRICS=' + json.dumps(report['runs'], sort_keys=True))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as f:
+              f.write('## Cost-01B — Real PostgreSQL/Redis/LocalStack measurements\n\n')
+              f.write('Batch | Events | Claim transactions | Redis EVAL | '
+                      'SQS SendMessage | Wall ms | Python CPU ms | Send P95 ms | EPS\n')
+              f.write('---:|---:|---:|---:|---:|---:|---:|---:|---:\n')
+              for run in report['runs']:
+                  f.write(
+                      f"{run['batch_size']} | {run['event_count']} | "
+                      f"{run['claim_transactions']} | {run['redis_eval_calls']} | "
+                      f"{run['sqs_send_calls']} | {run['elapsed_ms']} | "
+                      f"{run['process_cpu_ms']} | {run['sqs_send_p95_ms']} | "
+                      f"{run['throughput_events_per_sec']}\n"
+                  )
+              f.write('\nTime measurements exclude seeding and post-test verification. '
+                      'Not AWS billing or an SLO acceptance result.\n')
+          PY
       - name: Bind Cost-01B metrics and JUnit to execution identity
         if: ${{ always() }}
         run: |
