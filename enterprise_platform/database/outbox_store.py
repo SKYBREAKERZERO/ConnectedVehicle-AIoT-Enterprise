@@ -51,6 +51,17 @@ class SQLAlchemyOutboxStore:
 
             return claimed
 
+    async def release_unattempted(
+        self, *, claims: tuple[ClaimedOutboxEvent, ...]
+    ) -> int:
+        if not claims:
+            return 0
+        async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            repository = SQLAlchemyOutboxRepository(uow.session)
+            released = await repository.release_unattempted(claims=claims)
+            await uow.commit()
+            return released
+
     async def mark_published(
         self,
         *,
