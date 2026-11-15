@@ -58,6 +58,7 @@ jobs:
             tests/unit/enterprise_platform/test_outbox_dispatcher.py \
             tests/unit/test_transaction_recovery.py \
             tests/unit/enterprise_platform/test_circuit_breaker.py \
+            tests/unit/enterprise_platform/test_sqs_batch.py \
             --junitxml=.outbox-contract/results.xml
       - name: Bind contract report to execution identity
         if: ${{ always() }}
@@ -457,6 +458,7 @@ jobs:
           mkdir -p .outbox-cost
           python -m pytest -q --strict-markers \
             tests/integration/reliability/test_outbox_cost_benchmark.py \
+            tests/integration/reliability/test_outbox_batch_send_localstack.py \
             --junitxml=.outbox-cost/results.xml
           test -s .outbox-cost/benchmark.json
       - name: Publish measured batch efficiency summary
