@@ -38,6 +38,24 @@ def termination_signals(stop: asyncio.Event) -> Iterator[None]:
             signal.signal(number, handler)
 
 
+def bounded_idle_poll_delay(
+    *,
+    base_interval: float,
+    max_interval: float,
+    consecutive_idle: int,
+    jitter_value: float,
+) -> float:
+    """Back off empty polls without creating an unbounded restart delay."""
+    if not (0 < base_interval <= max_interval):
+        raise ValueError("Invalid idle poll interval bounds")
+    if consecutive_idle < 1:
+        raise ValueError("Idle count must be positive")
+    if not 0.0 <= jitter_value <= 1.0:
+        raise ValueError("Idle jitter must be between zero and one")
+    capped = min(max_interval, base_interval * (2 ** min(consecutive_idle, 12)))
+    return max(base_interval, capped * (0.8 + 0.2 * jitter_value))
+
+
 async def run_worker(
     operation: Callable[[], Awaitable[object]],
     *,
@@ -46,7 +64,15 @@ async def run_worker(
     error_delay: float,
     shutdown_timeout: float,
     operation_timeout: float,
+    idle_result: Callable[[object], bool] | None = None,
+    max_idle_poll_interval: float | None = None,
 ) -> None:
+    if (idle_result is None) != (max_idle_poll_interval is None):
+        raise ValueError("Adaptive polling needs both idle_result and max_idle_poll_interval")
+    if max_idle_poll_interval is not None and not (
+        0 < poll_interval <= max_idle_poll_interval
+    ):
+        raise ValueError("Invalid adaptive polling bounds")
     with recovery_scope("worker"):
         await _run_worker(
             operation,
@@ -55,6 +81,8 @@ async def run_worker(
             error_delay=error_delay,
             shutdown_timeout=shutdown_timeout,
             operation_timeout=operation_timeout,
+            idle_result=idle_result,
+            max_idle_poll_interval=max_idle_poll_interval,
         )
 
 
@@ -66,6 +94,8 @@ async def _run_worker(
     error_delay: float,
     shutdown_timeout: float,
     operation_timeout: float,
+    idle_result: Callable[[object], bool] | None,
+    max_idle_poll_interval: float | None,
 ) -> None:
     """Stop polling on termination, drain once, then cancel without ACK."""
 
@@ -74,6 +104,7 @@ async def _run_worker(
             return await operation()
 
     consecutive_errors = 0
+    consecutive_idle = 0
     while not stop.is_set():
         batch = asyncio.create_task(one_batch())
         stopping = asyncio.create_task(stop.wait())
@@ -97,11 +128,23 @@ async def _run_worker(
                     observe_recovery("VERIFY", consecutive_errors + 1)
                     observe_recovery("RECOVERED", consecutive_errors + 1)
                 consecutive_errors = 0
+                if idle_result is not None and max_idle_poll_interval is not None:
+                    if idle_result(result):
+                        consecutive_idle += 1
+                        delay = bounded_idle_poll_delay(
+                            base_interval=poll_interval,
+                            max_interval=max_idle_poll_interval,
+                            consecutive_idle=consecutive_idle,
+                            jitter_value=random.random(),
+                        )
+                    else:
+                        consecutive_idle = 0
                 report(logging.INFO, "worker_batch: %s", result)
             except Exception as exc:
                 # Do not log broker URLs, payloads, passwords or raw SDK errors.
                 report(logging.WARNING, "worker_batch_failed: %s", type(exc).__name__)
                 consecutive_errors += 1
+                consecutive_idle = 0
                 observe_recovery("FAULT_DETECTED", consecutive_errors)
                 observe_recovery("CLASSIFIED", consecutive_errors)
                 observe_recovery("RETRY", consecutive_errors)
