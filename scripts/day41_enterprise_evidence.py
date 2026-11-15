@@ -32,16 +32,14 @@ CASES = {
 }
 
 
-def main() -> None:
-    root = Path(".day41")
-    facts = identity()
+def verify_runtime(runtime: Path, aggregate_bundle: Path, facts: dict[str, str]) -> dict[str, str]:
     run_id = facts["day31_run_id"]
     if not re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", run_id):
         raise ValueError("Day41 requires a GitHub run and attempt")
-    raw_decision = (root / "runtime/decision.json").read_bytes()
+    raw_decision = (runtime / "decision.json").read_bytes()
     decision = json.loads(raw_decision)
-    sealed = verify(root / "aggregate", "aggregate")
-    aggregate = json.loads((root / "aggregate/aggregate.json").read_bytes())
+    sealed = verify(aggregate_bundle, "aggregate")
+    aggregate = json.loads((aggregate_bundle / "aggregate.json").read_bytes())
     if (
         decision["provenance"] != facts
         or aggregate["provenance"] != facts
@@ -55,7 +53,14 @@ def main() -> None:
         )
     ):
         raise ValueError("Runtime provenance, evidence or authorization mismatch")
-    proofs = {"runtime_decision": sha256(raw_decision).hexdigest(), **sealed}
+    return {"runtime_decision": sha256(raw_decision).hexdigest(), **sealed}
+
+
+def main() -> None:
+    root = Path(".day41")
+    facts = identity()
+    run_id = facts["day31_run_id"]
+    proofs = verify_runtime(root / "runtime", root / "aggregate", facts)
     for suite, cases in CASES.items():
         name = f"day41-{suite}.xml"
         bundle = root / "faults" / f"day41-{suite}-{run_id.replace(':', '-')}"
@@ -67,7 +72,7 @@ def main() -> None:
     receipt = {
         "provenance": facts,
         "enterprise_ci_decision": "VERIFIED",
-        "runtime_decision": decision["local_decision"],
+        "runtime_decision": "ROTATION_TESTED_LOCAL",
         "aws_staging_decision": "BLOCKED",
         "production_authorized": False,
         "proofs_sha256": proofs,

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from contextlib import suppress
 from enum import StrEnum
 from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import text
 
-from connected_vehicle.ota.campaign_contracts import CampaignAction, CampaignState
+from connected_vehicle.ota.campaign_contracts import CampaignState
 from connected_vehicle.ota.campaign_service import CampaignService
 from enterprise_platform.errors.base import ConflictError
 
@@ -51,16 +50,23 @@ async def pause_campaign(
     operation = uuid5(NAMESPACE_URL, f"day42:{execution_id}:{tenant}:{campaign}:pause")
     view = await service.get(tenant, campaign)
     if view.status == CampaignState.RUNNING:
-        # A concurrent pause or terminal transition may already have won.
-        with suppress(ConflictError):
-            await service.action(
+        try:
+            # The signed command already validates and locks the campaign.
+            result = await service.command(
                 tenant,
                 "day42-recovery",
                 campaign,
                 "pause",
-                CampaignAction(operation_id=operation, reason="Day42 rollout circuit breaker"),
+                str(operation),
+                {},
+                "Day42 rollout circuit breaker",
             )
-    return (await service.get(tenant, campaign)).status == CampaignState.PAUSED
+        except ConflictError:
+            # Re-read only if a competing state transition may have won.
+            return (await service.get(tenant, campaign)).status == CampaignState.PAUSED
+        # PostgreSQL returns the original result when this operation ID is replayed.
+        return result.status == CampaignState.PAUSED and result.updated_at > view.updated_at
+    return view.status == CampaignState.PAUSED
 
 
 async def campaign_jobs_reconciled(service: CampaignService, tenant: str, campaign: str) -> bool:

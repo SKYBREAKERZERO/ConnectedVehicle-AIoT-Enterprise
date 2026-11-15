@@ -16,36 +16,49 @@ concurrency:
 jobs:
   runtime:
     name: Runtime security and infrastructure
-    uses: ./.github/workflows/day41-enterprise.yml
-  rollout:
-    name: Canary and PostgreSQL recovery
-    uses: ./.github/workflows/day42-offline.yml
-  acceptance:
-    name: Day42 Enterprise Final Gate
-    needs: [runtime, rollout]
-    if: ${{ always() }}
+    uses: ./.github/workflows/day40-runtime-security.yml
+  recovery:
+    name: Rotation, release admission and PostgreSQL recovery
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Require both chains to succeed
+      - uses: ./.github/actions/setup-ci-runtime
+      - name: Exercise all recovery and release controls
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/unit/test_day41_rotation.py --junitxml=.reports/rotation.xml
+          python -m pytest -q tests/unit/test_day41_admission.py --junitxml=.reports/admission.xml
+          python -m pytest -q tests/unit/test_day42_rollout.py tests/integration/day21/test_day42_recovery.py --junitxml=.reports/rollout.xml
+          python -m scripts.iac.pipeline_evidence publish --stage day42-recovery --folder .reports --output .sealed
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: day42-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .sealed
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+  acceptance:
+    name: Day42 Enterprise Final Gate
+    needs: [runtime, recovery]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require every chain to succeed
         env:
-          PIPELINE_NEEDS: ${{ toJSON(needs) }}
-        run: python3 -m scripts.iac.pipeline_evidence needs --expected runtime,rollout
+          RUNTIME: ${{ needs.runtime.result }}
+          RECOVERY: ${{ needs.recovery.result }}
+        run: test "$RUNTIME" = success && test "$RECOVERY" = success
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: day41-enterprise-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .day42/runtime
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: day42-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .day42/rollout
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: day42-rollout-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .day42/proof
+          pattern: '{day40-decision,day40-proof-aggregate,day42-recovery}-${{ github.run_id }}-${{ github.run_attempt }}'
+          path: .day42
       - name: Recompute evidence and record the release boundary
         run: python3 -m scripts.day42_enterprise_evidence
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

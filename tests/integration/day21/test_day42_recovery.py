@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from sqlalchemy import text
 
@@ -29,3 +31,8 @@ async def test_day42_pause_replay_and_native_job_reconciliation(world: World) ->
     assert current.status == CampaignState.PAUSED
     assert current.current_wave == 0 and current.job_count == 1 and current.succeeded == 1
     assert not await campaign_jobs_reconciled(world.service, "other-tenant", campaign)
+    await world.service.command(
+        world.tenant, "day42-test", campaign, "resume", str(uuid4()), {}, "Independent recovery"
+    )
+    assert not await pause_campaign(world.service, world.tenant, campaign, "execution-1")
+    assert await pause_campaign(world.service, world.tenant, campaign, "execution-2")
