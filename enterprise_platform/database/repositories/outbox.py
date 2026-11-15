@@ -204,6 +204,42 @@ class SQLAlchemyOutboxRepository:
 
         return result.scalar_one_or_none() is not None
 
+    async def mark_published_batch(
+        self,
+        *,
+        claims: tuple[ClaimedOutboxEvent, ...],
+        published_at: datetime,
+    ) -> tuple[str, ...]:
+        """One fenced UPDATE for successfully acknowledged SQS batch entries."""
+        if not claims:
+            return ()
+        if len(claims) > 1000:
+            raise ValueError("Publish batch exceeds 1000")
+        if published_at.tzinfo is None:
+            raise ValueError("Outbox published_at must be timezone-aware")
+        pairs = [(item.id, item.claim_token) for item in claims]
+        if any(not ident or not token for ident, token in pairs):
+            raise ValueError("Outbox ID and claim token must not be empty")
+        if len(set(pairs)) != len(pairs) or len({c.id for c in claims}) != len(claims):
+            raise ValueError("Duplicate outbox batch IDs or tokens")
+        result = await self._session.execute(
+            update(OutboxEventModel)
+            .where(
+                tuple_(OutboxEventModel.id, OutboxEventModel.claim_token).in_(pairs),
+                OutboxEventModel.status == OutboxStatus.PROCESSING.value,
+                OutboxEventModel.lease_expires_at > published_at,
+                OutboxEventModel.lease_expires_at > func.clock_timestamp(),
+            )
+            .values(
+                status=OutboxStatus.PUBLISHED.value,
+                claim_token=None,
+                lease_expires_at=None,
+                published_at=published_at,
+            )
+            .returning(OutboxEventModel.id)
+        )
+        return tuple(result.scalars().all())
+
     async def schedule_retry(
         self,
         *,
