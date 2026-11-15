@@ -13,7 +13,7 @@ from typing import Protocol
 
 
 class RedisScriptEvaluator(Protocol):
-    def eval(self, script: str, numkeys: int, *keys_and_args: str | int) -> object: ...
+    def eval(self, script: str, numkeys: int, *keys_and_args: str) -> object: ...
 
 
 @dataclass(frozen=True, slots=True)
