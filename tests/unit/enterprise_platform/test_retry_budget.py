@@ -182,6 +182,7 @@ async def test_cost02_zero_budget_never_sends_or_consumes_retry() -> None:
 
 def test_cost02_budget_requires_fenced_deferrer() -> None:
     store = RecordingStore(make_claims((2,)))
+
     async def single(_event: EventEnvelope) -> None:
         raise AssertionError("Must not send when budget construction fails")
 
