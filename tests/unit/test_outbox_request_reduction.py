@@ -12,6 +12,7 @@ from enterprise_platform.reliability.failure import ExceptionTypeFailureClassifi
 from enterprise_platform.reliability.outbox_dispatcher import (
     MappingOutboxDestinationResolver,
     OutboxDispatcher,
+    OutboxDispatchBatchResult,
 )
 from enterprise_platform.reliability.policies import RetryPolicy
 from enterprise_platform.reliability.retry import run_with_retry
@@ -47,15 +48,19 @@ async def test_cost01d_runtime_empty_poll_uses_adaptive_path() -> None:
         seen.append(index)
         if index == 3:
             stop.set()
-        return type("Result", (), {"claimed": 0 if index < 2 else 1})()
+        return OutboxDispatchBatchResult(
+            claimed=0 if index < 2 else 1,
+            published=0,
+            retries_scheduled=0,
+            stale_claims=0,
+        )
 
     classified: list[int] = []
 
     def is_idle(result: object) -> bool:
-        claimed = getattr(result, "claimed")
-        assert isinstance(claimed, int)
-        classified.append(claimed)
-        return claimed == 0
+        assert isinstance(result, OutboxDispatchBatchResult)
+        classified.append(result.claimed)
+        return result.claimed == 0
 
     await asyncio.wait_for(
         run_worker(
