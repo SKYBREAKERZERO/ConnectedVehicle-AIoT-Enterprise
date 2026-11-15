@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 
-from enterprise_platform.messaging.envelope import create_event_envelope
+from enterprise_platform.messaging.envelope import EventEnvelope, create_event_envelope
 from enterprise_platform.messaging.exceptions import MessagePublishError
 from enterprise_platform.messaging.sqs import (
     SQSBatchSendResponse,
@@ -49,7 +49,7 @@ class FakeBatchClient:
         return result
 
 
-def make_events(count: int) -> tuple:
+def make_events(count: int) -> tuple[EventEnvelope, ...]:
     return tuple(
         create_event_envelope(
             event_id=f"test-batch-{i:04}",
