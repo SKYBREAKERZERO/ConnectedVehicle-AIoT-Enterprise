@@ -8,11 +8,11 @@ from typing import Protocol
 
 from enterprise_platform.messaging.envelope import EventEnvelope
 from enterprise_platform.messaging.exceptions import MessagePublishError
-from enterprise_platform.messaging.serialization import EventSerializationError
-from enterprise_platform.messaging.sqs import SQSBatchSendResult
 from enterprise_platform.messaging.serialization import (
+    EventSerializationError,
     deserialize_event_envelope,
 )
+from enterprise_platform.messaging.sqs import SQSBatchSendResult
 from enterprise_platform.reliability.circuit_breaker import CircuitGate, CircuitPermit
 from enterprise_platform.reliability.failure import (
     ExceptionTypeFailureClassifier,
