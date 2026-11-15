@@ -64,9 +64,7 @@ class InjectedSQSClient:
         accepted = [entry for entry in Entries if entry["Id"] not in {"1", "2"}]
         result = cast(
             SQSBatchSendResponse,
-            cast(Any, self.underlying).send_message_batch(
-                QueueUrl=QueueUrl, Entries=accepted
-            ),
+            cast(Any, self.underlying).send_message_batch(QueueUrl=QueueUrl, Entries=accepted),
         )
         return {
             "Successful": result["Successful"],
@@ -194,9 +192,7 @@ async def exercise_fault(mode: Literal["partial", "lost"]) -> None:
                 event_id = body.get("event_id")
                 assert isinstance(event_id, str)
                 received.add(event_id)
-                sqs.delete_message(
-                    QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
-                )
+                sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"])
             if received == expected_received:
                 break
         assert received == expected_received
