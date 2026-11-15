@@ -54,9 +54,7 @@ class OutboxStore(Protocol):
         now: datetime | None = None,
     ) -> tuple[ClaimedOutboxEvent, ...]: ...
 
-    async def release_unattempted(
-        self, *, claims: tuple[ClaimedOutboxEvent, ...]
-    ) -> int: ...
+    async def release_unattempted(self, *, claims: tuple[ClaimedOutboxEvent, ...]) -> int: ...
 
     async def mark_published(
         self,

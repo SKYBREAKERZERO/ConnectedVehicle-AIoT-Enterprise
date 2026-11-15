@@ -90,9 +90,7 @@ class InMemoryCircuitBreaker:
                 self.next_allowed_ms = now * 1000 + self.policy.min_interval_ms
                 return CircuitPermit(True, self.probe_token)
             self.next_allowed_ms = now * 1000 + self.policy.min_interval_ms
-            return CircuitPermit(
-                True, max_batch=1000 if self.policy.min_interval_ms == 0 else 1
-            )
+            return CircuitPermit(True, max_batch=1000 if self.policy.min_interval_ms == 0 else 1)
 
     async def success(self, permit: CircuitPermit) -> None:
         async with self._mutex:
@@ -253,9 +251,7 @@ class RedisCircuitBreaker:
         if result == "probe":
             return CircuitPermit(True, token)
         if result == "normal":
-            return CircuitPermit(
-                True, max_batch=1000 if self.policy.min_interval_ms == 0 else 1
-            )
+            return CircuitPermit(True, max_batch=1000 if self.policy.min_interval_ms == 0 else 1)
         raise RuntimeError("Invalid circuit acquisition result")
 
     async def success(self, permit: CircuitPermit) -> None:

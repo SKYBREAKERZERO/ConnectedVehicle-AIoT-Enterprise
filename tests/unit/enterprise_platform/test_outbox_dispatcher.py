@@ -87,9 +87,7 @@ class FakeOutboxStore:
 
         return self.claimed_events[:batch_size]
 
-    async def release_unattempted(
-        self, *, claims: tuple[ClaimedOutboxEvent, ...]
-    ) -> int:
+    async def release_unattempted(self, *, claims: tuple[ClaimedOutboxEvent, ...]) -> int:
         self.released_calls.append(claims)
         return len(claims)
 
@@ -570,9 +568,7 @@ async def test_cost01_half_open_claims_only_one_probe() -> None:
     )
     await breaker.failure(await breaker.acquire())
     now[0] += 1.1
-    store = FakeOutboxStore(
-        claimed_events=tuple(create_claimed_event()[0] for _ in range(10))
-    )
+    store = FakeOutboxStore(claimed_events=tuple(create_claimed_event()[0] for _ in range(10)))
 
     async def publisher(_event: EventEnvelope) -> None:
         return None
@@ -591,12 +587,8 @@ async def test_cost01_half_open_claims_only_one_probe() -> None:
 
 @pytest.mark.asyncio
 async def test_cost01_rate_limited_closed_claims_only_one() -> None:
-    breaker = InMemoryCircuitBreaker(
-        CircuitPolicy(min_interval_ms=1000), clock=lambda: 100.0
-    )
-    store = FakeOutboxStore(
-        claimed_events=tuple(create_claimed_event()[0] for _ in range(10))
-    )
+    breaker = InMemoryCircuitBreaker(CircuitPolicy(min_interval_ms=1000), clock=lambda: 100.0)
+    store = FakeOutboxStore(claimed_events=tuple(create_claimed_event()[0] for _ in range(10)))
 
     async def publisher(_event: EventEnvelope) -> None:
         return None
@@ -616,9 +608,7 @@ async def test_cost01_rate_limited_closed_claims_only_one() -> None:
 async def test_cost01_open_mid_batch_refunds_unattempted_claims() -> None:
     claims = tuple(create_claimed_event()[0] for _ in range(5))
     store = FakeOutboxStore(claimed_events=claims)
-    breaker = InMemoryCircuitBreaker(
-        CircuitPolicy(failure_threshold=1), clock=lambda: 100.0
-    )
+    breaker = InMemoryCircuitBreaker(CircuitPolicy(failure_threshold=1), clock=lambda: 100.0)
     sends: list[str] = []
 
     async def fail(event: EventEnvelope) -> None:

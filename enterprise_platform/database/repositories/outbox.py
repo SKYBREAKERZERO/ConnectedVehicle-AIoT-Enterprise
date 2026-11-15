@@ -126,9 +126,7 @@ class SQLAlchemyOutboxRepository:
 
         return tuple(claimed)
 
-    async def release_unattempted(
-        self, *, claims: tuple[ClaimedOutboxEvent, ...]
-    ) -> int:
+    async def release_unattempted(self, *, claims: tuple[ClaimedOutboxEvent, ...]) -> int:
         """Refund only never-sent claims whose token and live lease still match.
 
         A single UPDATE releases the remaining batch atomically. A stale token

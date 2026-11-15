@@ -44,9 +44,7 @@ class RecordingStore:
             return ()
         return (replace(self.event, attempts=self.claims, claim_token=uuid4().hex),)
 
-    async def release_unattempted(
-        self, *, claims: tuple[ClaimedOutboxEvent, ...]
-    ) -> int:
+    async def release_unattempted(self, *, claims: tuple[ClaimedOutboxEvent, ...]) -> int:
         return len(claims)
 
     async def mark_published(

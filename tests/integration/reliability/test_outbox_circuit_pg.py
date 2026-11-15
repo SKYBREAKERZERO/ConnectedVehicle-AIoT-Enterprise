@@ -165,9 +165,7 @@ async def test_cb009_runtime_role_isolation_pg17() -> None:
 
 
 class CountingOutboxStore(SQLAlchemyOutboxStore):
-    def __init__(
-        self, sessions: async_sessionmaker[AsyncSession], *, destination: str
-    ) -> None:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession], *, destination: str) -> None:
         super().__init__(sessions, destination=destination)
         self.claim_calls: list[int] = []
         self.last_claims: tuple[ClaimedOutboxEvent, ...] = ()
@@ -236,10 +234,14 @@ async def test_cost01_pg_closed_10_events_one_claim() -> None:
         assert set(sent) == set(ids)
         async with sessions() as session:
             rows = (
-                await session.execute(
-                    select(OutboxEventModel).where(OutboxEventModel.event_id.in_(ids))
+                (
+                    await session.execute(
+                        select(OutboxEventModel).where(OutboxEventModel.event_id.in_(ids))
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert len(rows) == 10
             assert all(row.status == "published" and row.attempts == 1 for row in rows)
     finally:
@@ -263,9 +265,7 @@ async def test_cost01_pg_open_refunds_remaining_without_retry_budget() -> None:
     ids = ["cost01-fault-" + uuid4().hex for _ in range(5)]
     baseline = datetime.now(UTC) - timedelta(minutes=2)
     store = CountingOutboxStore(sessions, destination=destination)
-    circuit = RedisCircuitBreaker(
-        cache, key=key, policy=CircuitPolicy(failure_threshold=1)
-    )
+    circuit = RedisCircuitBreaker(cache, key=key, policy=CircuitPolicy(failure_threshold=1))
     sent: list[str] = []
 
     async def publisher(event: EventEnvelope) -> None:
@@ -307,10 +307,14 @@ async def test_cost01_pg_open_refunds_remaining_without_retry_budget() -> None:
 
         async with sessions() as session:
             rows = (
-                await session.execute(
-                    select(OutboxEventModel).where(OutboxEventModel.event_id.in_(ids))
+                (
+                    await session.execute(
+                        select(OutboxEventModel).where(OutboxEventModel.event_id.in_(ids))
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             lookup = {row.event_id: row for row in rows}
             assert lookup[ids[0]].attempts == 1
             assert lookup[ids[0]].status == "pending"
