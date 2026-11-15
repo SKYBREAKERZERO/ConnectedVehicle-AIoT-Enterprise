@@ -25,6 +25,7 @@ from enterprise_platform.reliability.outbox_dispatcher import (
     OutboxDispatcher,
 )
 from enterprise_platform.reliability.policies import RetryPolicy
+from enterprise_platform.reliability.retry_budget import RedisRetryBudget, RetryBudgetPolicy
 
 
 def create_remote_command_outbox_destinations(
@@ -63,6 +64,21 @@ async def remote_command_outbox_runtime(
             policy=CircuitPolicy(),
         )
         store = SQLAlchemyOutboxStore(sessions, destination=REMOTE_COMMAND_DESTINATION)
+        budget = (
+            RedisRetryBudget(
+                resources.client,
+                key=create_cache_key_builder(settings).build(
+                    "outbox-retry-budget", REMOTE_COMMAND_DESTINATION
+                ),
+                policy=RetryBudgetPolicy(
+                    rate_per_second=settings.outbox_retry_budget_rate_per_second,
+                    burst=settings.outbox_retry_budget_burst,
+                    defer_seconds=settings.outbox_retry_budget_defer_seconds,
+                ),
+            )
+            if settings.outbox_retry_budget_enabled
+            else None
+        )
         try:
             yield OutboxDispatcher(
                 store=store,
@@ -70,6 +86,8 @@ async def remote_command_outbox_runtime(
                 batch_mark_published=store.mark_published_batch,
                 batch_destination=REMOTE_COMMAND_DESTINATION,
                 circuit=circuit,
+                retry_budget=budget,
+                retry_deferrer=store.defer_unattempted if budget is not None else None,
                 batch_size=settings.outbox_batch_size,
                 lease_seconds=settings.outbox_lease_seconds,
                 retry_policy=retry_policy,
