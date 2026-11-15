@@ -91,8 +91,5 @@ async def test_retryguard_sqs_unknown_timeout_retains_at_least_once_contract() -
 
 def test_retryguard_classifier_never_retries_permanent_publish_rejection() -> None:
     classifier = ExceptionTypeFailureClassifier((MessagePublishError,))
-    assert (
-        classifier.classify(PermanentMessagePublishError())
-        is FailureDisposition.NON_RETRYABLE
-    )
+    assert classifier.classify(PermanentMessagePublishError()) is FailureDisposition.NON_RETRYABLE
     assert classifier.classify(MessagePublishError()) is FailureDisposition.RETRYABLE
