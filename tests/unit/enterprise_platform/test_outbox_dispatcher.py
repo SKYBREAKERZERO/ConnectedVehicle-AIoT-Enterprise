@@ -6,11 +6,6 @@ from uuid import uuid4
 
 import pytest
 
-from enterprise_platform.reliability.circuit_breaker import (
-    CircuitPolicy,
-    CircuitState,
-    InMemoryCircuitBreaker,
-)
 from enterprise_platform.messaging.envelope import (
     EventEnvelope,
     create_event_envelope,
@@ -20,6 +15,11 @@ from enterprise_platform.messaging.exceptions import (
 )
 from enterprise_platform.messaging.serialization import (
     serialize_event_envelope,
+)
+from enterprise_platform.reliability.circuit_breaker import (
+    CircuitPolicy,
+    CircuitState,
+    InMemoryCircuitBreaker,
 )
 from enterprise_platform.reliability.outbox import (
     ClaimedOutboxEvent,
