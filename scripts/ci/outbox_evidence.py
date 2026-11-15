@@ -46,6 +46,12 @@ REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "test_cost01d_empty_outbox_does_not_call_sqs",
             "test_cost01d_permanent_failure_does_not_generate_retry_storm",
         ),
+        "test_retry_guard": (
+            "test_retryguard_sqs_permanent_client_error_stops_without_retry",
+            "test_retryguard_sqs_transient_client_error_remains_retryable",
+            "test_retryguard_sqs_unknown_timeout_retains_at_least_once_contract",
+            "test_retryguard_classifier_never_retries_permanent_publish_rejection",
+        ),
         "test_sqs_batch": (
             "test_cost01c_sqs_batch_20_events_two_api_calls",
             "test_cost01c_http200_partial_failures_are_mapped_by_id",
