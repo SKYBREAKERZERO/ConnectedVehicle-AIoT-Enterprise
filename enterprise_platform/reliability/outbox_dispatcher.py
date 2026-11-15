@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -26,6 +26,7 @@ from enterprise_platform.reliability.policies import RetryPolicy
 from enterprise_platform.reliability.retry import (
     calculate_retry_delay,
 )
+from enterprise_platform.reliability.retry_budget import RetryBudget
 
 OutboxPublishFunction = Callable[
     [EventEnvelope],
@@ -41,6 +42,12 @@ class OutboxBatchMarkFunction(Protocol):
     async def __call__(
         self, *, claims: tuple[ClaimedOutboxEvent, ...], published_at: datetime
     ) -> tuple[str, ...]: ...
+
+
+class OutboxRetryDeferFunction(Protocol):
+    async def __call__(
+        self, *, claims: tuple[ClaimedOutboxEvent, ...], available_at: datetime
+    ) -> int: ...
 
 
 Clock = Callable[[], datetime]
@@ -151,6 +158,7 @@ class OutboxDispatchBatchResult:
     stale_claims: int
     failed: int = 0
     released_unattempted: int = 0
+    retry_budget_deferred: int = 0
 
 
 class OutboxDispatcher:
@@ -171,6 +179,8 @@ class OutboxDispatcher:
         batch_publisher: OutboxBatchPublishFunction | None = None,
         batch_mark_published: OutboxBatchMarkFunction | None = None,
         batch_destination: str | None = None,
+        retry_budget: RetryBudget | None = None,
+        retry_deferrer: OutboxRetryDeferFunction | None = None,
     ) -> None:
         if not 1 <= batch_size <= 1000:
             raise ValueError("Outbox dispatcher batch_size must be between 1 and 1000.")
@@ -205,6 +215,10 @@ class OutboxDispatcher:
         self._batch_publisher = batch_publisher
         self._batch_mark_published = batch_mark_published
         self._batch_destination = batch_destination
+        if (retry_budget is None) != (retry_deferrer is None):
+            raise ValueError("Retry budget requires a fenced PostgreSQL deferrer")
+        self._retry_budget = retry_budget
+        self._retry_deferrer = retry_deferrer
 
     async def dispatch_batch(
         self,
@@ -236,6 +250,51 @@ class OutboxDispatcher:
                 await self._circuit.release(permit)
             return OutboxDispatchBatchResult(0, 0, 0, 0)
 
+        # Retry tokens are reserved ONLY for attempts > 1, before any SQS side
+        # effect. A denied retry is delayed in PostgreSQL and its newly added
+        # claim attempt is refunded via live (id, claim_token, lease) fencing.
+        # Redis failure denies all retries; it never silently bypasses the budget.
+        budget_deferred = 0
+        budget_stale = 0
+        if self._retry_budget is not None and self._retry_deferrer is not None:
+            retries = tuple(item for item in claimed_events if item.attempts > 1)
+            if retries:
+                try:
+                    allowed_count = await self._retry_budget.acquire(len(retries))
+                except Exception:
+                    allowed_count = 0
+                denied = retries[allowed_count:]
+                if denied:
+                    try:
+                        budget_deferred = await self._retry_deferrer(
+                            claims=denied,
+                            available_at=self._now()
+                            + timedelta(seconds=self._retry_budget.policy.defer_seconds),
+                        )
+                    except BaseException:
+                        # If deferral fails, never send any claim. Tokens may be
+                        # lost, but no retry will bypass the budget.
+                        await self._store.release_unattempted(claims=claimed_events)
+                        if permit is not None and self._circuit is not None:
+                            await self._circuit.release(permit)
+                        raise
+                    budget_stale = len(denied) - budget_deferred
+                    denied_ids = {item.id for item in denied}
+                    claimed_events = tuple(
+                        item for item in claimed_events if item.id not in denied_ids
+                    )
+                if not claimed_events:
+                    if permit is not None and self._circuit is not None:
+                        await self._circuit.release(permit)
+                    return OutboxDispatchBatchResult(
+                        claimed=len(retries),
+                        published=0,
+                        retries_scheduled=0,
+                        stale_claims=budget_stale,
+                        retry_budget_deferred=budget_deferred,
+                    )
+
+        original_claimed = len(claimed_events) + budget_deferred + budget_stale
         if (
             self._batch_publisher is not None
             and self._batch_mark_published is not None
@@ -243,7 +302,13 @@ class OutboxDispatcher:
             and (permit is None or (not permit.token and permit.max_batch > 1))
             and all(item.destination == self._batch_destination for item in claimed_events)
         ):
-            return await self._dispatch_sqs_batches(claimed_events, permit)
+            result = await self._dispatch_sqs_batches(claimed_events, permit)
+            return replace(
+                result,
+                claimed=original_claimed,
+                stale_claims=result.stale_claims + budget_stale,
+                retry_budget_deferred=budget_deferred,
+            )
 
         published = 0
         retries_scheduled = 0
@@ -322,12 +387,13 @@ class OutboxDispatcher:
                 stale_claims += len(remaining) - released
 
         return OutboxDispatchBatchResult(
-            claimed=len(claimed_events),
+            claimed=original_claimed,
             published=published,
             retries_scheduled=retries_scheduled,
-            stale_claims=stale_claims,
+            stale_claims=stale_claims + budget_stale,
             failed=failed,
             released_unattempted=released,
+            retry_budget_deferred=budget_deferred,
         )
 
     async def _dispatch_sqs_batches(
