@@ -44,6 +44,8 @@ class CircuitPolicy:
 class CircuitPermit:
     allowed: bool
     token: str = ""
+    # A probe or rate-limited permit authorizes one event, not an entire batch.
+    max_batch: int = 1
 
 
 class CircuitGate(Protocol):
@@ -51,7 +53,7 @@ class CircuitGate(Protocol):
 
     async def success(self, permit: CircuitPermit) -> None: ...
 
-    async def failure(self, permit: CircuitPermit) -> None: ...
+    async def failure(self, permit: CircuitPermit) -> bool: ...
 
     async def release(self, permit: CircuitPermit) -> None: ...
 
@@ -88,7 +90,9 @@ class InMemoryCircuitBreaker:
                 self.next_allowed_ms = now * 1000 + self.policy.min_interval_ms
                 return CircuitPermit(True, self.probe_token)
             self.next_allowed_ms = now * 1000 + self.policy.min_interval_ms
-            return CircuitPermit(True)
+            return CircuitPermit(
+                True, max_batch=1000 if self.policy.min_interval_ms == 0 else 1
+            )
 
     async def success(self, permit: CircuitPermit) -> None:
         async with self._mutex:
@@ -108,22 +112,23 @@ class InMemoryCircuitBreaker:
                     self.failures = 0
                     self.successes = 0
 
-    async def failure(self, permit: CircuitPermit) -> None:
+    async def failure(self, permit: CircuitPermit) -> bool:
         async with self._mutex:
             if not permit.allowed:
-                return
+                return self.state is not CircuitState.CLOSED
             if self.state is CircuitState.HALF_OPEN:
                 if (
                     not permit.token
                     or permit.token != self.probe_token
                     or self.clock() >= self.probe_until
                 ):
-                    return
+                    return True
                 self._open()
             elif self.state is CircuitState.CLOSED:
                 self.failures += 1
                 if self.failures >= self.policy.failure_threshold:
                     self._open()
+            return self.state is not CircuitState.CLOSED
 
     async def release(self, permit: CircuitPermit) -> None:
         async with self._mutex:
@@ -194,18 +199,21 @@ end
 if action == 'failure' then
     if state == 'half_open' and token ~= '' and token == ARGV[2] then
         local expiry = tonumber(redis.call('HGET', KEYS[1], 'probe_until') or '0')
-        if now >= expiry then return 'stale' end
+        if now >= expiry then return 'open' end
         redis.call('HSET', KEYS[1], 'state', 'open', 'until_ms',
                    now + tonumber(ARGV[4]), 'failures', tonumber(ARGV[3]),
                    'successes', 0, 'probe', '')
+        return 'open'
     elseif state == 'closed' then
         local failures = redis.call('HINCRBY', KEYS[1], 'failures', 1)
         if failures >= tonumber(ARGV[3]) then
             redis.call('HSET', KEYS[1], 'state', 'open', 'until_ms',
                        now + tonumber(ARGV[4]), 'successes', 0, 'probe', '')
+            return 'open'
         end
+        return 'closed'
     end
-    return 'ok'
+    return 'open'
 end
 return redis.error_reply('invalid circuit operation')
 """
@@ -245,16 +253,19 @@ class RedisCircuitBreaker:
         if result == "probe":
             return CircuitPermit(True, token)
         if result == "normal":
-            return CircuitPermit(True)
+            return CircuitPermit(
+                True, max_batch=1000 if self.policy.min_interval_ms == 0 else 1
+            )
         raise RuntimeError("Invalid circuit acquisition result")
 
     async def success(self, permit: CircuitPermit) -> None:
         if permit.allowed:
             await self._act("success", permit.token)
 
-    async def failure(self, permit: CircuitPermit) -> None:
-        if permit.allowed:
-            await self._act("failure", permit.token)
+    async def failure(self, permit: CircuitPermit) -> bool:
+        if not permit.allowed:
+            return True
+        return await self._act("failure", permit.token) == "open"
 
     async def release(self, permit: CircuitPermit) -> None:
         if permit.allowed and permit.token:
