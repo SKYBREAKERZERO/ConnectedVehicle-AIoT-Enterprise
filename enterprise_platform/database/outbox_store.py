@@ -80,6 +80,21 @@ class SQLAlchemyOutboxStore:
 
             return updated
 
+    async def mark_published_batch(
+        self,
+        *,
+        claims: tuple[ClaimedOutboxEvent, ...],
+        published_at: datetime,
+    ) -> tuple[str, ...]:
+        if not claims:
+            return ()
+        async with SQLAlchemyUnitOfWork(self._session_factory) as uow:
+            updated = await SQLAlchemyOutboxRepository(uow.session).mark_published_batch(
+                claims=claims, published_at=published_at
+            )
+            await uow.commit()
+            return updated
+
     async def schedule_retry(
         self,
         *,
