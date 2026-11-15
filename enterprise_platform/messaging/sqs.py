@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import NotRequired, Protocol, TypedDict
+from typing import Literal, NotRequired, Protocol, TypedDict, cast
 
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -22,6 +22,35 @@ from enterprise_platform.messaging.serialization import (
 
 class SQSSendResponse(TypedDict):
     MessageId: NotRequired[str]
+
+
+class SQSBatchSuccessfulEntry(TypedDict):
+    Id: str
+    MessageId: str
+
+
+class SQSBatchFailedEntry(TypedDict):
+    Id: str
+    Code: str
+    SenderFault: bool
+
+
+class SQSBatchSendResponse(TypedDict):
+    Successful: NotRequired[list[SQSBatchSuccessfulEntry]]
+    Failed: NotRequired[list[SQSBatchFailedEntry]]
+
+
+class SQSBatchClient(Protocol):
+    def send_message_batch(
+        self, *, QueueUrl: str, Entries: list[dict[str, str]]
+    ) -> SQSBatchSendResponse: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SQSBatchSendResult:
+    event_id: str
+    status: Literal["sent", "retryable", "permanent"]
+    failure_code: str | None = None
 
 
 class SQSMessage(TypedDict):
@@ -111,6 +140,87 @@ class SQSEventQueue:
             raise MessagePublishError()
 
         return message_id
+
+    async def send_events_batch(
+        self, events: tuple[EventEnvelope, ...]
+    ) -> tuple[SQSBatchSendResult, ...]:
+        """Send to one standard queue and reconcile every returned batch entry.
+
+        Multiple SQS calls are allowed when a batch exceeds 10 entries or 1 MiB.
+        A transport exception means some previously accepted entries may have
+        unknown outcomes; the caller must retry idempotently, never mark success.
+        """
+        if not events:
+            raise ValueError("SQS batch must not be empty")
+        if self._queue_url.endswith(".fifo"):
+            raise ValueError("FIFO SQS batch requires explicit group and deduplication IDs")
+        max_bytes = 1_048_576
+        encoded = [(event, serialize_event_envelope(event)) for event in events]
+        results: list[SQSBatchSendResult | None] = [None] * len(events)
+        client = cast(SQSBatchClient, self._client)
+        cursor = 0
+        while cursor < len(encoded):
+            chunk: list[tuple[int, str]] = []
+            total = 0
+            while cursor < len(encoded) and len(chunk) < 10:
+                event, body = encoded[cursor]
+                size = len(body.encode("utf-8"))
+                if size > max_bytes:
+                    results[cursor] = SQSBatchSendResult(
+                        event_id=event.event_id,
+                        status="permanent",
+                        failure_code="MessageTooLarge",
+                    )
+                    cursor += 1
+                    continue
+                if chunk and total + size > max_bytes:
+                    break
+                chunk.append((cursor, body))
+                total += size
+                cursor += 1
+            if not chunk:
+                continue
+            # Use source index as per-request entry ID; never rely on response order.
+            entries = [{"Id": str(i), "MessageBody": body} for i, body in chunk]
+            try:
+                response = await asyncio.to_thread(
+                    client.send_message_batch,
+                    QueueUrl=self._queue_url,
+                    Entries=entries,
+                )
+            except (BotoCoreError, ClientError) as exc:
+                raise MessagePublishError() from exc
+
+            expected = {str(i) for i, _ in chunk}
+            seen: set[str] = set()
+            for success in response.get("Successful", []):
+                ident = success.get("Id", "")
+                if ident not in expected or ident in seen or not success.get("MessageId"):
+                    raise MessagePublishError()
+                seen.add(ident)
+                index = int(ident)
+                results[index] = SQSBatchSendResult(
+                    event_id=encoded[index][0].event_id, status="sent"
+                )
+            for failure in response.get("Failed", []):
+                ident = failure.get("Id", "")
+                if ident not in expected or ident in seen:
+                    raise MessagePublishError()
+                code = failure.get("Code", "")
+                if not code or type(failure.get("SenderFault")) is not bool:
+                    raise MessagePublishError()
+                seen.add(ident)
+                index = int(ident)
+                results[index] = SQSBatchSendResult(
+                    event_id=encoded[index][0].event_id,
+                    status="permanent" if failure["SenderFault"] else "retryable",
+                    failure_code=code,
+                )
+            if seen != expected:
+                raise MessagePublishError()
+        if any(result is None for result in results):
+            raise MessagePublishError()
+        return tuple(result for result in results if result is not None)
 
     async def receive_events(
         self,
