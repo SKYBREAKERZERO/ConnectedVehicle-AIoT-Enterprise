@@ -10,3 +10,14 @@ reviewed_policy_arns = {
   verify    = "arn:aws:iam::000000000000:policy/cv-ota-staging/verify"
   recovery  = "arn:aws:iam::000000000000:policy/cv-ota-staging/recovery"
 }
+
+# Independent HUMAN administrator trust; never use GitHub OIDC/deploy roles.
+# Pre-provision these operator roles and exact reviewed least-privilege policies.
+bootstrap_operator_role_arns = {
+  foundation  = "arn:aws:iam::000000000000:role/cv-ota-staging-operator-foundation"
+  credentials = "arn:aws:iam::000000000000:role/cv-ota-staging-operator-credentials"
+}
+bootstrap_policy_arns = {
+  foundation  = "arn:aws:iam::000000000000:policy/cv-ota-staging-admin/foundation"
+  credentials = "arn:aws:iam::000000000000:policy/cv-ota-staging-admin/credentials"
+}
