@@ -69,6 +69,21 @@ data "aws_iam_policy_document" "redis_execution" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = [var.redis_auth_secret_arn]
   }
+  statement {
+    sid       = "DecryptOnlyRedisAuthenticationSecret"
+    actions   = ["kms:Decrypt"]
+    resources = [var.data_kms_key_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${var.aws_region}.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:SecretARN"
+      values   = [var.redis_auth_secret_arn]
+    }
+  }
 }
 resource "aws_iam_role_policy" "redis_execution" {
   name   = "inject-redis-secret"
