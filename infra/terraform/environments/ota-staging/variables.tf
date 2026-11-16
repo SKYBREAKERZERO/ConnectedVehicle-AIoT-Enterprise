@@ -254,9 +254,9 @@ variable "remote_command_database_secret_arn" {
   }
 }
 variable "aws_iot_data_endpoint" {
-  type     = string
-  default  = ""
-  nullable = false
+  type        = string
+  default     = ""
+  nullable    = false
   description = "Reviewed AWS IoT Core ATS data hostname, without scheme."
   validation {
     condition     = var.aws_iot_data_endpoint == "" || can(regex("^[a-z0-9-]+-ats\\.iot\\.ap-northeast-1\\.amazonaws\\.com$", var.aws_iot_data_endpoint))
