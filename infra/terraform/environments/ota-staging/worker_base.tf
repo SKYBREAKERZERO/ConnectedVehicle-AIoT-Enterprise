@@ -1,6 +1,6 @@
 # Day39 Staging Worker foundation: no ECS service is enabled by default.
 locals {
-  worker_kinds = toset(["outbox", "remote_command", "campaign"])
+  worker_kinds  = toset(["outbox", "remote_command", "campaign"])
   worker_active = var.enable_service && var.enable_workers ? toset([for kind in local.worker_kinds : kind if var.worker_desired_counts[kind] > 0]) : toset([])
   worker_secret_arns = {
     outbox         = var.outbox_database_secret_arn
