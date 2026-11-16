@@ -335,14 +335,16 @@ resource "aws_elasticache_replication_group" "redis" {
   snapshot_retention_limit   = 7
   lifecycle { prevent_destroy = true }
 }
-# Secret metadata only: write no application database credentials to Terraform state.
-resource "aws_secretsmanager_secret" "application" {
-  kms_key_id              = var.data_kms_key_arn
-  name                    = "/connected-vehicle/staging/database/application"
-  description             = "Empty metadata until separately approved app_user RLS bootstrap creates secret VERSION"
-  recovery_window_in_days = 30
-  lifecycle { prevent_destroy = true }
-}
+# Bootstrap boundary: Foundation creates RDS and Redis first, before app_user
+# credentials exist. NEVER create empty, non-rotating Secrets in this root.
+# A separately approved post-foundation administrator provisions AWSCURRENT
+# values and functioning rotation Lambdas for BOTH secrets. The application
+# root and live Day37 preflight independently reject absent/disabled rotation.
+# No secret value enters Terraform state; do not run a destructive state migration
+# if a historical Foundation state already owns either legacy Secret resource.
+output "application_database_secret_name" { value = "/connected-vehicle/staging/database/application" }
+output "redis_auth_secret_name" { value = "/connected-vehicle/staging/redis/auth" }
+
 output "vpc_id" { value = aws_vpc.this.id }
 output "private_subnet_ids" { value = [for s in aws_subnet.private : s.id] }
 output "alb_security_group_id" { value = aws_security_group.alb.id }
@@ -358,12 +360,3 @@ output "alb_internal" { value = aws_lb.internal.internal }
 output "oidc_application_provisioned" { value = false }
 output "foundation_release_authorized" { value = false }
 
-# Admin must populate AWSCURRENT with EXACT redis_auth_token source independently.
-resource "aws_secretsmanager_secret" "redis_auth" {
-  kms_key_id              = var.data_kms_key_arn
-  name                    = "/connected-vehicle/staging/redis/auth"
-  description             = "Metadata only: actual Redis token version is added by privileged administrator"
-  recovery_window_in_days = 30
-  lifecycle { prevent_destroy = true }
-}
-output "redis_auth_secret_arn" { value = aws_secretsmanager_secret.redis_auth.arn }
