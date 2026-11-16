@@ -39,6 +39,7 @@ class Settings(BaseSettings):
 
     aws_region: str = "ap-northeast-1"
     aws_endpoint_url: str | None = "http://localhost:4566"
+    aws_iot_data_endpoint: str | None = None
     aws_connect_timeout_seconds: float = Field(default=3.0, gt=0)
     aws_read_timeout_seconds: float = Field(default=10.0, gt=0)
     aws_max_attempts: int = Field(default=3, ge=1, le=10)
