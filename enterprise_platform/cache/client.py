@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from pydantic import SecretStr
 from redis.asyncio import ConnectionPool, Redis
+from redis.asyncio.connection import SSLConnection
+
+from enterprise_platform.config.environment import CloudRuntime
 
 from enterprise_platform.config.settings import Settings
 
@@ -45,7 +49,9 @@ def _secret_value_or_none(value: SecretStr | None) -> str | None:
 
 
 def create_redis_resources(settings: Settings) -> RedisResources:
-    pool = ConnectionPool(
+    # Real AWS ElastiCache requires verified TLS; never silently use plaintext
+    # because an unused REDIS_TLS_ENABLED environment flag was supplied.
+    options: dict[str, Any] = dict(
         host=settings.redis_host,
         port=settings.redis_port,
         db=settings.redis_db,
@@ -57,15 +63,15 @@ def create_redis_resources(settings: Settings) -> RedisResources:
         decode_responses=True,
         encoding="utf-8",
     )
+    if settings.cloud_runtime is CloudRuntime.AWS:
+        pool = ConnectionPool(
+            connection_class=SSLConnection, ssl_cert_reqs="required", **options
+        )
+    else:
+        pool = ConnectionPool(**options)
 
-    client = Redis(
-        connection_pool=pool,
-    )
-
-    return RedisResources(
-        client=client,
-        pool=pool,
-    )
+    client = Redis(connection_pool=pool)
+    return RedisResources(client=client, pool=pool)
 
 
 def create_cache_key_builder(settings: Settings) -> CacheKeyBuilder:
