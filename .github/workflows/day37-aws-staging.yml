@@ -52,7 +52,7 @@ jobs:
     - name: Python, evidence policy, workflow contracts and safe Terraform root
       run: |
         set -euo pipefail
-        python -m compileall -q scripts/day37_gate.py scripts/day37_aws.py scripts/day37_preflight.py scripts/day39_staging_handoff.py
+        python -m compileall -q scripts/day37_gate.py scripts/day37_aws.py scripts/day37_preflight.py scripts/day39_staging_handoff.py scripts/day39_worker_verify.py
         python -m pytest tests/unit/test_day37_gate.py tests/unit/test_day37_aws.py tests/unit/test_day37_workflow.py tests/unit/test_day37_staging_static.py tests/unit/test_day37_preflight.py tests/unit/test_day39_staging_handoff.py tests/unit/test_day39_tenant_credentials.py tests/unit/test_day39_bootstrap_identity.py tests/unit/test_day39_aws_workers.py tests/unit/test_aws_worker_security.py -q
         terraform -chdir="${DAY37_TF_ROOT}" fmt -check -recursive -diff
         terraform -chdir="${DAY37_TF_ROOT}" init -backend=false -input=false
@@ -682,6 +682,26 @@ jobs:
         if a['image_uri']!=b['image_uri'] or a['task_definition']!=b['task_definition']:
             raise SystemExit('ECS deployment drift after Apply')
         PY
+    - name: Verify all explicitly enabled ECS Workers with independent IAM Role
+      if: ${{ vars.DAY37_ENABLE_WORKERS == 'true' }}
+      env:
+        DAY39_WORKER_COUNTS: ${{ vars.DAY37_WORKER_COUNTS_JSON || '{"outbox":0,"remote_command":0,"campaign":0}' }}
+        DAY39_TENANT: ${{ vars.DAY37_TENANT_ID }}
+      run: |
+        set -euo pipefail
+        DIGEST=$(python -c "import json;print(json.load(open('.day37/publish/release.json'))['registry_digest'])")
+        python -m scripts.day39_worker_verify \
+          --account-id "$DAY37_ACCOUNT_ID" --cluster "$DAY37_CLUSTER" \
+          --tenant "$DAY39_TENANT" --digest "$DIGEST" \
+          --counts-json "$DAY39_WORKER_COUNTS" \
+          --output .day37/verify/workers.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: ${{ vars.DAY37_ENABLE_WORKERS == 'true' }}
+      with:
+        name: day39-verified-workers-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day37/verify/workers.json
+        if-no-files-found: error
+        retention-days: 14
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: day37-verified-${{ github.run_id }}-${{ github.run_attempt }}
