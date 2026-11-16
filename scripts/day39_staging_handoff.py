@@ -48,6 +48,19 @@ def validate_target(account: str, kms_arn: str, vpc: str, source: str) -> None:
     require(bool(SHA.fullmatch(source)), "source SHA must be an exact commit")
 
 
+def verify_checkout(source_sha: str) -> None:
+    """Require the approved SHA to be the actual immutable local source."""
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    require(result.returncode == 0 and result.stdout.strip() == source_sha, "source SHA drift")
+
+
 def aws_json(*args: str) -> dict[str, Any]:
     result = subprocess.run(
         ["aws", *args, "--region", REGION, "--output", "json"],
@@ -137,7 +150,12 @@ def verify_secret(
         "Secret identity/KMS invalid: " + key,
     )
     stages = meta.get("VersionIdsToStages", {})
-    require(isinstance(stages, dict) and len(stages) > 0, "missing Secret versions: " + key)
+    require(
+        isinstance(stages, dict)
+        and len(stages) > 0
+        and all(isinstance(x, list) and all(isinstance(y, str) for y in x) for x in stages.values()),
+        "missing or malformed Secret versions: " + key,
+    )
     require(
         sum("AWSCURRENT" in labels for labels in stages.values()) == 1
         and not any("AWSPENDING" in labels for labels in stages.values()),
@@ -217,6 +235,7 @@ def main() -> int:
     try:
         validate_target(args.account_id, args.data_kms_key_arn, args.vpc_id, args.source_sha)
         require(args.live, "live AWS verification not requested; cannot produce evidence")
+        verify_checkout(args.source_sha)
         require(
             not any(k.startswith("AWS_ENDPOINT_URL") and v for k, v in os.environ.items()),
             "AWS endpoint override forbidden",
