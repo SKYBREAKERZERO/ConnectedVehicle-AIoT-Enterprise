@@ -13,9 +13,10 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping, cast
+from typing import Any, cast
 
 REGION = "ap-northeast-1"
 ACCOUNT = re.compile(r"[0-9]{12}\Z")
