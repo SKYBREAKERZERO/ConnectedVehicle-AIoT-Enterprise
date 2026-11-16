@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -52,7 +53,7 @@ def reader(*args: str) -> dict[str, Any]:
     raise AssertionError(f"Unexpected read-only AWS call: {args}")
 
 
-def observe(read=reader) -> dict[str, Any]:
+def observe(read: Callable[..., dict[str, Any]] = reader) -> dict[str, Any]:
     return inspect(
         read, account=ACCOUNT, cluster="cv-ota-staging", tenant=TENANT,
         digest=DIGEST, counts={"outbox": 1, "remote_command": 0, "campaign": 0},
