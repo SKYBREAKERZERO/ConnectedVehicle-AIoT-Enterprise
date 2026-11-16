@@ -242,6 +242,40 @@ def aws_json(*args: str) -> dict[str, Any]:
     return body
 
 
+def require_live_rotation(
+    metadata: Mapping[str, Any], *, secret_arn: str, secret_name: str,
+    account: str, kms_key_arn: str,
+) -> None:
+    """Fail closed on unrotated Staging Secret metadata; never read credentials."""
+    rule = metadata.get("RotationRules")
+    schedule = isinstance(rule, dict) and (
+        isinstance(rule.get("AutomaticallyAfterDays"), int)
+        and 1 <= rule["AutomaticallyAfterDays"] <= 90
+        or isinstance(rule.get("ScheduleExpression"), str)
+        and bool(rule["ScheduleExpression"].strip())
+    )
+    lambda_arn = metadata.get("RotationLambdaARN", "")
+    if (
+        metadata.get("ARN") != secret_arn
+        or metadata.get("Name") != secret_name
+        or metadata.get("KmsKeyId") != kms_key_arn
+        or metadata.get("DeletedDate")
+        or metadata.get("RotationEnabled") is not True
+        or not isinstance(lambda_arn, str)
+        or not re.fullmatch(
+            rf"arn:aws:lambda:{REGION}:{re.escape(account)}:function:[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?",
+            lambda_arn,
+        )
+        or not schedule
+        or not metadata.get("LastRotatedDate")
+        or "AWSCURRENT" not in [
+            stage for stages in metadata.get("VersionIdsToStages", {}).values()
+            for stage in stages
+        ]
+    ):
+        raise ValueError(f"BLOCKED: {secret_name} requires verified active same-account credential rotation")
+
+
 def live(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
     env = os.environ if env is None else env
     c = config(mode, env)
@@ -306,6 +340,11 @@ def live(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
             raise ValueError(
                 "BLOCKED: app_user database Secret has no AWSCURRENT credentials version"
             )
+        require_live_rotation(
+            secret, secret_arn=c["database_secret"],
+            secret_name="/connected-vehicle/staging/database/application",
+            account=c["account"], kms_key_arn=c["data_kms_key"],
+        )
         db = aws_json(
             "rds", "describe-db-instances", "--db-instance-identifier", "cv-ota-staging-postgres"
         ).get("DBInstances", [])
@@ -349,6 +388,11 @@ def live(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
                 ]
             ):
                 raise ValueError("BLOCKED: Redis auth Secret lacks reviewed current version")
+            require_live_rotation(
+                auth, secret_arn=c["redis_auth_secret"],
+                secret_name="/connected-vehicle/staging/redis/auth",
+                account=c["account"], kms_key_arn=c["data_kms_key"],
+            )
     if "target_group" in c:
         tgs = aws_json(
             "elbv2", "describe-target-groups", "--target-group-arns", c["target_group"]
