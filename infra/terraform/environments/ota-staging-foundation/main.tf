@@ -351,7 +351,6 @@ output "alb_security_group_id" { value = aws_security_group.alb.id }
 output "database_security_group_id" { value = aws_security_group.postgres.id }
 output "redis_security_group_id" { value = aws_security_group.redis.id }
 output "alb_target_group_arn" { value = aws_lb_target_group.api.arn }
-output "application_database_secret_arn" { value = aws_secretsmanager_secret.application.arn }
 output "postgres_endpoint" { value = aws_db_instance.postgres.address }
 output "rds_managed_admin_secret_arn" { value = aws_db_instance.postgres.master_user_secret[0].secret_arn }
 output "redis_host" { value = aws_elasticache_replication_group.redis.primary_endpoint_address }
