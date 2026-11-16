@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -61,7 +62,7 @@ def _plan(name: str, cmd: list[str], *, enabled: bool = True) -> dict[str, objec
                 "container_definitions": (
                     '[{"name":"' + name + '","image":"repo@' + image +
                     '","readonlyRootFilesystem":true,"stopTimeout":120,"command":' +
-                    __import__("json").dumps(cmd) + "}]"
+                    json.dumps(cmd) + "}]"
                 )
             }},
         }],
