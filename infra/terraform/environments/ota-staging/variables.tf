@@ -110,7 +110,7 @@ variable "tenant_id" {
   nullable    = false
   description = "Exact tenant ID matching database Secret and PostgreSQL RLS bootstrap."
   validation {
-    condition     = length(trimspace(var.tenant_id)) > 0 && length(var.tenant_id) <= 128
+    condition     = can(regex("^[A-Za-z0-9_-]{1,64}$", var.tenant_id))
     error_message = "Nonblank tenant_id required."
   }
 }
@@ -212,4 +212,68 @@ variable "data_kms_key_arn" {
     condition     = can(regex("^arn:aws:kms:ap-northeast-1:[0-9]{12}:key/[A-Za-z0-9-]+$", var.data_kms_key_arn)) && split(":", var.data_kms_key_arn)[4] == var.aws_account_id
     error_message = "Real same-account Tokyo CMK ARN required for ECR and CloudWatch Logs."
   }
+}
+
+# Worker resources are provisioned only through reviewed Terraform Bootstrap.
+# The Day37 deploy Plan may then enable ECS only on a second approved change.
+variable "enable_workers" {
+  type    = bool
+  default = false
+}
+
+variable "worker_desired_counts" {
+  type = map(number)
+  default = {
+    outbox         = 0
+    remote_command = 0
+    campaign       = 0
+  }
+  validation {
+    condition = (
+      toset(keys(var.worker_desired_counts)) == toset(["outbox", "remote_command", "campaign"]) &&
+      alltrue([for size in values(var.worker_desired_counts) : size >= 0 && size <= 2 && floor(size) == size])
+    )
+    error_message = "Workers require exactly three bounded desired counts (0..2)."
+  }
+}
+
+variable "outbox_database_secret_arn" {
+  type     = string
+  nullable = false
+  validation {
+    condition     = can(regex("^arn:aws:secretsmanager:ap-northeast-1:[0-9]{12}:secret:/connected-vehicle/staging/database/outbox-", var.outbox_database_secret_arn))
+    error_message = "Exact Staging Outbox Secret ARN required."
+  }
+}
+variable "remote_command_database_secret_arn" {
+  type     = string
+  nullable = false
+  validation {
+    condition     = can(regex("^arn:aws:secretsmanager:ap-northeast-1:[0-9]{12}:secret:/connected-vehicle/staging/database/remote-command-", var.remote_command_database_secret_arn))
+    error_message = "Exact Staging Remote Command Secret ARN required."
+  }
+}
+variable "aws_iot_data_endpoint" {
+  type     = string
+  default  = ""
+  nullable = false
+  description = "Reviewed AWS IoT Core ATS data hostname, without scheme."
+  validation {
+    condition     = var.aws_iot_data_endpoint == "" || can(regex("^[a-z0-9-]+-ats\\.iot\\.ap-northeast-1\\.amazonaws\\.com$", var.aws_iot_data_endpoint))
+    error_message = "Require the exact AWS IoT ATS hostname."
+  }
+}
+variable "staging_firmware_bucket_arn" {
+  type        = string
+  default     = null
+  description = "Review-scoped staging S3 firmware bucket ARN; no wildcard access."
+  validation {
+    condition     = var.staging_firmware_bucket_arn == null || can(regex("^arn:aws:s3:::[a-z0-9][a-z0-9.-]+$", var.staging_firmware_bucket_arn))
+    error_message = "Require exactly one reviewed S3 firmware bucket."
+  }
+}
+variable "campaign_trust_root_ready" {
+  type        = bool
+  default     = false
+  description = "Only true after separately reviewed immutable OTA trust root is mounted."
 }
