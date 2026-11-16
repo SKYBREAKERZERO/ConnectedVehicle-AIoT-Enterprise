@@ -273,7 +273,9 @@ def require_live_rotation(
             for stage in stages
         ]
     ):
-        raise ValueError(f"BLOCKED: {secret_name} requires verified active same-account credential rotation")
+        raise ValueError(
+            f"BLOCKED: {secret_name} requires verified active same-account credential rotation"
+        )
 
 
 def live(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
