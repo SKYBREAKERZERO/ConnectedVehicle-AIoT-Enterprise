@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from database.provision_runtime_credentials import provision
+from enterprise_platform.config.environment import AppEnvironment, CloudRuntime
 from enterprise_platform.config.settings import Settings
 from enterprise_platform.database.credentials import DATABASE_USERS, runtime_database_user
 
@@ -19,8 +20,8 @@ async def test_tenant_credentials_never_fall_back_to_global_roles(
 ) -> None:
     tenant = "staging-tenant-001"
     settings = Settings(
-        app_env="staging",
-        cloud_runtime="aws",
+        app_env=AppEnvironment.STAGING,
+        cloud_runtime=CloudRuntime.AWS,
         aws_endpoint_url=None,
         database_tenant_id=tenant,
         application_database_secret_id="/connected-vehicle/staging/database/application",
