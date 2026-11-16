@@ -52,6 +52,37 @@ variable "reviewed_policy_arns" {
   }
 }
 
+# Human bootstrap roles are independent of GitHub OIDC deployment identities.
+# Both trusted operator IAM roles and their reviewed policy documents are
+# provisioned and approved separately by the security/identity administrator.
+variable "bootstrap_operator_role_arns" {
+  type     = map(string)
+  nullable = false
+  validation {
+    condition = (
+      length(var.bootstrap_operator_role_arns) == 2 &&
+      toset(keys(var.bootstrap_operator_role_arns)) == toset(["foundation", "credentials"]) &&
+      var.bootstrap_operator_role_arns["foundation"] == "arn:aws:iam::${var.account_id}:role/cv-ota-staging-operator-foundation" &&
+      var.bootstrap_operator_role_arns["credentials"] == "arn:aws:iam::${var.account_id}:role/cv-ota-staging-operator-credentials"
+    )
+    error_message = "Exactly two distinct same-account, pre-reviewed bootstrap operator roles required."
+  }
+}
+
+variable "bootstrap_policy_arns" {
+  type     = map(string)
+  nullable = false
+  validation {
+    condition = (
+      length(var.bootstrap_policy_arns) == 2 &&
+      toset(keys(var.bootstrap_policy_arns)) == toset(["foundation", "credentials"]) &&
+      var.bootstrap_policy_arns["foundation"] == "arn:aws:iam::${var.account_id}:policy/cv-ota-staging-admin/foundation" &&
+      var.bootstrap_policy_arns["credentials"] == "arn:aws:iam::${var.account_id}:policy/cv-ota-staging-admin/credentials"
+    )
+    error_message = "Exactly two distinct reviewed least-privilege bootstrap IAM policies required."
+  }
+}
+
 data "aws_iam_openid_connect_provider" "github" {
   arn = var.github_oidc_provider_arn
 }
@@ -94,4 +125,40 @@ resource "aws_iam_role_policy_attachment" "staging" {
 
 output "role_arns" {
   value = { for mode, role in aws_iam_role.staging : mode => role.arn }
+}
+
+# Created by identity administrators only. Never given GitHub OIDC or service trust.
+resource "aws_iam_role" "bootstrap_admin" {
+  for_each             = var.bootstrap_operator_role_arns
+  name                 = each.key == "foundation" ? "cv-ota-staging-foundation-admin" : "cv-ota-staging-credential-admin"
+  path                 = "/"
+  permissions_boundary = var.permissions_boundary_arn
+  max_session_duration = 3600
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { AWS = each.value }
+      Action    = "sts:AssumeRole"
+      Condition = {
+        StringEquals = { "aws:PrincipalAccount" = var.account_id }
+      }
+    }]
+  })
+  lifecycle { prevent_destroy = true }
+  tags = {
+    Project     = "ConnectedVehicle-AIoT-Enterprise"
+    Environment = "staging"
+    Bootstrap   = each.key
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "bootstrap_admin" {
+  for_each   = var.bootstrap_policy_arns
+  role       = aws_iam_role.bootstrap_admin[each.key].name
+  policy_arn = each.value
+}
+
+output "bootstrap_admin_role_arns" {
+  value = { for purpose, role in aws_iam_role.bootstrap_admin : purpose => role.arn }
 }
