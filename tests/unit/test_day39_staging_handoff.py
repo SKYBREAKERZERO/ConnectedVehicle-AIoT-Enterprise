@@ -19,7 +19,7 @@ SHA = "a" * 40
 def sample(phase: str) -> dict[str, Any]:
     name = b.SECRETS["application"]
     red = b.SECRETS["redis"]
-    return {
+    result = {
         "sts": {
             "Account": ACCOUNT,
             "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/{b.EXPECTED[phase]}/session",
@@ -79,6 +79,18 @@ def sample(phase: str) -> dict[str, Any]:
             "LastRotatedDate": "2026-11-16T00:00:00Z",
         },
     }
+    for key in ("outbox", "remote-command"):
+        secret_name = b.SECRETS[key]
+        metadata = copy.deepcopy(result[name])
+        metadata["Name"] = secret_name
+        metadata["ARN"] = (
+            f"arn:aws:secretsmanager:ap-northeast-1:{ACCOUNT}:secret:{secret_name}-dddddd"
+        )
+        metadata["RotationLambdaARN"] = (
+            f"arn:aws:lambda:ap-northeast-1:{ACCOUNT}:function:{key}-rotator"
+        )
+        result[secret_name] = metadata
+    return result
 
 
 def reader(data: dict[str, Any]):
@@ -109,7 +121,7 @@ def test_readonly_handoff_is_not_release_authority(phase: str) -> None:
     assert output["rotation_functionality_verified"] is False
     assert (output["decision"] == "CREDENTIALS_OBSERVED") is (phase == "credentials")
     if phase == "credentials":
-        assert set(output["secrets"]) == {"application", "redis"}
+        assert set(output["secrets"]) == {"application", "outbox", "remote-command", "redis"}
 
 
 def test_wrong_administrator_and_cross_account_denied() -> None:
