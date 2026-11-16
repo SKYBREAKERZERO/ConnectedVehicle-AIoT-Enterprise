@@ -24,3 +24,20 @@ image_digest                    = null
 alb_target_group_arn            = null
 
 redis_auth_secret_arn = "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:/connected-vehicle/staging/redis/auth-EXAMPLE" # replace
+
+# Separate tenant-bound PostgreSQL credentials. Values below are NONFUNCTIONAL.
+outbox_database_secret_arn         = "arn:aws:secretsmanager:ap-northeast-1:000000000000:secret:/connected-vehicle/staging/database/outbox-EXAMPLE"
+remote_command_database_secret_arn = "arn:aws:secretsmanager:ap-northeast-1:000000000000:secret:/connected-vehicle/staging/database/remote-command-EXAMPLE"
+
+# Worker Foundation resources are created by a separate reviewed Bootstrap Plan.
+# Worker ECS services must stay off until AWS runtime, IAM and OTA safety admission.
+enable_workers = false
+worker_desired_counts = {
+  outbox         = 0
+  remote_command = 0
+  campaign       = 0
+}
+aws_iot_data_endpoint       = ""
+staging_firmware_bucket_arn = null
+campaign_trust_root_ready   = false
+campaign_trust_root_path    = ""
