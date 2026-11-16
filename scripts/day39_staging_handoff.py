@@ -153,7 +153,11 @@ def verify_secret(
     require(
         isinstance(stages, dict)
         and len(stages) > 0
-        and all(isinstance(x, list) and all(isinstance(y, str) for y in x) for x in stages.values()),
+        and all(
+            isinstance(labels, list)
+            and all(isinstance(label, str) for label in labels)
+            for labels in stages.values()
+        ),
         "missing or malformed Secret versions: " + key,
     )
     require(
