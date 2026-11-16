@@ -277,3 +277,14 @@ variable "campaign_trust_root_ready" {
   default     = false
   description = "Only true after separately reviewed immutable OTA trust root is mounted."
 }
+
+variable "campaign_trust_root_path" {
+  type        = string
+  default     = ""
+  nullable    = false
+  description = "Read-only signed OTA key file, externally supplied and verified before enabling Campaign."
+  validation {
+    condition     = var.campaign_trust_root_path == "" || startswith(var.campaign_trust_root_path, "/opt/trust/")
+    error_message = "Campaign trust roots must be an explicitly provisioned /opt/trust/ file."
+  }
+}
