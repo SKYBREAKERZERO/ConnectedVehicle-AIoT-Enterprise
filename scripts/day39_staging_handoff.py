@@ -15,7 +15,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 REGION = "ap-northeast-1"
 ACCOUNT = re.compile(r"[0-9]{12}\Z")
@@ -75,7 +75,7 @@ def aws_json(*args: str) -> dict[str, Any]:
     except (ValueError, TypeError) as exc:
         raise ValueError("DAY39 BLOCKED: malformed AWS read-only response") from exc
     require(isinstance(value, dict), "unexpected AWS response")
-    return value
+    return cast(dict[str, Any], value)
 
 
 def verify_identity(read: Reader, account: str, phase: str) -> str:
