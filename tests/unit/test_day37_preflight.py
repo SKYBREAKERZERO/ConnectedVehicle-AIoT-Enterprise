@@ -163,6 +163,15 @@ def test_live_aws_resources_bind_exact_account_and_vpc(monkeypatch: pytest.Monke
         },
         "describe-secret": {
             "ARN": e["TF_VAR_application_database_secret_arn"],
+            "Name": "/connected-vehicle/staging/database/application",
+            "KmsKeyId": e["TF_VAR_data_kms_key_arn"],
+            "RotationEnabled": True,
+            "RotationLambdaARN": (
+                f"arn:aws:lambda:ap-northeast-1:{e['DAY37_ACCOUNT_ID']}:"
+                "function:app-user-rotation"
+            ),
+            "RotationRules": {"AutomaticallyAfterDays": 30},
+            "LastRotatedDate": "2026-11-01T00:00:00Z",
             "VersionIdsToStages": {"1": ["AWSCURRENT"]},
         },
         "describe-db-instances": {
@@ -208,13 +217,35 @@ def test_live_aws_resources_bind_exact_account_and_vpc(monkeypatch: pytest.Monke
     def fake(*args: str) -> dict[str, Any]:
         if args[1] == "describe-secret" and args[3] == e["TF_VAR_redis_auth_secret_arn"]:
             return {
+                **copy.deepcopy(results["describe-secret"]),
                 "ARN": e["TF_VAR_redis_auth_secret_arn"],
-                "VersionIdsToStages": {"1": ["AWSCURRENT"]},
+                "Name": "/connected-vehicle/staging/redis/auth",
+                "RotationLambdaARN": (
+                    f"arn:aws:lambda:ap-northeast-1:{e['DAY37_ACCOUNT_ID']}:"
+                    "function:redis-token-rotation"
+                ),
             }
         return copy.deepcopy(results["sts" if args[0] == "sts" else args[1]])
 
     monkeypatch.setattr(pf, "aws_json", fake)
     assert pf.live("deploy", e)["decision"] == "STAGING_PREREQUISITES_VERIFIED"
+    results["describe-secret"]["RotationEnabled"] = False
+    with pytest.raises(ValueError, match="rotation"):
+        pf.live("deploy", e)
+    results["describe-secret"]["RotationEnabled"] = True
+    results["describe-secret"]["RotationLambdaARN"] = (
+        "arn:aws:lambda:ap-northeast-1:999999999999:function:foreign-rotator"
+    )
+    with pytest.raises(ValueError, match="rotation"):
+        pf.live("deploy", e)
+    results["describe-secret"]["RotationLambdaARN"] = (
+        f"arn:aws:lambda:ap-northeast-1:{e['DAY37_ACCOUNT_ID']}:"
+        "function:app-user-rotation"
+    )
+    results["describe-secret"]["LastRotatedDate"] = ""
+    with pytest.raises(ValueError, match="rotation"):
+        pf.live("deploy", e)
+    results["describe-secret"]["LastRotatedDate"] = "2026-11-01T00:00:00Z"
     results["describe-subnets"]["Subnets"][1]["VpcId"] = "vpc-99999999"
     with pytest.raises(ValueError, match="BLOCKED"):
         pf.live("deploy", e)
