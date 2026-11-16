@@ -7,9 +7,10 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 KINDS = {
     "outbox": ["python", "-m", "apps.outbox_worker.main"],
