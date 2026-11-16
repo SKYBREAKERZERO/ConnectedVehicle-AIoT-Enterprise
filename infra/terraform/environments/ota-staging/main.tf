@@ -111,6 +111,51 @@ resource "aws_vpc_security_group_egress_rule" "redis" {
 # Only enable_service after a *separate* Day37 signed-image/evidence gate.
 # This read forces the manifest digest to exist in the exact account/repository.
 # It is NOT a substitute for verifying Cosign identity or provenance.
+# Deployment boundary: the Foundation must first create RDS/Redis, then an
+# independent privileged bootstrap provisions live AWSCURRENT credentials and
+# verified Lambda-based rotation. No empty or unrotated Secret can enable ECS.
+# Metadata-only lookups deliberately avoid reading any secret VALUE into State.
+data "aws_secretsmanager_secret" "application" {
+  count = var.enable_service ? 1 : 0
+  arn   = var.application_database_secret_arn
+  lifecycle {
+    postcondition {
+      condition     = self.name == "/connected-vehicle/staging/database/application" && self.kms_key_id == var.data_kms_key_arn
+      error_message = "BLOCKED: app_user Secret must be the reviewed staging name and customer-managed KMS key."
+    }
+  }
+}
+data "aws_secretsmanager_secret" "redis_auth" {
+  count = var.enable_service ? 1 : 0
+  arn   = var.redis_auth_secret_arn
+  lifecycle {
+    postcondition {
+      condition     = self.name == "/connected-vehicle/staging/redis/auth" && self.kms_key_id == var.data_kms_key_arn
+      error_message = "BLOCKED: Redis auth Secret must be the reviewed staging name and customer-managed KMS key."
+    }
+  }
+}
+data "aws_secretsmanager_secret_rotation" "application" {
+  count     = var.enable_service ? 1 : 0
+  secret_id = data.aws_secretsmanager_secret.application[0].arn
+  lifecycle {
+    postcondition {
+      condition     = self.rotation_enabled && can(regex("^arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)?$", self.rotation_lambda_arn)) && length(self.rotation_rules) > 0
+      error_message = "BLOCKED: app_user requires enabled, scheduled, same-account Lambda credential rotation."
+    }
+  }
+}
+data "aws_secretsmanager_secret_rotation" "redis_auth" {
+  count     = var.enable_service ? 1 : 0
+  secret_id = data.aws_secretsmanager_secret.redis_auth[0].arn
+  lifecycle {
+    postcondition {
+      condition     = self.rotation_enabled && can(regex("^arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)?$", self.rotation_lambda_arn)) && length(self.rotation_rules) > 0
+      error_message = "BLOCKED: Redis requires enabled, scheduled, same-account Lambda token rotation."
+    }
+  }
+}
+
 data "aws_ecr_image" "candidate" {
   count           = var.enable_service ? 1 : 0
   registry_id     = var.aws_account_id
