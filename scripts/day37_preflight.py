@@ -272,9 +272,9 @@ def require_live_rotation(
         )
         or not schedule
         or not metadata.get("LastRotatedDate")
-        or "AWSCURRENT" not in [
-            stage for stages in metadata.get("VersionIdsToStages", {}).values()
-            for stage in stages
+        or "AWSCURRENT"
+        not in [
+            stage for stages in metadata.get("VersionIdsToStages", {}).values() for stage in stages
         ]
     ):
         raise ValueError(
