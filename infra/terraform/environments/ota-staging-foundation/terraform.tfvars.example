@@ -12,4 +12,8 @@ vpc_flow_log_bucket_arn = "arn:aws:s3:::REPLACE-WITH-STAGING-FLOW-LOG-DELIVERY-B
 alb_access_log_bucket_name = "replace-with-staging-alb-access-logs-bucket"
 rds_monitoring_role_arn = "arn:aws:iam::123456789012:role/REPLACE-RDS-MONITORING-ROLE"
 # The two S3 destinations need correct delivery policies before Terraform Apply.
-# Rotation of metadata-only application/Redis Secrets remains a separate Release BLOCKER.
+# Foundation does not own empty application/Redis Secrets. After RDS/Redis exist,
+# an independent approved administrator must bootstrap live AWSCURRENT credentials
+# and prove functioning same-account Secrets Manager rotation for both.
+# See docs/DAY38_STAGING_SECRET_ROTATION_HANDOFF.md.
+# Never Apply a legacy-state Plan that proposes deleting previously managed Secrets.
