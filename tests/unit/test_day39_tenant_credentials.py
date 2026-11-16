@@ -57,8 +57,11 @@ async def test_tenant_credentials_never_fall_back_to_global_roles(
 
     assert all(role.endswith(roles[runtime].rsplit("__", 1)[1]) for runtime, role in roles.items())
     assert all(roles[runtime] != DATABASE_USERS[runtime] for runtime in DATABASE_USERS)
-    assert set(rotate.await_args.args[2]) == set(roles.values())
-    targets = rotate.await_args.args[1]
+    rotate.assert_awaited_once()
+    call = rotate.await_args
+    assert call is not None
+    assert set(call.args[2]) == set(roles.values())
+    targets = call.args[1]
     assert {target.runtime: target.role for target in targets} == roles
     assert all(target.tenant == tenant for target in targets)
     assert {target.secret_id for target in targets} == {
