@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import pytest
 
@@ -82,7 +82,7 @@ def sample(phase: str) -> dict[str, Any]:
     }
     for key in ("outbox", "remote-command"):
         secret_name = b.SECRETS[key]
-        metadata = copy.deepcopy(result[name])
+        metadata = cast(dict[str, Any], copy.deepcopy(result[name]))
         metadata["Name"] = secret_name
         metadata["ARN"] = (
             f"arn:aws:secretsmanager:ap-northeast-1:{ACCOUNT}:secret:{secret_name}-dddddd"
