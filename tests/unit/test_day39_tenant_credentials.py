@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -40,7 +41,7 @@ async def test_tenant_credentials_never_fall_back_to_global_roles(
     rotate = AsyncMock()
 
     @asynccontextmanager
-    async def manager(_settings: Settings, _targets: Any):
+    async def manager(_settings: Settings, _targets: Any) -> AsyncIterator[object]:
         yield object()
 
     with (
