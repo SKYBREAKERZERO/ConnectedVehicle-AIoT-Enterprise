@@ -59,12 +59,12 @@ resource "aws_ecs_task_definition" "worker" {
       { name = "VEHICLE_COMMAND_QUEUE_NAME", value = aws_sqs_queue.worker_commands.name },
       { name = "REDIS_HOST", value = var.redis_host },
       { name = "REDIS_PORT", value = "6379" },
-    ], each.key == "outbox" ? [
+      ], each.key == "outbox" ? [
       { name = "OUTBOX_DATABASE_SECRET_ID", value = var.outbox_database_secret_arn }
-    ] : each.key == "remote_command" ? [
+      ] : each.key == "remote_command" ? [
       { name = "REMOTE_COMMAND_DATABASE_SECRET_ID", value = var.remote_command_database_secret_arn },
       { name = "AWS_IOT_DATA_ENDPOINT", value = var.aws_iot_data_endpoint }
-    ] : [
+      ] : [
       { name = "APPLICATION_DATABASE_SECRET_ID", value = var.application_database_secret_arn },
       { name = "OTA_TRUSTED_KEYS_FILE", value = var.campaign_trust_root_path }
     ])
