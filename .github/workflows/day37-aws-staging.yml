@@ -212,6 +212,11 @@ jobs:
       TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
       TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
       TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_outbox_database_secret_arn: ${{ vars.DAY37_OUTBOX_DB_SECRET_ARN }}
+      TF_VAR_remote_command_database_secret_arn: ${{ vars.DAY37_REMOTE_DB_SECRET_ARN }}
+      TF_VAR_enable_workers: ${{ vars.DAY37_ENABLE_WORKERS == 'true' && 'true' || 'false' }}
+      TF_VAR_worker_desired_counts: ${{ vars.DAY37_WORKER_COUNTS_JSON || '{"outbox":0,"remote_command":0,"campaign":0}' }}
+      TF_VAR_aws_iot_data_endpoint: ${{ vars.DAY37_IOT_DATA_ENDPOINT }}
       TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
       TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
       TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
@@ -313,6 +318,11 @@ jobs:
       TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
       TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
       TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_outbox_database_secret_arn: ${{ vars.DAY37_OUTBOX_DB_SECRET_ARN }}
+      TF_VAR_remote_command_database_secret_arn: ${{ vars.DAY37_REMOTE_DB_SECRET_ARN }}
+      TF_VAR_enable_workers: ${{ vars.DAY37_ENABLE_WORKERS == 'true' && 'true' || 'false' }}
+      TF_VAR_worker_desired_counts: ${{ vars.DAY37_WORKER_COUNTS_JSON || '{"outbox":0,"remote_command":0,"campaign":0}' }}
+      TF_VAR_aws_iot_data_endpoint: ${{ vars.DAY37_IOT_DATA_ENDPOINT }}
       TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
       TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
       TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
@@ -396,6 +406,11 @@ jobs:
       TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
       TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
       TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_outbox_database_secret_arn: ${{ vars.DAY37_OUTBOX_DB_SECRET_ARN }}
+      TF_VAR_remote_command_database_secret_arn: ${{ vars.DAY37_REMOTE_DB_SECRET_ARN }}
+      TF_VAR_enable_workers: ${{ vars.DAY37_ENABLE_WORKERS == 'true' && 'true' || 'false' }}
+      TF_VAR_worker_desired_counts: ${{ vars.DAY37_WORKER_COUNTS_JSON || '{"outbox":0,"remote_command":0,"campaign":0}' }}
+      TF_VAR_aws_iot_data_endpoint: ${{ vars.DAY37_IOT_DATA_ENDPOINT }}
       TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
       TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
       TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
@@ -501,6 +516,11 @@ jobs:
       TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
       TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
       TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_outbox_database_secret_arn: ${{ vars.DAY37_OUTBOX_DB_SECRET_ARN }}
+      TF_VAR_remote_command_database_secret_arn: ${{ vars.DAY37_REMOTE_DB_SECRET_ARN }}
+      TF_VAR_enable_workers: ${{ vars.DAY37_ENABLE_WORKERS == 'true' && 'true' || 'false' }}
+      TF_VAR_worker_desired_counts: ${{ vars.DAY37_WORKER_COUNTS_JSON || '{"outbox":0,"remote_command":0,"campaign":0}' }}
+      TF_VAR_aws_iot_data_endpoint: ${{ vars.DAY37_IOT_DATA_ENDPOINT }}
       TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
       TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
       TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
@@ -702,6 +722,11 @@ jobs:
       TF_VAR_redis_security_group_id: ${{ vars.DAY37_REDIS_SG_ID }}
       TF_VAR_alb_target_group_arn: ${{ vars.DAY37_TARGET_GROUP_ARN }}
       TF_VAR_application_database_secret_arn: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+      TF_VAR_outbox_database_secret_arn: ${{ vars.DAY37_OUTBOX_DB_SECRET_ARN }}
+      TF_VAR_remote_command_database_secret_arn: ${{ vars.DAY37_REMOTE_DB_SECRET_ARN }}
+      TF_VAR_enable_workers: ${{ vars.DAY37_ENABLE_WORKERS == 'true' && 'true' || 'false' }}
+      TF_VAR_worker_desired_counts: ${{ vars.DAY37_WORKER_COUNTS_JSON || '{"outbox":0,"remote_command":0,"campaign":0}' }}
+      TF_VAR_aws_iot_data_endpoint: ${{ vars.DAY37_IOT_DATA_ENDPOINT }}
       TF_VAR_tenant_id: ${{ vars.DAY37_TENANT_ID }}
       TF_VAR_oidc_issuer: ${{ vars.DAY37_APP_OIDC_ISSUER }}
       TF_VAR_oidc_jwks_url: ${{ vars.DAY37_APP_OIDC_JWKS_URL }}
