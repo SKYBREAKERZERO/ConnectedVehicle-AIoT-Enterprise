@@ -243,8 +243,12 @@ def aws_json(*args: str) -> dict[str, Any]:
 
 
 def require_live_rotation(
-    metadata: Mapping[str, Any], *, secret_arn: str, secret_name: str,
-    account: str, kms_key_arn: str,
+    metadata: Mapping[str, Any],
+    *,
+    secret_arn: str,
+    secret_name: str,
+    account: str,
+    kms_key_arn: str,
 ) -> None:
     """Fail closed on unrotated Staging Secret metadata; never read credentials."""
     rule = metadata.get("RotationRules")
@@ -343,9 +347,11 @@ def live(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
                 "BLOCKED: app_user database Secret has no AWSCURRENT credentials version"
             )
         require_live_rotation(
-            secret, secret_arn=c["database_secret"],
+            secret,
+            secret_arn=c["database_secret"],
             secret_name="/connected-vehicle/staging/database/application",
-            account=c["account"], kms_key_arn=c["data_kms_key"],
+            account=c["account"],
+            kms_key_arn=c["data_kms_key"],
         )
         db = aws_json(
             "rds", "describe-db-instances", "--db-instance-identifier", "cv-ota-staging-postgres"
@@ -391,9 +397,11 @@ def live(mode: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
             ):
                 raise ValueError("BLOCKED: Redis auth Secret lacks reviewed current version")
             require_live_rotation(
-                auth, secret_arn=c["redis_auth_secret"],
+                auth,
+                secret_arn=c["redis_auth_secret"],
                 secret_name="/connected-vehicle/staging/redis/auth",
-                account=c["account"], kms_key_arn=c["data_kms_key"],
+                account=c["account"],
+                kms_key_arn=c["data_kms_key"],
             )
     if "target_group" in c:
         tgs = aws_json(
