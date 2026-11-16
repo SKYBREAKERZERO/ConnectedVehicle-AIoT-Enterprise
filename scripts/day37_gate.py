@@ -280,6 +280,7 @@ def plan_check(
         "aws_iam_role",
         "aws_iam_role_policy",
         "aws_iam_role_policy_attachment",
+        "aws_sqs_queue",
     }
     deploy_types = {"aws_ecs_task_definition", "aws_ecs_service"}
     for change in changes:
@@ -334,12 +335,27 @@ def plan_check(
             if raw is None:
                 raise ValueError("Unknown ECS image in plan")
             containers = json.loads(raw)
+            allowed_commands = {
+                "worker-outbox": ["python", "-m", "apps.outbox_worker.main"],
+                "worker-remote-command": ["python", "-m", "apps.remote_command_worker.main"],
+                "worker-campaign": ["python", "-m", "apps.campaign"],
+            }
+            name = containers[0].get("name", "vehicle-api") if len(containers) == 1 else ""
             if (
                 len(containers) != 1
-                or containers[0].get("name", "vehicle-api") != "vehicle-api"
+                or name not in {"vehicle-api", *allowed_commands}
                 or not containers[0].get("image", "").endswith("@" + expected_digest)
+                or (
+                    name in allowed_commands
+                    and (
+                        variables.get("enable_workers", {}).get("value") is not True
+                        or containers[0].get("command") != allowed_commands[name]
+                        or containers[0].get("readonlyRootFilesystem") is not True
+                        or containers[0].get("stopTimeout") != 120
+                    )
+                )
             ):
-                raise ValueError("Unexpected or mutable ECS image in Plan")
+                raise ValueError("Unexpected or mutable ECS image/Worker command in Plan")
     return {
         "decision": "NON_DESTRUCTIVE_TERRAFORM_PLAN",
         "phase": phase,
