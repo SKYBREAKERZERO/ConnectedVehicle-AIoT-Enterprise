@@ -167,8 +167,7 @@ def test_live_aws_resources_bind_exact_account_and_vpc(monkeypatch: pytest.Monke
             "KmsKeyId": e["TF_VAR_data_kms_key_arn"],
             "RotationEnabled": True,
             "RotationLambdaARN": (
-                f"arn:aws:lambda:ap-northeast-1:{e['DAY37_ACCOUNT_ID']}:"
-                "function:app-user-rotation"
+                f"arn:aws:lambda:ap-northeast-1:{e['DAY37_ACCOUNT_ID']}:function:app-user-rotation"
             ),
             "RotationRules": {"AutomaticallyAfterDays": 30},
             "LastRotatedDate": "2026-11-01T00:00:00Z",
@@ -239,8 +238,7 @@ def test_live_aws_resources_bind_exact_account_and_vpc(monkeypatch: pytest.Monke
     with pytest.raises(ValueError, match="rotation"):
         pf.live("deploy", e)
     results["describe-secret"]["RotationLambdaARN"] = (
-        f"arn:aws:lambda:ap-northeast-1:{e['DAY37_ACCOUNT_ID']}:"
-        "function:app-user-rotation"
+        f"arn:aws:lambda:ap-northeast-1:{e['DAY37_ACCOUNT_ID']}:function:app-user-rotation"
     )
     results["describe-secret"]["LastRotatedDate"] = ""
     with pytest.raises(ValueError, match="rotation"):
