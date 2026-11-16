@@ -74,3 +74,23 @@ def test_foundation_requires_private_alb_and_encryption() -> None:
         assert re.search(rf"(?m)^\s*{key}\s*=\s*true\s*$", text) is not None
     assert "auth_token_wo" in text
     assert 'oidc_application_provisioned" { value = false' in text
+
+
+def test_staging_secrets_require_verified_rotation() -> None:
+    root = ROOT / "infra/terraform/environments"
+    foundation = (root / "ota-staging-foundation/main.tf").read_text()
+    application = (root / "ota-staging/main.tf").read_text()
+    preflight = (ROOT / "scripts/day37_preflight.py").read_text()
+    # A pre-bootstrap Terraform root must not create empty, unrotated secrets.
+    assert 'resource "aws_secretsmanager_secret"' not in foundation
+    assert 'application_database_secret_name' in foundation
+    assert 'redis_auth_secret_name' in foundation
+    for name in ("application", "redis_auth"):
+        assert f'data "aws_secretsmanager_secret" "{name}"' in application
+        assert f'data "aws_secretsmanager_secret_rotation" "{name}"' in application
+    assert 'count     = var.enable_service ? 1 : 0' in application
+    assert 'self.rotation_enabled' in application
+    assert 'self.rotation_lambda_arn' in application
+    assert 'self.rotation_rules' in application
+    assert "require_live_rotation(" in preflight
+    assert 'metadata.get("LastRotatedDate")' in preflight
