@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import copy
 import sys
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 import pytest
 
@@ -93,7 +94,7 @@ def sample(phase: str) -> dict[str, Any]:
     return result
 
 
-def reader(data: dict[str, Any]):
+def reader(data: dict[str, Any]) -> Callable[..., dict[str, Any]]:
     def get(*args: str) -> dict[str, Any]:
         if args[:2] == ("sts", "get-caller-identity"):
             return copy.deepcopy(data["sts"])
@@ -169,7 +170,7 @@ def test_real_aws_prerequisites_fail_closed(mutation: str) -> None:
 
 
 def test_no_live_flag_cannot_generate_evidence(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     output = tmp_path / "evidence.json"
     monkeypatch.setattr(sys, "argv", [
