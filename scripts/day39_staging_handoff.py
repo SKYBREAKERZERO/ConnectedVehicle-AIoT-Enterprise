@@ -28,6 +28,8 @@ EXPECTED = {
 }
 SECRETS = {
     "application": "/connected-vehicle/staging/database/application",
+    "outbox": "/connected-vehicle/staging/database/outbox",
+    "remote-command": "/connected-vehicle/staging/database/remote-command",
     "redis": "/connected-vehicle/staging/redis/auth",
 }
 Reader = Callable[..., dict[str, Any]]
