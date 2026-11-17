@@ -59,17 +59,26 @@ def _plan(name: str, cmd: list[str], *, enabled: bool = True) -> dict[str, objec
             "enable_workers": {"value": enabled},
             "image_digest": {"value": image},
         },
-        "resource_changes": [{
-            "address": 'aws_ecs_task_definition.worker["outbox"]',
-            "type": "aws_ecs_task_definition",
-            "change": {"actions": ["create"], "after": {
-                "container_definitions": (
-                    '[{"name":"' + name + '","image":"repo@' + image +
-                    '","readonlyRootFilesystem":true,"stopTimeout":120,"command":' +
-                    json.dumps(cmd) + "}]"
-                )
-            }},
-        }],
+        "resource_changes": [
+            {
+                "address": 'aws_ecs_task_definition.worker["outbox"]',
+                "type": "aws_ecs_task_definition",
+                "change": {
+                    "actions": ["create"],
+                    "after": {
+                        "container_definitions": (
+                            '[{"name":"'
+                            + name
+                            + '","image":"repo@'
+                            + image
+                            + '","readonlyRootFilesystem":true,"stopTimeout":120,"command":'
+                            + json.dumps(cmd)
+                            + "}]"
+                        )
+                    },
+                },
+            }
+        ],
     }
 
 
@@ -79,11 +88,14 @@ def test_exact_worker_image_and_command_allowed_in_deploy_plan() -> None:
     assert plan_check(x, expected_digest=image, phase="deploy")["phase"] == "deploy"
 
 
-@pytest.mark.parametrize("name,command,enabled", [
-    ("worker-outbox", ["sh", "-c", "exit 0"], True),
-    ("worker-evil", ["python", "-m", "apps.outbox_worker.main"], True),
-    ("worker-outbox", ["python", "-m", "apps.outbox_worker.main"], False),
-])
+@pytest.mark.parametrize(
+    "name,command,enabled",
+    [
+        ("worker-outbox", ["sh", "-c", "exit 0"], True),
+        ("worker-evil", ["python", "-m", "apps.outbox_worker.main"], True),
+        ("worker-outbox", ["python", "-m", "apps.outbox_worker.main"], False),
+    ],
+)
 def test_unknown_or_unapproved_worker_deploy_plan_fails(
     name: str, command: list[str], enabled: bool
 ) -> None:
