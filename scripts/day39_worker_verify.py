@@ -64,12 +64,10 @@ def inspect(
         ),
         "independent Staging verify role required",
     )
-    if not any(counts.values()):
-        return {"decision": "WORKERS_DISABLED", "release_authorized": False, "verified": {}}
+    # A scaled-to-zero service must remain ACTIVE in ECS, not vanish from
+    # Terraform for_each/state. Never treat 0 desired as resource deletion.
     verified: dict[str, Any] = {}
     for kind, count in counts.items():
-        if not count:
-            continue
         name = "cv-ota-staging-" + kind.replace("_", "-")
         responses = read("ecs", "describe-services", "--cluster", cluster, "--services", name)
         rows = responses.get("services", [])
@@ -87,6 +85,22 @@ def inspect(
             ),
             "ECS Worker has not reached stable approved count",
         )
+        if count == 0:
+            items = read(
+                "ecs", "list-tasks", "--cluster", cluster,
+                "--service-name", name, "--desired-status", "RUNNING",
+            )
+            require(
+                not items.get("taskArns") and not items.get("nextToken"),
+                "Scaled-to-zero Worker still has RUNNING tasks",
+            )
+            verified[kind] = {
+                "service": name,
+                "running_count": 0,
+                "task_definition": service.get("taskDefinition"),
+                "task_arns": [],
+            }
+            continue
         items = read(
             "ecs",
             "list-tasks",
@@ -150,7 +164,10 @@ def inspect(
             "task_arns": task_ids,
         }
     return {
-        "decision": "WORKER_IDENTITY_VERIFIED",
+        "decision": (
+            "WORKER_IDENTITY_VERIFIED" if any(counts.values())
+            else "WORKER_SCALED_TO_ZERO_VERIFIED"
+        ),
         "release_authorized": False,
         "aws_account_id": account,
         "region": "ap-northeast-1",
@@ -180,7 +197,12 @@ def main() -> int:
             digest=args.digest,
             counts=counts,
         )
-        require(report["decision"] == "WORKER_IDENTITY_VERIFIED", "no approved active Workers")
+        require(
+            report["decision"] in {
+                "WORKER_IDENTITY_VERIFIED", "WORKER_SCALED_TO_ZERO_VERIFIED"
+            },
+            "Worker Service is missing or not safely scaled to zero",
+        )
         report["observed_at_utc"] = datetime.now(UTC).isoformat()
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("x", encoding="utf-8") as stream:
