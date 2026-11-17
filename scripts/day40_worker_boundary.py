@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import unquote
 
-from scripts.day39_worker_verify import KINDS, aws, inspect as inspect_tasks
+from scripts.day39_worker_verify import KINDS, aws
+from scripts.day39_worker_verify import inspect as inspect_tasks
 
 REGION = "ap-northeast-1"
 ROLE_PREFIX = "cv-ota-staging"
@@ -62,7 +63,9 @@ def only_statements(policy: Any) -> dict[str, dict[str, Any]]:
         require(isinstance(sid, str) and sid and sid not in result, "duplicate/missing IAM Sid")
         require(
             stmt.get("Effect") == "Allow"
-            and not any(k in stmt for k in ("NotAction", "NotResource", "Principal", "NotPrincipal")),
+            and not any(
+                k in stmt for k in ("NotAction", "NotResource", "Principal", "NotPrincipal")
+            ),
             "unexpected IAM privilege semantics",
         )
         result[sid] = stmt
@@ -78,7 +81,10 @@ def exact_statement(
 ) -> None:
     require(set(as_list(stmt.get("Action"))) == actions, "IAM action drift")
     require(set(as_list(stmt.get("Resource"))) == resources, "IAM resource drift")
-    require(stmt.get("Condition") == condition if condition else "Condition" not in stmt, "IAM condition drift")
+    require(
+        stmt.get("Condition") == condition if condition else "Condition" not in stmt,
+        "IAM condition drift",
+    )
 
 
 def kms_condition(account: str, secret_arn: str) -> dict[str, Any]:
@@ -92,7 +98,10 @@ def validate_trust(data: Any) -> None:
     doc = documents(data)
     require(doc.get("Version") == "2012-10-17", "IAM trust version mismatch")
     statements = as_list(doc.get("Statement", []))
-    require(len(statements) == 1 and isinstance(statements[0], dict), "IAM trust has extra statements")
+    require(
+        len(statements) == 1 and isinstance(statements[0], dict),
+        "IAM trust has extra statements",
+    )
     stmt = statements[0]
     require(
         stmt.get("Effect") == "Allow"
@@ -117,7 +126,10 @@ def role_policies(
     validate_trust(role.get("AssumeRolePolicyDocument"))
     inline = read("iam", "list-role-policies", "--role-name", role_name)
     attached = read("iam", "list-attached-role-policies", "--role-name", role_name)
-    require(not inline.get("IsTruncated") and not attached.get("IsTruncated"), "truncated IAM inventory")
+    require(
+        not inline.get("IsTruncated") and not attached.get("IsTruncated"),
+        "truncated IAM inventory",
+    )
     inline_names = inline.get("PolicyNames", [])
     attached_arns = [x.get("PolicyArn") for x in attached.get("AttachedPolicies", [])]
     require(
@@ -305,7 +317,9 @@ def verify_task(
         if port == 443 and len(targets) == 1 and not peers:
             return (443, "public-https") if targets[0].get("CidrIp") == "0.0.0.0/0" else None
         if len(peers) == 1 and not targets:
-            return (port, peers[0].get("GroupId"))
+            peer_id = peers[0].get("GroupId")
+            if isinstance(port, int) and isinstance(peer_id, str):
+                return (port, peer_id)
         return None
 
     expected_egress = {(443, "public-https"), (5432, database_sg)}
