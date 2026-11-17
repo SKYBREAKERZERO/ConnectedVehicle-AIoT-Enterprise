@@ -29,10 +29,7 @@ async def test_tenant_credentials_never_fall_back_to_global_roles(
         outbox_database_secret_id="/connected-vehicle/staging/database/outbox",
         remote_command_database_secret_id="/connected-vehicle/staging/database/remote-command",
     )
-    roles = {
-        runtime: runtime_database_user(runtime, tenant)
-        for runtime in DATABASE_USERS
-    }
+    roles = {runtime: runtime_database_user(runtime, tenant) for runtime in DATABASE_USERS}
     for runtime, base in DATABASE_USERS.items():
         monkeypatch.setenv(f"{base.upper()}_PASSWORD", f"candidate-{runtime}-secure")
     prepare = AsyncMock()
