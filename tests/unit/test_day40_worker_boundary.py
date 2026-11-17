@@ -135,7 +135,19 @@ def fake_read(data: dict[str, Any]) -> Callable[..., dict[str, Any]]:
             return {"SecurityGroups": [{
                 "GroupId": "sg-0123456789abcdef0",
                 "GroupName": "cv-ota-staging-outbox-abc",
+                "VpcId": "vpc-0123456789abcdef0",
                 "IpPermissions": [],
+                "IpPermissionsEgress": [
+                    {
+                        "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+                        "IpRanges": [{"CidrIp": "0.0.0.0/0"}], "UserIdGroupPairs": [],
+                    },
+                    {
+                        "IpProtocol": "tcp", "FromPort": 5432, "ToPort": 5432,
+                        "IpRanges": [],
+                        "UserIdGroupPairs": [{"GroupId": "sg-11111111"}],
+                    },
+                ],
             }]}
         if args[:2] == ("ecs", "describe-services"):
             result = deepcopy(data["service"])
@@ -184,6 +196,8 @@ def observe(read: Callable[..., dict[str, Any]]) -> dict[str, Any]:
         counts={"outbox": 1, "remote_command": 0, "campaign": 0}, secrets=SECRETS,
         redis_secret=REDIS_SECRET, kms_arn=KMS, redis_host="redis.private",
         iot_endpoint="", firmware_bucket=None, trust_file="",
+        vpc_id="vpc-0123456789abcdef0",
+        database_sg="sg-11111111", redis_sg="sg-22222222",
     )
 
 
@@ -199,6 +213,7 @@ def test_worker_all_exact_policy_and_configuration_checks_pass() -> None:
 @pytest.mark.parametrize("tamper", [
     "extra-action", "extra-resource", "wrong-tenant-db", "wrong-kms", "wrong-dlq",
     "wrong-secret", "secret-not-rotating", "no-current", "public-ip", "public-ingress",
+    "public-egress", "foreign-vpc",
     "extra-inline-policy", "extra-managed-policy", "wrong-assume-role",
     "wrong-task-env", "extra-password-env", "wrong-user", "wrong-image",
 ])
@@ -233,6 +248,12 @@ def test_worker_identity_or_config_drift_fails_closed(tamper: str) -> None:
             ] = "ENABLED"
         elif tamper == "public-ingress" and args[:2] == ("ec2", "describe-security-groups"):
             response["SecurityGroups"][0]["IpPermissions"] = [{"IpProtocol": "-1"}]
+        elif tamper == "public-egress" and args[:2] == ("ec2", "describe-security-groups"):
+            response["SecurityGroups"][0]["IpPermissionsEgress"].append({
+                "IpProtocol": "-1", "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+            })
+        elif tamper == "foreign-vpc" and args[:2] == ("ec2", "describe-security-groups"):
+            response["SecurityGroups"][0]["VpcId"] = "vpc-ffffffff"
         elif tamper == "extra-inline-policy" and args[:2] == ("iam", "list-role-policies"):
             response["PolicyNames"].append("AdminAccess")
         elif tamper == "extra-managed-policy" and args[:2] == ("iam", "list-attached-role-policies"):
