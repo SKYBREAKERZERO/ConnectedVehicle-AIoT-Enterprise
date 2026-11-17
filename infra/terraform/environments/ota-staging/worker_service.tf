@@ -103,13 +103,13 @@ resource "aws_ecs_task_definition" "worker" {
   }
 }
 
+# Zero desired_count retains ECS Service, Task Definition, SG, IAM and logs.
+# Never derive for_each membership from desired_count.
 resource "aws_ecs_service" "worker" {
   for_each                           = local.worker_active
   name                               = "${local.label}-${replace(each.key, "_", "-")}"
   cluster                            = aws_ecs_cluster.staging.id
   task_definition                    = aws_ecs_task_definition.worker[each.key].arn
-  # A zero count retains the ECS Service (and IAM, logs, SG, Task Definition).
-  # Never make for_each membership depend on desired_count.
   desired_count                      = var.worker_desired_counts[each.key]
   launch_type                        = "FARGATE"
   platform_version                   = "LATEST"
