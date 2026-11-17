@@ -44,7 +44,11 @@ def test_queue_is_encrypted_bounded_and_has_dlq() -> None:
     assert "visibility_timeout_seconds = 120" in base
     assert 'resource "aws_sqs_queue" "worker_commands"' in base
     assert 'resource "aws_sqs_queue" "worker_dlq"' in base
-    assert "0.0.0.0/0" not in base.split('resource "aws_security_group" "worker"')[1].split('resource "aws_vpc_security_group_ingress_rule"')[0]
+    security_group_block = base.split('resource "aws_security_group" "worker"')[1]
+    security_group_block = security_group_block.split(
+        'resource "aws_vpc_security_group_ingress_rule"'
+    )[0]
+    assert "0.0.0.0/0" not in security_group_block
 
 
 def _plan(name: str, cmd: list[str], *, enabled: bool = True) -> dict[str, object]:
