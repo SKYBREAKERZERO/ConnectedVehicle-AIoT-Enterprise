@@ -13,7 +13,7 @@ def test_independent_bootstrap_role_trust_is_not_github_oidc() -> None:
     assert 'resource "aws_iam_role" "bootstrap_admin"' in source
     block = source.split('resource "aws_iam_role" "bootstrap_admin"', 1)[1]
     block = block.split('resource "aws_iam_role_policy_attachment" "bootstrap_admin"', 1)[0]
-    assert 'Principal = { AWS = each.value }' in block
+    assert "Principal = { AWS = each.value }" in block
     assert 'Action    = "sts:AssumeRole"' in block
     assert "sts:AssumeRoleWithWebIdentity" not in block
     assert "token.actions.githubusercontent.com" not in block
@@ -27,8 +27,8 @@ def test_bootstrap_roles_have_distinct_reviewed_operator_and_policy_sources() ->
     assert '"cv-ota-staging-credential-admin"' in source
     assert '"bootstrap_operator_role_arns"' in source
     assert '"bootstrap_policy_arns"' in source
-    assert 'policy_arn = each.value' in source
-    assert 'role       = aws_iam_role.bootstrap_admin[each.key].name' in source
+    assert "policy_arn = each.value" in source
+    assert "role       = aws_iam_role.bootstrap_admin[each.key].name" in source
     assert "cv-ota-staging-operator-foundation" in source
     assert "cv-ota-staging-operator-credentials" in source
     assert "cv-ota-staging-admin/foundation" in source
