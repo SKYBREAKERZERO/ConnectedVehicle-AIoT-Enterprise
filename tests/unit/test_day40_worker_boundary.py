@@ -334,7 +334,11 @@ def test_worker_identity_or_config_drift_fails_closed(tamper: str) -> None:
 
     def modified(*args: str) -> dict[str, Any]:
         response = base(*args)
-        if tamper == "public-ip" and args[:2] == ("ecs", "describe-services"):
+        if (
+            tamper == "public-ip"
+            and args[:2] == ("ecs", "describe-services")
+            and args[-1] == "cv-ota-staging-outbox"
+        ):
             response["services"][0]["networkConfiguration"]["awsvpcConfiguration"][
                 "assignPublicIp"
             ] = "ENABLED"
