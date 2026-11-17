@@ -69,7 +69,8 @@ async def run(settings: Settings | None = None) -> None:
             # Unexpected failures are fatal: the process supervisor can restart
             # the worker, rather than silently dropping events.
             async with protect_worker_batch(settings):
-                await dispatcher.dispatch_batch()
+                async with asyncio.timeout(settings.worker_operation_timeout_seconds):
+                    await dispatcher.dispatch_batch()
             await _sleep_or_stop(stop, interval)
     logger.info("Outbox dispatcher stopped")
 
