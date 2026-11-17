@@ -399,11 +399,19 @@ def inspect(
         and bool(re.fullmatch(r"vpc-[a-f0-9]{8,17}", vpc_id)),
         "invalid approved VPC/database/Redis Security Group",
     )
-    identity = inspect_tasks(read, account=account, cluster=cluster, tenant=tenant,
-                             digest=digest, counts=counts)
+    kinds = [kind for kind, count in counts.items() if count]
+    # This is a hard release policy, not a promise that a shared DB role is
+    # independent. Reject Campaign before reading or accepting its ECS state.
+    require(
+        "campaign" not in kinds,
+        "Campaign shares application DB role and lacks attested trusted key delivery",
+    )
+    identity = inspect_tasks(
+        read, account=account, cluster=cluster, tenant=tenant,
+        digest=digest, counts=counts,
+    )
     require(identity["decision"] == "WORKER_IDENTITY_VERIFIED", "no active verified Workers")
     queue_arn = check_queue(read, account)
-    kinds = [kind for kind, count in counts.items() if count]
     if "remote_command" in kinds:
         require(
             bool(re.fullmatch(
@@ -412,13 +420,6 @@ def inspect(
             )),
             "unreviewed IoT Data Endpoint",
         )
-    # Campaign currently shares the API application DB principal, and its
-    # trust-root pathname has no proven read-only image/volume attestation.
-    # Do not label that configuration an independently isolated Worker.
-    require(
-        "campaign" not in kinds,
-        "Campaign still shares the application database role and lacks trusted key delivery",
-    )
     if "campaign" in kinds:
         require(
             isinstance(firmware_bucket, str)
