@@ -259,7 +259,7 @@ def verify_task(
     account: str, tenant: str, digest: str, cluster: str,
     db_secret: str, redis_secret: str, kms: str, queue_arn: str,
     redis_host: str, iot_endpoint: str, firmware_bucket: str | None,
-    trust_file: str,
+    trust_file: str, vpc_id: str, database_sg: str, redis_sg: str,
 ) -> dict[str, str]:
     name = f"{ROLE_PREFIX}-{kind.replace('_', '-')}"
     task_role = role_policies(
@@ -287,8 +287,34 @@ def verify_task(
     require(
         len(groups) == 1 and groups[0].get("GroupId") == sgs[0]
         and groups[0].get("GroupName", "").startswith(name + "-")
+        and groups[0].get("VpcId") == vpc_id
         and groups[0].get("IpPermissions") == [],
         "Worker Security Group identity or ingress drift",
+    )
+    egress = groups[0].get("IpPermissionsEgress", [])
+    require(isinstance(egress, list), "Worker egress inventory malformed")
+    def destination(item: dict[str, Any]) -> tuple[int, str] | None:
+        if (
+            item.get("IpProtocol") != "tcp"
+            or item.get("FromPort") != item.get("ToPort")
+        ):
+            return None
+        port = item.get("FromPort")
+        targets = item.get("IpRanges", [])
+        peers = item.get("UserIdGroupPairs", [])
+        if port == 443 and len(targets) == 1 and not peers:
+            return (443, "public-https") if targets[0].get("CidrIp") == "0.0.0.0/0" else None
+        if len(peers) == 1 and not targets:
+            return (port, peers[0].get("GroupId"))
+        return None
+
+    expected_egress = {(443, "public-https"), (5432, database_sg)}
+    if kind == "remote_command":
+        expected_egress.add((6379, redis_sg))
+    require(
+        len(egress) == len(expected_egress)
+        and {destination(entry) for entry in egress} == expected_egress,
+        "Worker Security Group egress has unauthorized destinations",
     )
     definition_arn = svc.get("taskDefinition")
     task = read(
@@ -350,7 +376,7 @@ def inspect(
     read: Reader, *, account: str, cluster: str, tenant: str, digest: str,
     counts: dict[str, int], secrets: dict[str, str], redis_secret: str,
     kms_arn: str, redis_host: str, iot_endpoint: str, firmware_bucket: str | None,
-    trust_file: str,
+    trust_file: str, vpc_id: str, database_sg: str, redis_sg: str,
 ) -> dict[str, Any]:
     require(
         bool(re.fullmatch(r"[0-9]{12}", account)) and cluster == ROLE_PREFIX
@@ -367,6 +393,12 @@ def inspect(
         "invalid KMS or per-Worker Secret isolation",
     )
     require(bool(redis_host) and not redis_host.startswith("http"), "invalid Redis host")
+    require(
+        all(re.fullmatch(r"sg-[a-f0-9]{8,17}", value)
+            for value in (database_sg, redis_sg))
+        and bool(re.fullmatch(r"vpc-[a-f0-9]{8,17}", vpc_id)),
+        "invalid approved VPC/database/Redis Security Group",
+    )
     identity = inspect_tasks(read, account=account, cluster=cluster, tenant=tenant,
                              digest=digest, counts=counts)
     require(identity["decision"] == "WORKER_IDENTITY_VERIFIED", "no active verified Workers")
@@ -396,6 +428,7 @@ def inspect(
             db_secret=db_secret, redis_secret=redis_secret, kms=kms_arn,
             queue_arn=queue_arn, redis_host=redis_host, iot_endpoint=iot_endpoint,
             firmware_bucket=firmware_bucket, trust_file=trust_file,
+            vpc_id=vpc_id, database_sg=database_sg, redis_sg=redis_sg,
         )
     if "remote_command" in kinds:
         verify_secret(read, account, "/connected-vehicle/staging/redis/auth",
@@ -416,6 +449,7 @@ def main() -> int:
         "account-id", "cluster", "tenant", "digest", "counts-json",
         "application-secret-arn", "outbox-secret-arn", "remote-secret-arn",
         "redis-secret-arn", "kms-key-arn", "redis-host", "iot-endpoint", "trust-file",
+        "vpc-id", "database-sg-id", "redis-sg-id", "source-sha",
     ):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--firmware-bucket-arn", default="")
@@ -431,6 +465,16 @@ def main() -> int:
                     for name, value in os.environ.items()),
             "AWS endpoint override forbidden",
         )
+        checkout = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True,
+            text=True, timeout=10, check=False,
+        )
+        require(
+            bool(re.fullmatch(r"[a-f0-9]{40}", args.source_sha))
+            and checkout.returncode == 0
+            and checkout.stdout.strip() == args.source_sha,
+            "approved source SHA and checkout differ",
+        )
         counts = json.loads(args.counts_json)
         require(isinstance(counts, dict), "invalid count payload")
         report = inspect(
@@ -445,7 +489,12 @@ def main() -> int:
             redis_host=args.redis_host, iot_endpoint=args.iot_endpoint,
             firmware_bucket=args.firmware_bucket_arn or None,
             trust_file=args.trust_file,
+            vpc_id=args.vpc_id, database_sg=args.database_sg_id,
+            redis_sg=args.redis_sg_id,
         )
+        report["source_sha"] = args.source_sha
+        report["run_id"] = os.environ.get("GITHUB_RUN_ID", "")
+        report["run_attempt"] = os.environ.get("GITHUB_RUN_ATTEMPT", "")
         report["observed_at_utc"] = datetime.now(UTC).isoformat()
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("x", encoding="utf-8") as stream:
