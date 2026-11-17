@@ -30,8 +30,7 @@ def reader(*args: str) -> dict[str, Any]:
                     "runningCount": 1,
                     "pendingCount": 0,
                     "taskDefinition": (
-                        "arn:aws:ecs:ap-northeast-1:123456789012:"
-                        "task-definition/outbox:3"
+                        "arn:aws:ecs:ap-northeast-1:123456789012:task-definition/outbox:3"
                     ),
                     "deployments": [{"status": "PRIMARY", "rolloutState": "COMPLETED"}],
                 }
@@ -67,8 +66,7 @@ def reader(*args: str) -> dict[str, Any]:
                     "lastStatus": "RUNNING",
                     "launchType": "FARGATE",
                     "taskDefinitionArn": (
-                        "arn:aws:ecs:ap-northeast-1:123456789012:"
-                        "task-definition/outbox:3"
+                        "arn:aws:ecs:ap-northeast-1:123456789012:task-definition/outbox:3"
                     ),
                     "containers": [{"lastStatus": "RUNNING", "imageDigest": DIGEST}],
                 }
