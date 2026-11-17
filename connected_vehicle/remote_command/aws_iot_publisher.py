@@ -13,9 +13,7 @@ from connected_vehicle.remote_command.mqtt_publisher import MQTTRemoteCommandPub
 from enterprise_platform.config.environment import CloudRuntime
 from enterprise_platform.config.settings import Settings
 
-ENDPOINT_RE = re.compile(
-    r"[a-z0-9-]+-ats\.iot\.ap-northeast-1\.amazonaws\.com\Z"
-)
+ENDPOINT_RE = re.compile(r"[a-z0-9-]+-ats\.iot\.ap-northeast-1\.amazonaws\.com\Z")
 TENANT_RE = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
 
@@ -36,9 +34,7 @@ class IoTCoreMQTTAdapter:
         self._client = client
         self._topic_prefix = f"tenants/{tenant}/vehicles/"
 
-    async def publish(
-        self, topic: str, payload: bytes, *, qos: int, retain: bool
-    ) -> object:
+    async def publish(self, topic: str, payload: bytes, *, qos: int, retain: bool) -> object:
         if (
             not topic.startswith(self._topic_prefix)
             or not topic.endswith("/commands")
