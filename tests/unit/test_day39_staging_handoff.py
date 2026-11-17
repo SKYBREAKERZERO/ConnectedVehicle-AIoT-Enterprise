@@ -36,25 +36,29 @@ def sample(phase: str) -> dict[str, Any]:
         },
         "describe-vpcs": {"Vpcs": [{"VpcId": VPC, "State": "available"}]},
         "describe-db-instances": {
-            "DBInstances": [{
-                "DBInstanceIdentifier": "cv-ota-staging-postgres",
-                "DBInstanceStatus": "available",
-                "Engine": "postgres",
-                "EngineVersion": "17.7",
-                "StorageEncrypted": True,
-                "MultiAZ": True,
-                "PubliclyAccessible": False,
-                "DeletionProtection": True,
-                "DBSubnetGroup": {"VpcId": VPC},
-            }]
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": "cv-ota-staging-postgres",
+                    "DBInstanceStatus": "available",
+                    "Engine": "postgres",
+                    "EngineVersion": "17.7",
+                    "StorageEncrypted": True,
+                    "MultiAZ": True,
+                    "PubliclyAccessible": False,
+                    "DeletionProtection": True,
+                    "DBSubnetGroup": {"VpcId": VPC},
+                }
+            ]
         },
         "describe-replication-groups": {
-            "ReplicationGroups": [{
-                "ReplicationGroupId": "cv-ota-staging-redis",
-                "Status": "available",
-                "TransitEncryptionEnabled": True,
-                "AtRestEncryptionEnabled": True,
-            }]
+            "ReplicationGroups": [
+                {
+                    "ReplicationGroupId": "cv-ota-staging-redis",
+                    "Status": "available",
+                    "TransitEncryptionEnabled": True,
+                    "AtRestEncryptionEnabled": True,
+                }
+            ]
         },
         name: {
             "Name": name,
@@ -63,9 +67,7 @@ def sample(phase: str) -> dict[str, Any]:
             "VersionIdsToStages": {"a" * 32: ["AWSCURRENT"]},
             "RotationEnabled": True,
             "RotationRules": {"AutomaticallyAfterDays": 30},
-            "RotationLambdaARN": (
-                f"arn:aws:lambda:ap-northeast-1:{ACCOUNT}:function:app-rotator"
-            ),
+            "RotationLambdaARN": (f"arn:aws:lambda:ap-northeast-1:{ACCOUNT}:function:app-rotator"),
             "LastRotatedDate": "2026-11-16T00:00:00Z",
         },
         red: {
@@ -115,8 +117,12 @@ def reader(data: dict[str, Any]) -> Callable[..., dict[str, Any]]:
 @pytest.mark.parametrize("phase", ["foundation", "credentials"])
 def test_readonly_handoff_is_not_release_authority(phase: str) -> None:
     output = b.inspect(
-        reader(sample(phase)), phase=phase, account=ACCOUNT, kms_arn=KMS,
-        vpc=VPC, source_sha=SHA,
+        reader(sample(phase)),
+        phase=phase,
+        account=ACCOUNT,
+        kms_arn=KMS,
+        vpc=VPC,
+        source_sha=SHA,
     )
     assert output["release_authorized"] is False
     assert output["aws_apply_executed"] is False
@@ -128,29 +134,35 @@ def test_readonly_handoff_is_not_release_authority(phase: str) -> None:
 
 def test_wrong_administrator_and_cross_account_denied() -> None:
     data = sample("credentials")
-    data["sts"]["Arn"] = (
-        f"arn:aws:sts::{ACCOUNT}:assumed-role/cv-ota-staging-deploy/session"
-    )
+    data["sts"]["Arn"] = f"arn:aws:sts::{ACCOUNT}:assumed-role/cv-ota-staging-deploy/session"
     with pytest.raises(ValueError, match="administrator"):
-        b.inspect(reader(data), phase="credentials", account=ACCOUNT, kms_arn=KMS,
-                  vpc=VPC, source_sha=SHA)
+        b.inspect(
+            reader(data), phase="credentials", account=ACCOUNT, kms_arn=KMS, vpc=VPC, source_sha=SHA
+        )
     with pytest.raises(ValueError, match="foreign/invalid"):
         b.validate_target(ACCOUNT, KMS.replace(ACCOUNT, "999999999999"), VPC, SHA)
 
 
-@pytest.mark.parametrize("mutation", [
-    "missing-rotation", "foreign-lambda", "no-current", "pending",
-    "no-rotation-date", "wrong-kms", "disabled-rds", "redis-no-tls",
-])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-rotation",
+        "foreign-lambda",
+        "no-current",
+        "pending",
+        "no-rotation-date",
+        "wrong-kms",
+        "disabled-rds",
+        "redis-no-tls",
+    ],
+)
 def test_real_aws_prerequisites_fail_closed(mutation: str) -> None:
     data = sample("credentials")
     secret = data[b.SECRETS["application"]]
     if mutation == "missing-rotation":
         secret["RotationEnabled"] = False
     elif mutation == "foreign-lambda":
-        secret["RotationLambdaARN"] = secret["RotationLambdaARN"].replace(
-            ACCOUNT, "999999999999"
-        )
+        secret["RotationLambdaARN"] = secret["RotationLambdaARN"].replace(ACCOUNT, "999999999999")
     elif mutation == "no-current":
         secret["VersionIdsToStages"] = {"a" * 32: ["AWSPREVIOUS"]}
     elif mutation == "pending":
@@ -162,23 +174,39 @@ def test_real_aws_prerequisites_fail_closed(mutation: str) -> None:
     elif mutation == "disabled-rds":
         data["describe-db-instances"]["DBInstances"][0]["PubliclyAccessible"] = True
     elif mutation == "redis-no-tls":
-        data["describe-replication-groups"]["ReplicationGroups"][0][
-            "TransitEncryptionEnabled"
-        ] = False
+        data["describe-replication-groups"]["ReplicationGroups"][0]["TransitEncryptionEnabled"] = (
+            False
+        )
     with pytest.raises(ValueError, match="DAY39 BLOCKED"):
-        b.inspect(reader(data), phase="credentials", account=ACCOUNT, kms_arn=KMS,
-                  vpc=VPC, source_sha=SHA)
+        b.inspect(
+            reader(data), phase="credentials", account=ACCOUNT, kms_arn=KMS, vpc=VPC, source_sha=SHA
+        )
 
 
 def test_no_live_flag_cannot_generate_evidence(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     output = tmp_path / "evidence.json"
-    monkeypatch.setattr(sys, "argv", [
-        "day39", "--phase", "foundation", "--account-id", ACCOUNT,
-        "--data-kms-key-arn", KMS, "--vpc-id", VPC,
-        "--source-sha", SHA, "--output", str(output),
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "day39",
+            "--phase",
+            "foundation",
+            "--account-id",
+            ACCOUNT,
+            "--data-kms-key-arn",
+            KMS,
+            "--vpc-id",
+            VPC,
+            "--source-sha",
+            SHA,
+            "--output",
+            str(output),
+        ],
+    )
     monkeypatch.setattr(b, "aws_json", lambda *args: pytest.fail("AWS called"))
     assert b.main() == 1
     assert not output.exists()
