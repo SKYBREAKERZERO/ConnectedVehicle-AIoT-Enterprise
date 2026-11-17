@@ -195,6 +195,18 @@ def fake_read(data: dict[str, Any]) -> Callable[..., dict[str, Any]]:
                     }
                 ]
             }
+        if args[:2] == ("ecs", "describe-services") and args[-1] != "cv-ota-staging-outbox":
+            return {
+                "services": [{
+                    "serviceName": args[-1], "status": "ACTIVE",
+                    "desiredCount": 0, "runningCount": 0, "pendingCount": 0,
+                    "taskDefinition": "arn:aws:ecs:ap-northeast-1:123456789012:"
+                    "task-definition/dormant:1",
+                    "deployments": [{"status": "PRIMARY", "rolloutState": "COMPLETED"}],
+                }]
+            }
+        if args[:2] == ("ecs", "list-tasks") and args[5] != "cv-ota-staging-outbox":
+            return {"taskArns": []}
         if args[:2] == ("ecs", "describe-services"):
             result = cast(dict[str, Any], deepcopy(data["service"]))
             result["services"][0]["networkConfiguration"] = {
