@@ -377,6 +377,7 @@ def verify_task(
     )
     egress = groups[0].get("IpPermissionsEgress", [])
     require(isinstance(egress, list), "Worker egress inventory malformed")
+
     def destination(item: dict[str, Any]) -> tuple[int, str] | None:
         if item.get("IpProtocol") != "tcp" or item.get("FromPort") != item.get("ToPort"):
             return None
