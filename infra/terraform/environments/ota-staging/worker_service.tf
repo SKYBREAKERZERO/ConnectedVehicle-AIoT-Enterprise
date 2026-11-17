@@ -124,11 +124,7 @@ resource "aws_ecs_service" "worker" {
     subnets          = var.private_subnet_ids
     # All three references are static for source-graph verification. Terraform
     # evaluates exactly ONE SG for the matching worker; no cross-worker access.
-    security_groups = [
-      each.key == "outbox" ? aws_security_group.worker["outbox"].id :
-      each.key == "remote_command" ? aws_security_group.worker["remote_command"].id :
-      aws_security_group.worker["campaign"].id
-    ]
+    security_groups  = [each.key == "outbox" ? aws_security_group.worker["outbox"].id : each.key == "remote_command" ? aws_security_group.worker["remote_command"].id : aws_security_group.worker["campaign"].id]
     assign_public_ip = false
   }
   lifecycle { prevent_destroy = true }
