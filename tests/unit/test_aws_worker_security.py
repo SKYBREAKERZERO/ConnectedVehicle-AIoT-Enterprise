@@ -18,10 +18,16 @@ from enterprise_platform.config.settings import Settings
 
 def test_aws_redis_connections_require_cert_verified_tls() -> None:
     settings = Settings.model_construct(
-        cloud_runtime=CloudRuntime.AWS, redis_host="redis.internal", redis_port=6379,
-        redis_db=0, redis_username=None, redis_password=None,
-        redis_connect_timeout_seconds=3, redis_socket_timeout_seconds=5,
-        redis_max_connections=20, redis_key_prefix="staging",
+        cloud_runtime=CloudRuntime.AWS,
+        redis_host="redis.internal",
+        redis_port=6379,
+        redis_db=0,
+        redis_username=None,
+        redis_password=None,
+        redis_connect_timeout_seconds=3,
+        redis_socket_timeout_seconds=5,
+        redis_max_connections=20,
+        redis_key_prefix="staging",
     )
     with (
         patch("enterprise_platform.cache.client.ConnectionPool") as pool,
@@ -36,10 +42,15 @@ def test_aws_redis_connections_require_cert_verified_tls() -> None:
 def test_localstack_redis_does_not_force_cloud_tls() -> None:
     settings = Settings.model_construct(
         cloud_runtime=CloudRuntime.LOCALSTACK,
-        redis_host="localhost", redis_port=16379, redis_db=0,
-        redis_username=None, redis_password=None,
-        redis_connect_timeout_seconds=3, redis_socket_timeout_seconds=5,
-        redis_max_connections=20, redis_key_prefix="local",
+        redis_host="localhost",
+        redis_port=16379,
+        redis_db=0,
+        redis_username=None,
+        redis_password=None,
+        redis_connect_timeout_seconds=3,
+        redis_socket_timeout_seconds=5,
+        redis_max_connections=20,
+        redis_key_prefix="local",
     )
     with (
         patch("enterprise_platform.cache.client.ConnectionPool") as pool,
