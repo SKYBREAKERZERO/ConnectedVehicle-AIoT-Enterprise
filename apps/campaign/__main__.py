@@ -72,7 +72,8 @@ async def run(identifier: str | None, once: bool, interval: float, crash: bool =
                 # A deadline cancels IO; transaction rollback or durable operation IDs handle retry.
                 try:
                     async with protect_worker_batch(settings):
-                        async with asyncio.timeout(120):
+                        # Leave 30 seconds for audit, DB pool cleanup and protection release.
+                        async with asyncio.timeout(90):
                             result = await campaigns.dispatch(settings.database_tenant_id, current)
                 except TaskProtectionError:
                     # Do not continue polling after AWS rejected protection.
