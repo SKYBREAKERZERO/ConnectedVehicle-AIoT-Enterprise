@@ -72,7 +72,8 @@ def test_worker_tampering_denied(tamper: str) -> None:
     def altered(*args: str) -> dict[str, Any]:
         result = reader(*args)
         if tamper == "wrong-tenant" and args[1] == "describe-task-definition":
-            result["taskDefinition"]["containerDefinitions"][0]["environment"][0]["value"] = "victim"
+            environment = result["taskDefinition"]["containerDefinitions"][0]["environment"]
+            environment[0]["value"] = "victim"
         elif tamper == "wrong-digest" and args[1] == "describe-tasks":
             result["tasks"][0]["containers"][0]["imageDigest"] = "sha256:" + "b" * 64
         elif tamper == "wrong-role" and args[1] == "describe-task-definition":
