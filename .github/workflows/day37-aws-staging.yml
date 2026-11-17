@@ -696,6 +696,9 @@ jobs:
         DAY40_IOT_ENDPOINT: ${{ vars.DAY37_IOT_DATA_ENDPOINT }}
         DAY40_FIRMWARE_BUCKET_ARN: ${{ vars.DAY37_STAGING_FIRMWARE_BUCKET_ARN }}
         DAY40_TRUST_FILE: ${{ vars.DAY37_CAMPAIGN_TRUST_ROOT_PATH }}
+        DAY40_VPC_ID: ${{ vars.DAY37_VPC_ID }}
+        DAY40_DATABASE_SG: ${{ vars.DAY37_DATABASE_SG_ID }}
+        DAY40_REDIS_SG: ${{ vars.DAY37_REDIS_SG_ID }}
       run: |
         set -euo pipefail
         DIGEST=$(python -c "import json;print(json.load(open('.day37/publish/release.json'))['registry_digest'])")
@@ -716,6 +719,9 @@ jobs:
           --iot-endpoint "$DAY40_IOT_ENDPOINT" \
           --firmware-bucket-arn "$DAY40_FIRMWARE_BUCKET_ARN" \
           --trust-file "$DAY40_TRUST_FILE" \
+          --vpc-id "$DAY40_VPC_ID" \
+          --database-sg-id "$DAY40_DATABASE_SG" --redis-sg-id "$DAY40_REDIS_SG" \
+          --source-sha "$GITHUB_SHA" \
           --output .day37/verify/worker-boundaries.json
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: ${{ vars.DAY37_ENABLE_WORKERS == 'true' }}
