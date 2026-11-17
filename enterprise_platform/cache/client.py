@@ -8,7 +8,6 @@ from redis.asyncio import ConnectionPool, Redis
 from redis.asyncio.connection import SSLConnection
 
 from enterprise_platform.config.environment import CloudRuntime
-
 from enterprise_platform.config.settings import Settings
 
 
