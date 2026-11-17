@@ -88,14 +88,14 @@ resource "aws_ecs_task_definition" "worker" {
     }
     precondition {
       condition = (
-        each.key != "remote_command" ||
+        (each.key != "remote_command" || var.worker_desired_counts[each.key] == 0) ||
         (var.aws_iot_data_endpoint != "" && can(regex("^[a-z0-9-]+-ats\\.iot\\.ap-northeast-1\\.amazonaws\\.com$", var.aws_iot_data_endpoint)))
       )
       error_message = "Remote Command Worker requires reviewed ATS AWS IoT Core endpoint"
     }
     precondition {
       condition = (
-        each.key != "campaign" ||
+        (each.key != "campaign" || var.worker_desired_counts[each.key] == 0) ||
         (var.staging_firmware_bucket_arn != null && var.campaign_trust_root_ready && var.campaign_trust_root_path != "")
       )
       error_message = "Campaign requires pinned S3 artifact scope and independently reviewed trust roots"
@@ -108,6 +108,8 @@ resource "aws_ecs_service" "worker" {
   name                               = "${local.label}-${replace(each.key, "_", "-")}"
   cluster                            = aws_ecs_cluster.staging.id
   task_definition                    = aws_ecs_task_definition.worker[each.key].arn
+  # A zero count retains the ECS Service (and IAM, logs, SG, Task Definition).
+  # Never make for_each membership depend on desired_count.
   desired_count                      = var.worker_desired_counts[each.key]
   launch_type                        = "FARGATE"
   platform_version                   = "LATEST"
