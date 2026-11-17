@@ -66,6 +66,18 @@ data "aws_iam_policy_document" "worker" {
       values   = [local.worker_secret_arns[each.key]]
     }
   }
+  # ECS agent calls these APIs to protect this Staging cluster's in-flight
+  # Worker task from ECS deployment/scale-in; no ECS service mutation allowed.
+  statement {
+    sid       = "ProtectOnlyStagingWorkerTasks"
+    actions   = ["ecs:GetTaskProtection", "ecs:UpdateTaskProtection"]
+    resources = ["arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task/${aws_ecs_cluster.staging.name}/*"]
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = [aws_ecs_cluster.staging.arn]
+    }
+  }
   dynamic "statement" {
     for_each = each.key == "outbox" ? [1] : []
     content {
