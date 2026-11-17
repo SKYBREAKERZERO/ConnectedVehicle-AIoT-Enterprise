@@ -28,7 +28,10 @@ def require(value: Any, message: str) -> None:
 def aws(*args: str) -> dict[str, Any]:
     result = subprocess.run(
         ["aws", *args, "--region", "ap-northeast-1", "--output", "json"],
-        capture_output=True, text=True, timeout=30, check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     require(result.returncode == 0, "AWS read-only call failed")
     value = json.loads(result.stdout)
@@ -37,7 +40,12 @@ def aws(*args: str) -> dict[str, Any]:
 
 
 def inspect(
-    read: Reader, *, account: str, cluster: str, tenant: str, digest: str,
+    read: Reader,
+    *,
+    account: str,
+    cluster: str,
+    tenant: str,
+    digest: str,
     counts: dict[str, int],
 ) -> dict[str, Any]:
     require(bool(re.fullmatch(r"[0-9]{12}", account)), "invalid account")
@@ -45,8 +53,7 @@ def inspect(
     require(bool(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tenant)), "invalid tenant")
     require(bool(re.fullmatch(r"sha256:[0-9a-f]{64}", digest)), "invalid manifest digest")
     require(
-        set(counts) == set(KINDS)
-        and all(type(v) is int and 0 <= v <= 2 for v in counts.values()),
+        set(counts) == set(KINDS) and all(type(v) is int and 0 <= v <= 2 for v in counts.values()),
         "invalid Worker cardinality",
     )
     identity = read("sts", "get-caller-identity")
@@ -81,8 +88,14 @@ def inspect(
             "ECS Worker has not reached stable approved count",
         )
         items = read(
-            "ecs", "list-tasks", "--cluster", cluster, "--service-name", name,
-            "--desired-status", "RUNNING",
+            "ecs",
+            "list-tasks",
+            "--cluster",
+            cluster,
+            "--service-name",
+            name,
+            "--desired-status",
+            "RUNNING",
         )
         task_ids = items.get("taskArns", [])
         require(
@@ -104,14 +117,13 @@ def inspect(
             and containers[0].get("command") == KINDS[kind]
             and containers[0].get("readonlyRootFilesystem") is True
             and containers[0].get("stopTimeout") == 120
-            and definition.get("taskRoleArn")
-            == f"arn:aws:iam::{account}:role/{name}"
-            and definition.get("executionRoleArn")
-            == f"arn:aws:iam::{account}:role/{name}-exec",
+            and definition.get("taskRoleArn") == f"arn:aws:iam::{account}:role/{name}"
+            and definition.get("executionRoleArn") == f"arn:aws:iam::{account}:role/{name}-exec",
             "Worker Task Definition differs from approved image/role/command",
         )
         environment = {
-            row["name"]: row["value"] for row in containers[0].get("environment", [])
+            row["name"]: row["value"]
+            for row in containers[0].get("environment", [])
             if "name" in row and "value" in row
         }
         require(
@@ -131,11 +143,20 @@ def inspect(
                 and actual[0].get("imageDigest") == digest,
                 "Worker Task is unhealthy or not running approved image",
             )
-        verified[kind] = {"service": name, "running_count": count,
-                          "task_definition": definition_arn, "task_arns": task_ids}
-    return {"decision": "WORKER_IDENTITY_VERIFIED", "release_authorized": False,
-            "aws_account_id": account, "region": "ap-northeast-1",
-            "image_digest": digest, "verified": verified}
+        verified[kind] = {
+            "service": name,
+            "running_count": count,
+            "task_definition": definition_arn,
+            "task_arns": task_ids,
+        }
+    return {
+        "decision": "WORKER_IDENTITY_VERIFIED",
+        "release_authorized": False,
+        "aws_account_id": account,
+        "region": "ap-northeast-1",
+        "image_digest": digest,
+        "verified": verified,
+    }
 
 
 def main() -> int:
@@ -152,8 +173,12 @@ def main() -> int:
         counts = json.loads(args.counts_json)
         require(isinstance(counts, dict), "invalid Worker counts JSON")
         report = inspect(
-            aws, account=args.account_id, cluster=args.cluster, tenant=args.tenant,
-            digest=args.digest, counts=counts,
+            aws,
+            account=args.account_id,
+            cluster=args.cluster,
+            tenant=args.tenant,
+            digest=args.digest,
+            counts=counts,
         )
         require(report["decision"] == "WORKER_IDENTITY_VERIFIED", "no approved active Workers")
         report["observed_at_utc"] = datetime.now(UTC).isoformat()
