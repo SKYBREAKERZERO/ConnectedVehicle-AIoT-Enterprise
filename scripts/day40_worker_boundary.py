@@ -187,7 +187,11 @@ def role_policies(
         )
         return arn
 
-    expected = {"ReadExactlyOneTenantDatabaseSecret", "DecryptExactlyOneTenantDatabaseSecret"}
+    expected = {
+        "ReadExactlyOneTenantDatabaseSecret",
+        "DecryptExactlyOneTenantDatabaseSecret",
+        "ProtectOnlyStagingWorkerTasks",
+    }
     if kind == "outbox":
         expected.add("SendCommandEventsOnly")
     if kind == "remote_command":
@@ -205,6 +209,12 @@ def role_policies(
         actions={"kms:Decrypt"},
         resources={kms_arn},
         condition=kms_condition(account, db_secret),
+    )
+    exact_statement(
+        entries["ProtectOnlyStagingWorkerTasks"],
+        actions={"ecs:GetTaskProtection", "ecs:UpdateTaskProtection"},
+        resources={f"arn:aws:ecs:{REGION}:{account}:task/{ROLE_PREFIX}/*"},
+        condition={"ArnEquals": {"ecs:cluster": f"arn:aws:ecs:{REGION}:{account}:cluster/{ROLE_PREFIX}"}},
     )
     if kind == "outbox":
         exact_statement(
