@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -22,10 +22,13 @@ TENANT = "tenant_staging_01"
 REGION = "ap-northeast-1"
 DIGEST = "sha256:" + "a" * 64
 KMS = f"arn:aws:kms:{REGION}:{ACCOUNT}:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+DB_SECRET_PREFIX = (
+    f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:/connected-vehicle/staging/database"
+)
 SECRETS = {
-    "outbox": f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:/connected-vehicle/staging/database/outbox-aabbcc",
-    "remote_command": f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:/connected-vehicle/staging/database/remote-command-aabbcc",
-    "campaign": f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:/connected-vehicle/staging/database/application-aabbcc",
+    "outbox": DB_SECRET_PREFIX + "/outbox-aabbcc",
+    "remote_command": DB_SECRET_PREFIX + "/remote-command-aabbcc",
+    "campaign": DB_SECRET_PREFIX + "/application-aabbcc",
 }
 REDIS_SECRET = (
     f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:"
@@ -150,7 +153,7 @@ def fake_read(data: dict[str, Any]) -> Callable[..., dict[str, Any]]:
                 ],
             }]}
         if args[:2] == ("ecs", "describe-services"):
-            result = deepcopy(data["service"])
+            result = cast(dict[str, Any], deepcopy(data["service"]))
             result["services"][0]["networkConfiguration"] = {
                 "awsvpcConfiguration": {
                     "assignPublicIp": "DISABLED",
@@ -256,8 +259,13 @@ def test_worker_identity_or_config_drift_fails_closed(tamper: str) -> None:
             response["SecurityGroups"][0]["VpcId"] = "vpc-ffffffff"
         elif tamper == "extra-inline-policy" and args[:2] == ("iam", "list-role-policies"):
             response["PolicyNames"].append("AdminAccess")
-        elif tamper == "extra-managed-policy" and args[:2] == ("iam", "list-attached-role-policies"):
-            response["AttachedPolicies"].append({"PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"})
+        elif tamper == "extra-managed-policy" and args[:2] == (
+            "iam",
+            "list-attached-role-policies",
+        ):
+            response["AttachedPolicies"].append(
+                {"PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}
+            )
         elif tamper == "wrong-assume-role" and args[:2] == ("iam", "get-role"):
             response["Role"]["AssumeRolePolicyDocument"]["Statement"][0][
                 "Principal"
@@ -273,7 +281,9 @@ def test_worker_identity_or_config_drift_fails_closed(tamper: str) -> None:
         elif tamper == "wrong-user" and args[:2] == ("ecs", "describe-task-definition"):
             response["taskDefinition"]["containerDefinitions"][0]["user"] = "0:0"
         elif tamper == "wrong-image" and args[:2] == ("ecs", "describe-task-definition"):
-            response["taskDefinition"]["containerDefinitions"][0]["image"] = "repo@sha256:" + "b" * 64
+            response["taskDefinition"]["containerDefinitions"][0]["image"] = (
+                "repo@sha256:" + "b" * 64
+            )
         return response
 
     with pytest.raises(ValueError, match="WORKER BLOCKED"):
@@ -336,20 +346,21 @@ def test_remote_worker_receives_exact_iot_and_redis_execution_permissions() -> N
             ])}
         return base(*args)
 
-    params = {
-        "read": remote, "account": ACCOUNT, "kind": "remote_command",
-        "db_secret": SECRETS["remote_command"], "redis_secret": REDIS_SECRET,
-        "kms_arn": KMS, "queue_arn": QUEUE, "tenant": TENANT,
-        "firmware_bucket": None,
-    }
-    assert role_policies(**params, execution=False).endswith("-remote-command")
-    assert role_policies(**params, execution=True).endswith("-remote-command-exec")
+    def verify_remote(execution: bool) -> str:
+        return role_policies(
+            remote, ACCOUNT, "remote_command", execution=execution,
+            db_secret=SECRETS["remote_command"], redis_secret=REDIS_SECRET,
+            kms_arn=KMS, queue_arn=QUEUE, tenant=TENANT, firmware_bucket=None,
+        )
+
+    assert verify_remote(execution=False).endswith("-remote-command")
+    assert verify_remote(execution=True).endswith("-remote-command-exec")
 
     data["role_policy"]["Statement"][-1]["Resource"] = (
         f"arn:aws:iot:{REGION}:{ACCOUNT}:topic/tenants/*/vehicles/*/commands"
     )
     with pytest.raises(ValueError, match="WORKER BLOCKED"):
-        role_policies(**params, execution=False)
+        verify_remote(execution=False)
 
 
 def test_campaign_shared_api_database_identity_blocks_acceptance() -> None:
