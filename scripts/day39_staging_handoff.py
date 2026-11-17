@@ -122,7 +122,9 @@ def verify_foundation(read: Reader, account: str, kms_arn: str, vpc: str) -> dic
         "RDS security/readiness contract failed",
     )
     caches = read(
-        "elasticache", "describe-replication-groups", "--replication-group-id",
+        "elasticache",
+        "describe-replication-groups",
+        "--replication-group-id",
         "cv-ota-staging-redis",
     ).get("ReplicationGroups", [])
     require(len(caches) == 1, "missing staging Redis replication group")
@@ -133,13 +135,15 @@ def verify_foundation(read: Reader, account: str, kms_arn: str, vpc: str) -> dic
         and cache.get("AtRestEncryptionEnabled") is True,
         "Redis TLS/encryption/readiness contract failed",
     )
-    return {"vpc_id": vpc, "rds_id": db["DBInstanceIdentifier"],
-            "redis_id": cache["ReplicationGroupId"], "kms_key_arn": kms_arn}
+    return {
+        "vpc_id": vpc,
+        "rds_id": db["DBInstanceIdentifier"],
+        "redis_id": cache["ReplicationGroupId"],
+        "kms_key_arn": kms_arn,
+    }
 
 
-def verify_secret(
-    read: Reader, account: str, key: str, kms_arn: str, name: str
-) -> dict[str, str]:
+def verify_secret(read: Reader, account: str, key: str, kms_arn: str, name: str) -> dict[str, str]:
     meta = read("secretsmanager", "describe-secret", "--secret-id", name)
     arn = meta.get("ARN")
     require(
@@ -155,8 +159,7 @@ def verify_secret(
         isinstance(stages, dict)
         and len(stages) > 0
         and all(
-            isinstance(labels, list)
-            and all(isinstance(label, str) for label in labels)
+            isinstance(labels, list) and all(isinstance(label, str) for label in labels)
             for labels in stages.values()
         ),
         "missing or malformed Secret versions: " + key,
@@ -181,10 +184,12 @@ def verify_secret(
     lam = meta.get("RotationLambdaARN", "")
     require(
         isinstance(lam, str)
-        and bool(re.fullmatch(
-            rf"arn:aws:lambda:{REGION}:{account}:function:[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?",
-            lam,
-        )),
+        and bool(
+            re.fullmatch(
+                rf"arn:aws:lambda:{REGION}:{account}:function:[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?",
+                lam,
+            )
+        ),
         "Lambda rotation identity invalid: " + key,
     )
     require(bool(meta.get("LastRotatedDate")), "no actual prior rotation evidence: " + key)
@@ -199,7 +204,12 @@ def verify_secret(
 
 
 def inspect(
-    read: Reader, *, phase: str, account: str, kms_arn: str, vpc: str,
+    read: Reader,
+    *,
+    phase: str,
+    account: str,
+    kms_arn: str,
+    vpc: str,
     source_sha: str,
 ) -> dict[str, Any]:
     require(phase in EXPECTED, "unknown bootstrap phase")
@@ -221,8 +231,7 @@ def inspect(
     }
     if phase == "credentials":
         output["secrets"] = {
-            key: verify_secret(read, account, key, kms_arn, name)
-            for key, name in SECRETS.items()
+            key: verify_secret(read, account, key, kms_arn, name) for key, name in SECRETS.items()
         }
     return output
 
@@ -247,8 +256,12 @@ def main() -> int:
         )
         require(not args.output.exists() and not args.output.is_symlink(), "evidence exists")
         output = inspect(
-            aws_json, phase=args.phase, account=args.account_id,
-            kms_arn=args.data_kms_key_arn, vpc=args.vpc_id, source_sha=args.source_sha,
+            aws_json,
+            phase=args.phase,
+            account=args.account_id,
+            kms_arn=args.data_kms_key_arn,
+            vpc=args.vpc_id,
+            source_sha=args.source_sha,
         )
         output["observed_at_utc"] = datetime.now(UTC).isoformat()
         args.output.parent.mkdir(parents=True, exist_ok=True)
