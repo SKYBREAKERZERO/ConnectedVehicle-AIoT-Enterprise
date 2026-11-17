@@ -63,9 +63,7 @@ def create_redis_resources(settings: Settings) -> RedisResources:
         encoding="utf-8",
     )
     if settings.cloud_runtime is CloudRuntime.AWS:
-        pool = ConnectionPool(
-            connection_class=SSLConnection, ssl_cert_reqs="required", **options
-        )
+        pool = ConnectionPool(connection_class=SSLConnection, ssl_cert_reqs="required", **options)
     else:
         pool = ConnectionPool(**options)
 
