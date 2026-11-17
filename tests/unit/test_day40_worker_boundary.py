@@ -110,6 +110,14 @@ def fixture() -> dict[str, Any]:
                     DB_CONDITION,
                 ),
                 policy_statement(
+                    "ProtectOnlyStagingWorkerTasks",
+                    ["ecs:GetTaskProtection", "ecs:UpdateTaskProtection"],
+                    f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/cv-ota-staging/*",
+                    {"ArnEquals": {
+                        "ecs:cluster": f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/cv-ota-staging"
+                    }},
+                ),
+                policy_statement(
                     "SendCommandEventsOnly",
                     ["sqs:GetQueueUrl", "sqs:SendMessage"],
                     QUEUE,
@@ -403,6 +411,14 @@ def test_remote_worker_receives_exact_iot_and_redis_execution_permissions() -> N
             ),
             policy_statement(
                 "DecryptExactlyOneTenantDatabaseSecret", ["kms:Decrypt"], KMS, condition
+            ),
+            policy_statement(
+                "ProtectOnlyStagingWorkerTasks",
+                ["ecs:GetTaskProtection", "ecs:UpdateTaskProtection"],
+                f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/cv-ota-staging/*",
+                {"ArnEquals": {
+                    "ecs:cluster": f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/cv-ota-staging"
+                }},
             ),
             policy_statement(
                 "ConsumeCommandEventsOnly",
