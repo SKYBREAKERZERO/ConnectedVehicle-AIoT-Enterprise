@@ -69,6 +69,12 @@ async def _serve(
                     batch.processed,
                     batch.duplicates,
                 )
+            else:
+                # Leave an unprotected idle window for ECS scale-in after empty SQS poll.
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        stop.wait(), timeout=settings.worker_poll_interval_seconds
+                    )
 
 
 async def run(settings: Settings | None = None) -> None:
