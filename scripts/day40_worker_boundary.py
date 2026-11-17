@@ -539,7 +539,12 @@ def inspect(
         digest=digest,
         counts=counts,
     )
-    require(identity["decision"] == "WORKER_IDENTITY_VERIFIED", "no active verified Workers")
+    require(
+        identity["decision"] in {
+            "WORKER_IDENTITY_VERIFIED", "WORKER_SCALED_TO_ZERO_VERIFIED"
+        },
+        "Worker ECS service membership not independently verified",
+    )
     queue_arn = check_queue(read, account)
     if "remote_command" in kinds:
         require(
@@ -584,7 +589,10 @@ def inspect(
     if "remote_command" in kinds:
         verify_secret(read, account, "/connected-vehicle/staging/redis/auth", redis_secret, kms_arn)
     return {
-        "decision": "WORKER_IAM_CONFIG_OBSERVED",
+        "decision": (
+            "WORKER_IAM_CONFIG_OBSERVED" if kinds
+            else "WORKER_SCALED_TO_ZERO_CONFIG_OBSERVED"
+        ),
         "release_authorized": False,
         "credential_value_verified": False,
         "ota_runtime_verified": False,
