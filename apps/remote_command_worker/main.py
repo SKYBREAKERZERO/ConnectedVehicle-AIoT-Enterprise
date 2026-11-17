@@ -17,6 +17,7 @@ from connected_vehicle.remote_command.sqs_worker import RemoteCommandWorkerBatch
 from connected_vehicle.remote_command.worker_runtime import remote_command_worker_runtime
 from enterprise_platform.config.environment import AppEnvironment, CloudRuntime
 from enterprise_platform.config.settings import Settings, get_settings
+from enterprise_platform.reliability.ecs_task_protection import protect_worker_batch
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,8 @@ async def _serve(
         worker = resolve_worker(resource)
         logger.info("Remote command worker started")
         while not stop.is_set():
-            batch = await worker.run_once()
+            async with protect_worker_batch(settings):
+                batch = await worker.run_once()
             if batch.failed:
                 # Failed SQS messages remain unacknowledged for redelivery.
                 raise RuntimeError("Remote command batch failed; restart runtime")
