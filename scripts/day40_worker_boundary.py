@@ -412,6 +412,13 @@ def inspect(
             )),
             "unreviewed IoT Data Endpoint",
         )
+    # Campaign currently shares the API application DB principal, and its
+    # trust-root pathname has no proven read-only image/volume attestation.
+    # Do not label that configuration an independently isolated Worker.
+    require(
+        "campaign" not in kinds,
+        "Campaign still shares the application database role and lacks trusted key delivery",
+    )
     if "campaign" in kinds:
         require(
             isinstance(firmware_bucket, str)
