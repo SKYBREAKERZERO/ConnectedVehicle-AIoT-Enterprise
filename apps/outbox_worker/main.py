@@ -10,6 +10,7 @@ from typing import Protocol, cast
 
 from connected_vehicle.remote_command.outbox_runtime import remote_command_outbox_runtime
 from enterprise_platform.config.settings import Settings, get_settings
+from enterprise_platform.reliability.ecs_task_protection import protect_worker_batch
 from enterprise_platform.reliability.policies import RetryPolicy
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,8 @@ async def run(settings: Settings | None = None) -> None:
         while not stop.is_set():
             # Unexpected failures are fatal: the process supervisor can restart
             # the worker, rather than silently dropping events.
-            await dispatcher.dispatch_batch()
+            async with protect_worker_batch(settings):
+                await dispatcher.dispatch_batch()
             await _sleep_or_stop(stop, interval)
     logger.info("Outbox dispatcher stopped")
 
