@@ -31,8 +31,7 @@ SECRETS = {
     "campaign": DB_SECRET_PREFIX + "/application-aabbcc",
 }
 REDIS_SECRET = (
-    f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:"
-    "/connected-vehicle/staging/redis/auth-aabbcc"
+    f"arn:aws:secretsmanager:{REGION}:{ACCOUNT}:secret:/connected-vehicle/staging/redis/auth-aabbcc"
 )
 QUEUE = f"arn:aws:sqs:{REGION}:{ACCOUNT}:cv-ota-staging-command"
 DB_CONDITION = {
@@ -44,10 +43,16 @@ DB_CONDITION = {
 
 
 def policy_statement(
-    sid: str, actions: list[str], resource: str, condition: dict[str, Any] | None = None,
+    sid: str,
+    actions: list[str],
+    resource: str,
+    condition: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stmt: dict[str, Any] = {
-        "Sid": sid, "Effect": "Allow", "Action": actions, "Resource": resource,
+        "Sid": sid,
+        "Effect": "Allow",
+        "Action": actions,
+        "Resource": resource,
     }
     if condition:
         stmt["Condition"] = condition
@@ -83,24 +88,34 @@ def fixture() -> dict[str, Any]:
         },
         "service": {
             **day39_reader(
-                "ecs", "describe-services", "--cluster", "cv-ota-staging",
-                "--services", "cv-ota-staging-outbox",
+                "ecs",
+                "describe-services",
+                "--cluster",
+                "cv-ota-staging",
+                "--services",
+                "cv-ota-staging-outbox",
             ),
         },
-        "role_policy": policy_document([
-            policy_statement(
-                "ReadExactlyOneTenantDatabaseSecret",
-                ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"],
-                SECRETS["outbox"],
-            ),
-            policy_statement(
-                "DecryptExactlyOneTenantDatabaseSecret",
-                ["kms:Decrypt"], KMS, DB_CONDITION,
-            ),
-            policy_statement(
-                "SendCommandEventsOnly", ["sqs:GetQueueUrl", "sqs:SendMessage"], QUEUE,
-            ),
-        ]),
+        "role_policy": policy_document(
+            [
+                policy_statement(
+                    "ReadExactlyOneTenantDatabaseSecret",
+                    ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"],
+                    SECRETS["outbox"],
+                ),
+                policy_statement(
+                    "DecryptExactlyOneTenantDatabaseSecret",
+                    ["kms:Decrypt"],
+                    KMS,
+                    DB_CONDITION,
+                ),
+                policy_statement(
+                    "SendCommandEventsOnly",
+                    ["sqs:GetQueueUrl", "sqs:SendMessage"],
+                    QUEUE,
+                ),
+            ]
+        ),
     }
 
 
@@ -108,22 +123,33 @@ def fake_read(data: dict[str, Any]) -> Callable[..., dict[str, Any]]:
     def get(*args: str) -> dict[str, Any]:
         if args[:2] == ("iam", "get-role"):
             role_name = args[3]
-            return {"Role": {
-                "Arn": f"arn:aws:iam::{ACCOUNT}:role/{role_name}",
-                "Path": "/",
-                "AssumeRolePolicyDocument": policy_document([{
-                    "Effect": "Allow", "Principal": {"Service": "ecs-tasks.amazonaws.com"},
-                    "Action": "sts:AssumeRole",
-                }]),
-            }}
+            return {
+                "Role": {
+                    "Arn": f"arn:aws:iam::{ACCOUNT}:role/{role_name}",
+                    "Path": "/",
+                    "AssumeRolePolicyDocument": policy_document(
+                        [
+                            {
+                                "Effect": "Allow",
+                                "Principal": {"Service": "ecs-tasks.amazonaws.com"},
+                                "Action": "sts:AssumeRole",
+                            }
+                        ]
+                    ),
+                }
+            }
         if args[:2] == ("iam", "list-role-policies"):
-            return {"PolicyNames": (
-                [] if args[3].endswith("-exec") else ["minimum-staging-worker-access"]
-            )}
+            return {
+                "PolicyNames": (
+                    [] if args[3].endswith("-exec") else ["minimum-staging-worker-access"]
+                )
+            }
         if args[:2] == ("iam", "list-attached-role-policies"):
-            return {"AttachedPolicies": (
-                [{"PolicyArn": MANAGED_EXEC}] if args[3].endswith("-exec") else []
-            )}
+            return {
+                "AttachedPolicies": (
+                    [{"PolicyArn": MANAGED_EXEC}] if args[3].endswith("-exec") else []
+                )
+            }
         if args[:2] == ("iam", "get-role-policy"):
             return {"PolicyDocument": deepcopy(data["role_policy"])}
         if args[:2] == ("secretsmanager", "describe-secret"):
@@ -135,23 +161,32 @@ def fake_read(data: dict[str, Any]) -> Callable[..., dict[str, Any]]:
         if args[:2] == ("sqs", "get-queue-attributes"):
             return deepcopy(data["queue"])
         if args[:2] == ("ec2", "describe-security-groups"):
-            return {"SecurityGroups": [{
-                "GroupId": "sg-0123456789abcdef0",
-                "GroupName": "cv-ota-staging-outbox-abc",
-                "VpcId": "vpc-0123456789abcdef0",
-                "IpPermissions": [],
-                "IpPermissionsEgress": [
+            return {
+                "SecurityGroups": [
                     {
-                        "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
-                        "IpRanges": [{"CidrIp": "0.0.0.0/0"}], "UserIdGroupPairs": [],
-                    },
-                    {
-                        "IpProtocol": "tcp", "FromPort": 5432, "ToPort": 5432,
-                        "IpRanges": [],
-                        "UserIdGroupPairs": [{"GroupId": "sg-11111111"}],
-                    },
-                ],
-            }]}
+                        "GroupId": "sg-0123456789abcdef0",
+                        "GroupName": "cv-ota-staging-outbox-abc",
+                        "VpcId": "vpc-0123456789abcdef0",
+                        "IpPermissions": [],
+                        "IpPermissionsEgress": [
+                            {
+                                "IpProtocol": "tcp",
+                                "FromPort": 443,
+                                "ToPort": 443,
+                                "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                                "UserIdGroupPairs": [],
+                            },
+                            {
+                                "IpProtocol": "tcp",
+                                "FromPort": 5432,
+                                "ToPort": 5432,
+                                "IpRanges": [],
+                                "UserIdGroupPairs": [{"GroupId": "sg-11111111"}],
+                            },
+                        ],
+                    }
+                ]
+            }
         if args[:2] == ("ecs", "describe-services"):
             result = cast(dict[str, Any], deepcopy(data["service"]))
             result["services"][0]["networkConfiguration"] = {
@@ -164,29 +199,36 @@ def fake_read(data: dict[str, Any]) -> Callable[..., dict[str, Any]]:
         if args[:2] == ("ecs", "describe-task-definition"):
             result = day39_reader(*args)
             task = result["taskDefinition"]
-            task.update({
-                "networkMode": "awsvpc",
-                "requiresCompatibilities": ["FARGATE"],
-                "cpu": "512",
-                "memory": "1024",
-            })
+            task.update(
+                {
+                    "networkMode": "awsvpc",
+                    "requiresCompatibilities": ["FARGATE"],
+                    "cpu": "512",
+                    "memory": "1024",
+                }
+            )
             container = task["containerDefinitions"][0]
-            container.update({
-                "user": "10001:10001",
-                "secrets": [],
-                "environment": [
-                    {"name": k, "value": v}
-                    for k, v in {
-                        "APP_ENV": "staging", "CLOUD_RUNTIME": "aws",
-                        "AWS_REGION": REGION, "AWS_ENDPOINT_URL": "",
-                        "AWS_EC2_METADATA_DISABLED": "true",
-                        "DATABASE_TENANT_ID": TENANT,
-                        "VEHICLE_COMMAND_QUEUE_NAME": "cv-ota-staging-command",
-                        "REDIS_HOST": "redis.private", "REDIS_PORT": "6379",
-                        "OUTBOX_DATABASE_SECRET_ID": SECRETS["outbox"],
-                    }.items()
-                ],
-            })
+            container.update(
+                {
+                    "user": "10001:10001",
+                    "secrets": [],
+                    "environment": [
+                        {"name": k, "value": v}
+                        for k, v in {
+                            "APP_ENV": "staging",
+                            "CLOUD_RUNTIME": "aws",
+                            "AWS_REGION": REGION,
+                            "AWS_ENDPOINT_URL": "",
+                            "AWS_EC2_METADATA_DISABLED": "true",
+                            "DATABASE_TENANT_ID": TENANT,
+                            "VEHICLE_COMMAND_QUEUE_NAME": "cv-ota-staging-command",
+                            "REDIS_HOST": "redis.private",
+                            "REDIS_PORT": "6379",
+                            "OUTBOX_DATABASE_SECRET_ID": SECRETS["outbox"],
+                        }.items()
+                    ],
+                }
+            )
             return result
         return day39_reader(*args)
 
@@ -195,12 +237,22 @@ def fake_read(data: dict[str, Any]) -> Callable[..., dict[str, Any]]:
 
 def observe(read: Callable[..., dict[str, Any]]) -> dict[str, Any]:
     return inspect(
-        read, account=ACCOUNT, cluster="cv-ota-staging", tenant=TENANT, digest=DIGEST,
-        counts={"outbox": 1, "remote_command": 0, "campaign": 0}, secrets=SECRETS,
-        redis_secret=REDIS_SECRET, kms_arn=KMS, redis_host="redis.private",
-        iot_endpoint="", firmware_bucket=None, trust_file="",
+        read,
+        account=ACCOUNT,
+        cluster="cv-ota-staging",
+        tenant=TENANT,
+        digest=DIGEST,
+        counts={"outbox": 1, "remote_command": 0, "campaign": 0},
+        secrets=SECRETS,
+        redis_secret=REDIS_SECRET,
+        kms_arn=KMS,
+        redis_host="redis.private",
+        iot_endpoint="",
+        firmware_bucket=None,
+        trust_file="",
         vpc_id="vpc-0123456789abcdef0",
-        database_sg="sg-11111111", redis_sg="sg-22222222",
+        database_sg="sg-11111111",
+        redis_sg="sg-22222222",
     )
 
 
@@ -213,13 +265,30 @@ def test_worker_all_exact_policy_and_configuration_checks_pass() -> None:
     assert report["verified"]["outbox"]["task_role_arn"].endswith("-outbox")
 
 
-@pytest.mark.parametrize("tamper", [
-    "extra-action", "extra-resource", "wrong-tenant-db", "wrong-kms", "wrong-dlq",
-    "wrong-secret", "secret-not-rotating", "no-current", "public-ip", "public-ingress",
-    "public-egress", "foreign-vpc",
-    "extra-inline-policy", "extra-managed-policy", "wrong-assume-role",
-    "wrong-task-env", "extra-password-env", "wrong-user", "wrong-image",
-])
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "extra-action",
+        "extra-resource",
+        "wrong-tenant-db",
+        "wrong-kms",
+        "wrong-dlq",
+        "wrong-secret",
+        "secret-not-rotating",
+        "no-current",
+        "public-ip",
+        "public-ingress",
+        "public-egress",
+        "foreign-vpc",
+        "extra-inline-policy",
+        "extra-managed-policy",
+        "wrong-assume-role",
+        "wrong-task-env",
+        "extra-password-env",
+        "wrong-user",
+        "wrong-image",
+    ],
+)
 def test_worker_identity_or_config_drift_fails_closed(tamper: str) -> None:
     data = fixture()
     if tamper == "extra-action":
@@ -252,9 +321,12 @@ def test_worker_identity_or_config_drift_fails_closed(tamper: str) -> None:
         elif tamper == "public-ingress" and args[:2] == ("ec2", "describe-security-groups"):
             response["SecurityGroups"][0]["IpPermissions"] = [{"IpProtocol": "-1"}]
         elif tamper == "public-egress" and args[:2] == ("ec2", "describe-security-groups"):
-            response["SecurityGroups"][0]["IpPermissionsEgress"].append({
-                "IpProtocol": "-1", "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
-            })
+            response["SecurityGroups"][0]["IpPermissionsEgress"].append(
+                {
+                    "IpProtocol": "-1",
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                }
+            )
         elif tamper == "foreign-vpc" and args[:2] == ("ec2", "describe-security-groups"):
             response["SecurityGroups"][0]["VpcId"] = "vpc-ffffffff"
         elif tamper == "extra-inline-policy" and args[:2] == ("iam", "list-role-policies"):
@@ -267,13 +339,13 @@ def test_worker_identity_or_config_drift_fails_closed(tamper: str) -> None:
                 {"PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}
             )
         elif tamper == "wrong-assume-role" and args[:2] == ("iam", "get-role"):
-            response["Role"]["AssumeRolePolicyDocument"]["Statement"][0][
-                "Principal"
-            ] = {"AWS": f"arn:aws:iam::{ACCOUNT}:root"}
+            response["Role"]["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] = {
+                "AWS": f"arn:aws:iam::{ACCOUNT}:root"
+            }
         elif tamper == "wrong-task-env" and args[:2] == ("ecs", "describe-task-definition"):
-            response["taskDefinition"]["containerDefinitions"][0]["environment"][0][
-                "value"
-            ] = "production"
+            response["taskDefinition"]["containerDefinitions"][0]["environment"][0]["value"] = (
+                "production"
+            )
         elif tamper == "extra-password-env" and args[:2] == ("ecs", "describe-task-definition"):
             response["taskDefinition"]["containerDefinitions"][0]["environment"].append(
                 {"name": "POSTGRES_PASSWORD", "value": "plaintext"}
@@ -291,10 +363,15 @@ def test_worker_identity_or_config_drift_fails_closed(tamper: str) -> None:
 
 
 def test_dangerous_trust_and_json_encoded_policy_are_handled_correctly() -> None:
-    valid = policy_document([{
-        "Effect": "Allow", "Action": "sts:AssumeRole",
-        "Principal": {"Service": "ecs-tasks.amazonaws.com"},
-    }])
+    valid = policy_document(
+        [
+            {
+                "Effect": "Allow",
+                "Action": "sts:AssumeRole",
+                "Principal": {"Service": "ecs-tasks.amazonaws.com"},
+            }
+        ]
+    )
     validate_trust(valid)
     assert documents('{"Version":"2012-10-17"}')["Version"] == "2012-10-17"
     bad = deepcopy(valid)
@@ -305,52 +382,77 @@ def test_dangerous_trust_and_json_encoded_policy_are_handled_correctly() -> None
 
 def test_remote_worker_receives_exact_iot_and_redis_execution_permissions() -> None:
     data = fixture()
-    condition = {"StringEquals": {
-        "kms:ViaService": f"secretsmanager.{REGION}.amazonaws.com",
-        "kms:EncryptionContext:SecretARN": SECRETS["remote_command"],
-    }}
-    redis_condition = {"StringEquals": {
-        "kms:ViaService": f"secretsmanager.{REGION}.amazonaws.com",
-        "kms:EncryptionContext:SecretARN": REDIS_SECRET,
-    }}
-    data["role_policy"] = policy_document([
-        policy_statement(
-            "ReadExactlyOneTenantDatabaseSecret",
-            ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"],
-            SECRETS["remote_command"],
-        ),
-        policy_statement("DecryptExactlyOneTenantDatabaseSecret", ["kms:Decrypt"], KMS, condition),
-        policy_statement(
-            "ConsumeCommandEventsOnly",
-            ["sqs:GetQueueUrl", "sqs:ReceiveMessage", "sqs:DeleteMessage",
-             "sqs:ChangeMessageVisibility"],
-            QUEUE,
-        ),
-        policy_statement(
-            "PublishOnlyTenantDeviceCommands",
-            ["iot:Publish"],
-            f"arn:aws:iot:{REGION}:{ACCOUNT}:topic/tenants/{TENANT}/vehicles/*/commands",
-        ),
-    ])
+    condition = {
+        "StringEquals": {
+            "kms:ViaService": f"secretsmanager.{REGION}.amazonaws.com",
+            "kms:EncryptionContext:SecretARN": SECRETS["remote_command"],
+        }
+    }
+    redis_condition = {
+        "StringEquals": {
+            "kms:ViaService": f"secretsmanager.{REGION}.amazonaws.com",
+            "kms:EncryptionContext:SecretARN": REDIS_SECRET,
+        }
+    }
+    data["role_policy"] = policy_document(
+        [
+            policy_statement(
+                "ReadExactlyOneTenantDatabaseSecret",
+                ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"],
+                SECRETS["remote_command"],
+            ),
+            policy_statement(
+                "DecryptExactlyOneTenantDatabaseSecret", ["kms:Decrypt"], KMS, condition
+            ),
+            policy_statement(
+                "ConsumeCommandEventsOnly",
+                [
+                    "sqs:GetQueueUrl",
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage",
+                    "sqs:ChangeMessageVisibility",
+                ],
+                QUEUE,
+            ),
+            policy_statement(
+                "PublishOnlyTenantDeviceCommands",
+                ["iot:Publish"],
+                f"arn:aws:iot:{REGION}:{ACCOUNT}:topic/tenants/{TENANT}/vehicles/*/commands",
+            ),
+        ]
+    )
     base = fake_read(data)
 
     def remote(*args: str) -> dict[str, Any]:
         if args[:2] == ("iam", "list-role-policies") and args[3].endswith("-exec"):
             return {"PolicyNames": ["inject-redis-token-only"]}
         if args[:2] == ("iam", "get-role-policy") and args[3].endswith("-exec"):
-            return {"PolicyDocument": policy_document([
-                policy_statement("InjectRemoteRedisOnly",
-                                 ["secretsmanager:GetSecretValue"], REDIS_SECRET),
-                policy_statement("DecryptRemoteRedisOnly", ["kms:Decrypt"], KMS,
-                                 redis_condition),
-            ])}
+            return {
+                "PolicyDocument": policy_document(
+                    [
+                        policy_statement(
+                            "InjectRemoteRedisOnly", ["secretsmanager:GetSecretValue"], REDIS_SECRET
+                        ),
+                        policy_statement(
+                            "DecryptRemoteRedisOnly", ["kms:Decrypt"], KMS, redis_condition
+                        ),
+                    ]
+                )
+            }
         return base(*args)
 
     def verify_remote(execution: bool) -> str:
         return role_policies(
-            remote, ACCOUNT, "remote_command", execution=execution,
-            db_secret=SECRETS["remote_command"], redis_secret=REDIS_SECRET,
-            kms_arn=KMS, queue_arn=QUEUE, tenant=TENANT, firmware_bucket=None,
+            remote,
+            ACCOUNT,
+            "remote_command",
+            execution=execution,
+            db_secret=SECRETS["remote_command"],
+            redis_secret=REDIS_SECRET,
+            kms_arn=KMS,
+            queue_arn=QUEUE,
+            tenant=TENANT,
+            firmware_bucket=None,
         )
 
     assert verify_remote(execution=False).endswith("-remote-command")
@@ -369,11 +471,20 @@ def test_campaign_shared_api_database_identity_blocks_acceptance() -> None:
 
     with pytest.raises(ValueError, match="Campaign shares application DB role"):
         inspect(
-            no_aws_call, account=ACCOUNT, cluster="cv-ota-staging", tenant=TENANT,
+            no_aws_call,
+            account=ACCOUNT,
+            cluster="cv-ota-staging",
+            tenant=TENANT,
             digest=DIGEST,
             counts={"outbox": 0, "remote_command": 0, "campaign": 1},
-            secrets=SECRETS, redis_secret=REDIS_SECRET, kms_arn=KMS,
-            redis_host="redis.private", iot_endpoint="", firmware_bucket=None,
-            trust_file="", vpc_id="vpc-0123456789abcdef0",
-            database_sg="sg-11111111", redis_sg="sg-22222222",
+            secrets=SECRETS,
+            redis_secret=REDIS_SECRET,
+            kms_arn=KMS,
+            redis_host="redis.private",
+            iot_endpoint="",
+            firmware_bucket=None,
+            trust_file="",
+            vpc_id="vpc-0123456789abcdef0",
+            database_sg="sg-11111111",
+            redis_sg="sg-22222222",
         )
