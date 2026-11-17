@@ -1,8 +1,8 @@
 # Day39 Staging Worker foundation: no ECS service is enabled by default.
+# Service membership is stable once enabled. desired_count=0 is scale-in, NOT
+# a request to delete an ECS Service/Task Definition from Terraform State.
 locals {
   worker_kinds  = toset(["outbox", "remote_command", "campaign"])
-  # Service membership is stable once enabled. desired_count=0 is scale-in,
-  # NOT a request to delete the ECS Service/Task Definition from Terraform State.
   worker_active = var.enable_service && var.enable_workers ? local.worker_kinds : toset([])
   worker_secret_arns = {
     outbox         = var.outbox_database_secret_arn
