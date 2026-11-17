@@ -214,7 +214,9 @@ def role_policies(
         entries["ProtectOnlyStagingWorkerTasks"],
         actions={"ecs:GetTaskProtection", "ecs:UpdateTaskProtection"},
         resources={f"arn:aws:ecs:{REGION}:{account}:task/{ROLE_PREFIX}/*"},
-        condition={"ArnEquals": {"ecs:cluster": f"arn:aws:ecs:{REGION}:{account}:cluster/{ROLE_PREFIX}"}},
+        condition={
+            "ArnEquals": {"ecs:cluster": f"arn:aws:ecs:{REGION}:{account}:cluster/{ROLE_PREFIX}"}
+        },
     )
     if kind == "outbox":
         exact_statement(
