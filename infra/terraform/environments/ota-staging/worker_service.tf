@@ -110,7 +110,7 @@ resource "aws_ecs_service" "worker" {
   task_definition                    = aws_ecs_task_definition.worker[each.key].arn
   desired_count                      = var.worker_desired_counts[each.key]
   launch_type                        = "FARGATE"
-  platform_version                   = "1.4.0"
+  platform_version                   = "LATEST"
   enable_execute_command             = false
   wait_for_steady_state              = true
   deployment_minimum_healthy_percent = 100
