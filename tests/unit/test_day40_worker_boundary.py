@@ -291,3 +291,78 @@ def test_dangerous_trust_and_json_encoded_policy_are_handled_correctly() -> None
     bad["Statement"][0]["Principal"] = {"AWS": "*"}
     with pytest.raises(ValueError, match="WORKER BLOCKED"):
         validate_trust(bad)
+
+
+def test_remote_worker_receives_exact_iot_and_redis_execution_permissions() -> None:
+    data = fixture()
+    condition = {"StringEquals": {
+        "kms:ViaService": f"secretsmanager.{REGION}.amazonaws.com",
+        "kms:EncryptionContext:SecretARN": SECRETS["remote_command"],
+    }}
+    redis_condition = {"StringEquals": {
+        "kms:ViaService": f"secretsmanager.{REGION}.amazonaws.com",
+        "kms:EncryptionContext:SecretARN": REDIS_SECRET,
+    }}
+    data["role_policy"] = policy_document([
+        policy_statement(
+            "ReadExactlyOneTenantDatabaseSecret",
+            ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"],
+            SECRETS["remote_command"],
+        ),
+        policy_statement("DecryptExactlyOneTenantDatabaseSecret", ["kms:Decrypt"], KMS, condition),
+        policy_statement(
+            "ConsumeCommandEventsOnly",
+            ["sqs:GetQueueUrl", "sqs:ReceiveMessage", "sqs:DeleteMessage",
+             "sqs:ChangeMessageVisibility"],
+            QUEUE,
+        ),
+        policy_statement(
+            "PublishOnlyTenantDeviceCommands",
+            ["iot:Publish"],
+            f"arn:aws:iot:{REGION}:{ACCOUNT}:topic/tenants/{TENANT}/vehicles/*/commands",
+        ),
+    ])
+    base = fake_read(data)
+
+    def remote(*args: str) -> dict[str, Any]:
+        if args[:2] == ("iam", "list-role-policies") and args[3].endswith("-exec"):
+            return {"PolicyNames": ["inject-redis-token-only"]}
+        if args[:2] == ("iam", "get-role-policy") and args[3].endswith("-exec"):
+            return {"PolicyDocument": policy_document([
+                policy_statement("InjectRemoteRedisOnly",
+                                 ["secretsmanager:GetSecretValue"], REDIS_SECRET),
+                policy_statement("DecryptRemoteRedisOnly", ["kms:Decrypt"], KMS,
+                                 redis_condition),
+            ])}
+        return base(*args)
+
+    params = {
+        "read": remote, "account": ACCOUNT, "kind": "remote_command",
+        "db_secret": SECRETS["remote_command"], "redis_secret": REDIS_SECRET,
+        "kms_arn": KMS, "queue_arn": QUEUE, "tenant": TENANT,
+        "firmware_bucket": None,
+    }
+    assert role_policies(**params, execution=False).endswith("-remote-command")
+    assert role_policies(**params, execution=True).endswith("-remote-command-exec")
+
+    data["role_policy"]["Statement"][-1]["Resource"] = (
+        f"arn:aws:iot:{REGION}:{ACCOUNT}:topic/tenants/*/vehicles/*/commands"
+    )
+    with pytest.raises(ValueError, match="WORKER BLOCKED"):
+        role_policies(**params, execution=False)
+
+
+def test_campaign_shared_api_database_identity_blocks_acceptance() -> None:
+    def no_aws_call(*args: str) -> dict[str, Any]:
+        pytest.fail("Campaign must be blocked before any AWS call")
+
+    with pytest.raises(ValueError, match="Campaign shares application DB role"):
+        inspect(
+            no_aws_call, account=ACCOUNT, cluster="cv-ota-staging", tenant=TENANT,
+            digest=DIGEST,
+            counts={"outbox": 0, "remote_command": 0, "campaign": 1},
+            secrets=SECRETS, redis_secret=REDIS_SECRET, kms_arn=KMS,
+            redis_host="redis.private", iot_endpoint="", firmware_bucket=None,
+            trust_file="", vpc_id="vpc-0123456789abcdef0",
+            database_sg="sg-11111111", redis_sg="sg-22222222",
+        )
