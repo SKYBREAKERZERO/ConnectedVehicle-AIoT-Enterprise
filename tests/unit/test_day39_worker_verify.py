@@ -20,6 +20,14 @@ def reader(*args: str) -> dict[str, Any]:
             "Account": ACCOUNT,
             "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/cv-ota-staging-verify/ci",
         }
+    if args[:2] == ("ecs", "describe-services") and args[-1] != "cv-ota-staging-outbox":
+        return {"services": [{
+            "serviceName": args[-1], "status": "ACTIVE",
+            "desiredCount": 0, "runningCount": 0, "pendingCount": 0,
+            "taskDefinition": "arn:aws:ecs:ap-northeast-1:123456789012:"
+            "task-definition/dormant:1",
+            "deployments": [{"status": "PRIMARY", "rolloutState": "COMPLETED"}],
+        }]}
     if args[:2] == ("ecs", "describe-services"):
         return {
             "services": [
@@ -36,6 +44,8 @@ def reader(*args: str) -> dict[str, Any]:
                 }
             ]
         }
+    if args[:2] == ("ecs", "list-tasks") and args[5] != "cv-ota-staging-outbox":
+        return {"taskArns": []}
     if args[:2] == ("ecs", "list-tasks"):
         return {"taskArns": ["arn:aws:ecs:ap-northeast-1:123456789012:task/task-1"]}
     if args[:2] == ("ecs", "describe-task-definition"):
@@ -112,14 +122,39 @@ def test_worker_tampering_denied(tamper: str) -> None:
         observe(altered)
 
 
-def test_workers_disabled_are_not_falsely_accepted() -> None:
+def test_scaled_to_zero_services_retained_without_running_tasks() -> None:
+    def zero_reader(*args: str) -> dict[str, Any]:
+        if args[:2] == ("ecs", "describe-services"):
+            return {"services": [{
+                "serviceName": args[-1], "status": "ACTIVE",
+                "desiredCount": 0, "runningCount": 0, "pendingCount": 0,
+                "taskDefinition": "arn:aws:ecs:ap-northeast-1:123456789012:"
+                "task-definition/dormant:1",
+                "deployments": [{"status": "PRIMARY", "rolloutState": "COMPLETED"}],
+            }]}
+        if args[:2] == ("ecs", "list-tasks"):
+            return {"taskArns": []}
+        return reader(*args)
+
     report = inspect(
-        reader,
-        account=ACCOUNT,
-        cluster="cv-ota-staging",
-        tenant=TENANT,
-        digest=DIGEST,
+        zero_reader, account=ACCOUNT, cluster="cv-ota-staging",
+        tenant=TENANT, digest=DIGEST,
         counts={"outbox": 0, "remote_command": 0, "campaign": 0},
     )
-    assert report["decision"] == "WORKERS_DISABLED"
+    assert report["decision"] == "WORKER_SCALED_TO_ZERO_VERIFIED"
+    assert set(report["verified"]) == {"outbox", "remote_command", "campaign"}
     assert report["release_authorized"] is False
+
+
+def test_scaled_to_zero_missing_service_is_not_accepted() -> None:
+    def missing(*args: str) -> dict[str, Any]:
+        if args[:2] == ("ecs", "describe-services"):
+            return {"services": [], "failures": [{"reason": "MISSING"}]}
+        return reader(*args)
+
+    with pytest.raises(ValueError, match="BLOCKED"):
+        inspect(
+            missing, account=ACCOUNT, cluster="cv-ota-staging",
+            tenant=TENANT, digest=DIGEST,
+            counts={"outbox": 0, "remote_command": 0, "campaign": 0},
+        )
