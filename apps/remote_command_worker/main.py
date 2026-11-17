@@ -57,7 +57,8 @@ async def _serve(
         logger.info("Remote command worker started")
         while not stop.is_set():
             async with protect_worker_batch(settings):
-                batch = await worker.run_once()
+                async with asyncio.timeout(settings.worker_operation_timeout_seconds):
+                    batch = await worker.run_once()
             if batch.failed:
                 # Failed SQS messages remain unacknowledged for redelivery.
                 raise RuntimeError("Remote command batch failed; restart runtime")
