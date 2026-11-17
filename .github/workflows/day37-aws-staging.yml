@@ -52,8 +52,8 @@ jobs:
     - name: Python, evidence policy, workflow contracts and safe Terraform root
       run: |
         set -euo pipefail
-        python -m compileall -q scripts/day37_gate.py scripts/day37_aws.py scripts/day37_preflight.py scripts/day39_staging_handoff.py scripts/day39_worker_verify.py
-        python -m pytest tests/unit/test_day37_gate.py tests/unit/test_day37_aws.py tests/unit/test_day37_workflow.py tests/unit/test_day37_staging_static.py tests/unit/test_day37_preflight.py tests/unit/test_day39_staging_handoff.py tests/unit/test_day39_tenant_credentials.py tests/unit/test_day39_bootstrap_identity.py tests/unit/test_day39_aws_workers.py tests/unit/test_aws_worker_security.py tests/unit/test_day39_worker_verify.py -q
+        python -m compileall -q scripts/day37_gate.py scripts/day37_aws.py scripts/day37_preflight.py scripts/day39_staging_handoff.py scripts/day39_worker_verify.py scripts/day40_worker_boundary.py
+        python -m pytest tests/unit/test_day37_gate.py tests/unit/test_day37_aws.py tests/unit/test_day37_workflow.py tests/unit/test_day37_staging_static.py tests/unit/test_day37_preflight.py tests/unit/test_day39_staging_handoff.py tests/unit/test_day39_tenant_credentials.py tests/unit/test_day39_bootstrap_identity.py tests/unit/test_day39_aws_workers.py tests/unit/test_aws_worker_security.py tests/unit/test_day39_worker_verify.py tests/unit/test_day40_worker_boundary.py -q
         terraform -chdir="${DAY37_TF_ROOT}" fmt -check -recursive -diff
         terraform -chdir="${DAY37_TF_ROOT}" init -backend=false -input=false
         terraform -chdir="${DAY37_TF_ROOT}" validate -no-color
@@ -687,6 +687,15 @@ jobs:
       env:
         DAY39_WORKER_COUNTS: ${{ vars.DAY37_WORKER_COUNTS_JSON || '{"outbox":0,"remote_command":0,"campaign":0}' }}
         DAY39_TENANT: ${{ vars.DAY37_TENANT_ID }}
+        DAY40_APP_SECRET_ARN: ${{ vars.DAY37_APP_DB_SECRET_ARN }}
+        DAY40_OUTBOX_SECRET_ARN: ${{ vars.DAY37_OUTBOX_DB_SECRET_ARN }}
+        DAY40_REMOTE_SECRET_ARN: ${{ vars.DAY37_REMOTE_DB_SECRET_ARN }}
+        DAY40_REDIS_SECRET_ARN: ${{ vars.DAY37_REDIS_AUTH_SECRET_ARN }}
+        DAY40_KMS_KEY_ARN: ${{ vars.DAY37_DATA_KMS_ARN }}
+        DAY40_REDIS_HOST: ${{ vars.DAY37_REDIS_HOST }}
+        DAY40_IOT_ENDPOINT: ${{ vars.DAY37_IOT_DATA_ENDPOINT }}
+        DAY40_FIRMWARE_BUCKET_ARN: ${{ vars.DAY37_STAGING_FIRMWARE_BUCKET_ARN }}
+        DAY40_TRUST_FILE: ${{ vars.DAY37_CAMPAIGN_TRUST_ROOT_PATH }}
       run: |
         set -euo pipefail
         DIGEST=$(python -c "import json;print(json.load(open('.day37/publish/release.json'))['registry_digest'])")
@@ -695,11 +704,26 @@ jobs:
           --tenant "$DAY39_TENANT" --digest "$DIGEST" \
           --counts-json "$DAY39_WORKER_COUNTS" \
           --output .day37/verify/workers.json
+        python -m scripts.day40_worker_boundary \
+          --account-id "$DAY37_ACCOUNT_ID" --cluster "$DAY37_CLUSTER" \
+          --tenant "$DAY39_TENANT" --digest "$DIGEST" \
+          --counts-json "$DAY39_WORKER_COUNTS" \
+          --application-secret-arn "$DAY40_APP_SECRET_ARN" \
+          --outbox-secret-arn "$DAY40_OUTBOX_SECRET_ARN" \
+          --remote-secret-arn "$DAY40_REMOTE_SECRET_ARN" \
+          --redis-secret-arn "$DAY40_REDIS_SECRET_ARN" \
+          --kms-key-arn "$DAY40_KMS_KEY_ARN" --redis-host "$DAY40_REDIS_HOST" \
+          --iot-endpoint "$DAY40_IOT_ENDPOINT" \
+          --firmware-bucket-arn "$DAY40_FIRMWARE_BUCKET_ARN" \
+          --trust-file "$DAY40_TRUST_FILE" \
+          --output .day37/verify/worker-boundaries.json
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: ${{ vars.DAY37_ENABLE_WORKERS == 'true' }}
       with:
         name: day39-verified-workers-${{ github.run_id }}-${{ github.run_attempt }}
-        path: .day37/verify/workers.json
+        path: |
+          .day37/verify/workers.json
+          .day37/verify/worker-boundaries.json
         if-no-files-found: error
         retention-days: 14
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
