@@ -88,10 +88,12 @@ def exact_statement(
 
 
 def kms_condition(account: str, secret_arn: str) -> dict[str, Any]:
-    return {"StringEquals": {
-        "kms:ViaService": f"secretsmanager.{REGION}.amazonaws.com",
-        "kms:EncryptionContext:SecretARN": secret_arn,
-    }}
+    return {
+        "StringEquals": {
+            "kms:ViaService": f"secretsmanager.{REGION}.amazonaws.com",
+            "kms:EncryptionContext:SecretARN": secret_arn,
+        }
+    }
 
 
 def validate_trust(data: Any) -> None:
@@ -114,8 +116,16 @@ def validate_trust(data: Any) -> None:
 
 
 def role_policies(
-    read: Reader, account: str, kind: str, *, execution: bool, db_secret: str,
-    redis_secret: str, kms_arn: str, queue_arn: str, tenant: str,
+    read: Reader,
+    account: str,
+    kind: str,
+    *,
+    execution: bool,
+    db_secret: str,
+    redis_secret: str,
+    kms_arn: str,
+    queue_arn: str,
+    tenant: str,
     firmware_bucket: str | None,
 ) -> str:
     suffix = kind.replace("_", "-")
@@ -133,8 +143,14 @@ def role_policies(
     inline_names = inline.get("PolicyNames", [])
     attached_arns = [x.get("PolicyArn") for x in attached.get("AttachedPolicies", [])]
     require(
-        inline_names == (["inject-redis-token-only"] if execution and kind == "remote_command"
-                         else [] if execution else ["minimum-staging-worker-access"]),
+        inline_names
+        == (
+            ["inject-redis-token-only"]
+            if execution and kind == "remote_command"
+            else []
+            if execution
+            else ["minimum-staging-worker-access"]
+        ),
         "Worker inline policy inventory changed",
     )
     require(
@@ -145,7 +161,12 @@ def role_policies(
         return arn
     policy_name = "inject-redis-token-only" if execution else "minimum-staging-worker-access"
     policy = read(
-        "iam", "get-role-policy", "--role-name", role_name, "--policy-name", policy_name,
+        "iam",
+        "get-role-policy",
+        "--role-name",
+        role_name,
+        "--policy-name",
+        policy_name,
     ).get("PolicyDocument")
     entries = only_statements(policy)
     if execution:
@@ -154,12 +175,15 @@ def role_policies(
             "Worker Redis execution privilege drift",
         )
         exact_statement(
-            entries["InjectRemoteRedisOnly"], actions={"secretsmanager:GetSecretValue"},
+            entries["InjectRemoteRedisOnly"],
+            actions={"secretsmanager:GetSecretValue"},
             resources={redis_secret},
         )
         exact_statement(
-            entries["DecryptRemoteRedisOnly"], actions={"kms:Decrypt"},
-            resources={kms_arn}, condition=kms_condition(account, redis_secret),
+            entries["DecryptRemoteRedisOnly"],
+            actions={"kms:Decrypt"},
+            resources={kms_arn},
+            condition=kms_condition(account, redis_secret),
         )
         return arn
 
@@ -178,30 +202,38 @@ def role_policies(
     )
     exact_statement(
         entries["DecryptExactlyOneTenantDatabaseSecret"],
-        actions={"kms:Decrypt"}, resources={kms_arn},
+        actions={"kms:Decrypt"},
+        resources={kms_arn},
         condition=kms_condition(account, db_secret),
     )
     if kind == "outbox":
         exact_statement(
-            entries["SendCommandEventsOnly"], actions={"sqs:GetQueueUrl", "sqs:SendMessage"},
+            entries["SendCommandEventsOnly"],
+            actions={"sqs:GetQueueUrl", "sqs:SendMessage"},
             resources={queue_arn},
         )
     if kind == "remote_command":
         exact_statement(
             entries["ConsumeCommandEventsOnly"],
-            actions={"sqs:GetQueueUrl", "sqs:ReceiveMessage", "sqs:DeleteMessage",
-                     "sqs:ChangeMessageVisibility"},
+            actions={
+                "sqs:GetQueueUrl",
+                "sqs:ReceiveMessage",
+                "sqs:DeleteMessage",
+                "sqs:ChangeMessageVisibility",
+            },
             resources={queue_arn},
         )
         exact_statement(
-            entries["PublishOnlyTenantDeviceCommands"], actions={"iot:Publish"},
+            entries["PublishOnlyTenantDeviceCommands"],
+            actions={"iot:Publish"},
             resources={
                 f"arn:aws:iot:{REGION}:{account}:topic/tenants/{tenant}/vehicles/*/commands"
             },
         )
     if kind == "campaign" and firmware_bucket:
         exact_statement(
-            entries["ReadPinnedStagingFirmwareVersionOnly"], actions={"s3:GetObjectVersion"},
+            entries["ReadPinnedStagingFirmwareVersionOnly"],
+            actions={"s3:GetObjectVersion"},
             resources={f"{firmware_bucket}/firmware/{tenant}/*"},
         )
     return arn
@@ -217,9 +249,13 @@ def verify_secret(read: Reader, account: str, name: str, arn: str, kms: str) -> 
     )
     data = read("secretsmanager", "describe-secret", "--secret-id", arn)
     require(
-        data.get("ARN") == arn and data.get("Name") == name and data.get("KmsKeyId") == kms
-        and not data.get("DeletedDate") and data.get("RotationEnabled") is True
-        and bool(data.get("RotationRules")) and bool(data.get("LastRotatedDate")),
+        data.get("ARN") == arn
+        and data.get("Name") == name
+        and data.get("KmsKeyId") == kms
+        and not data.get("DeletedDate")
+        and data.get("RotationEnabled") is True
+        and bool(data.get("RotationRules"))
+        and bool(data.get("LastRotatedDate")),
         "database/Redis Secret is missing, unrotated, deleted or uses incorrect KMS",
     )
     stages = data.get("VersionIdsToStages", {})
@@ -241,7 +277,12 @@ def check_queue(read: Reader, account: str) -> str:
         "SQS URL/account mismatch",
     )
     attr = read(
-        "sqs", "get-queue-attributes", "--queue-url", queue_url, "--attribute-names", "All",
+        "sqs",
+        "get-queue-attributes",
+        "--queue-url",
+        queue_url,
+        "--attribute-names",
+        "All",
     ).get("Attributes", {})
     require(
         attr.get("QueueArn") == arn
@@ -254,10 +295,13 @@ def check_queue(read: Reader, account: str) -> str:
     except ValueError as exc:
         raise ValueError("DAY40 WORKER BLOCKED: invalid SQS DLQ policy") from exc
     require(
-        redrive == {
+        redrive
+        == {
             "deadLetterTargetArn": f"arn:aws:sqs:{REGION}:{account}:{ROLE_PREFIX}-command-dlq",
             "maxReceiveCount": 5,
-        } or redrive == {
+        }
+        or redrive
+        == {
             "deadLetterTargetArn": f"arn:aws:sqs:{REGION}:{account}:{ROLE_PREFIX}-command-dlq",
             "maxReceiveCount": "5",
         },
@@ -267,22 +311,49 @@ def check_queue(read: Reader, account: str) -> str:
 
 
 def verify_task(
-    read: Reader, kind: str, *,
-    account: str, tenant: str, digest: str, cluster: str,
-    db_secret: str, redis_secret: str, kms: str, queue_arn: str,
-    redis_host: str, iot_endpoint: str, firmware_bucket: str | None,
-    trust_file: str, vpc_id: str, database_sg: str, redis_sg: str,
+    read: Reader,
+    kind: str,
+    *,
+    account: str,
+    tenant: str,
+    digest: str,
+    cluster: str,
+    db_secret: str,
+    redis_secret: str,
+    kms: str,
+    queue_arn: str,
+    redis_host: str,
+    iot_endpoint: str,
+    firmware_bucket: str | None,
+    trust_file: str,
+    vpc_id: str,
+    database_sg: str,
+    redis_sg: str,
 ) -> dict[str, str]:
     name = f"{ROLE_PREFIX}-{kind.replace('_', '-')}"
     task_role = role_policies(
-        read, account, kind, execution=False, db_secret=db_secret,
-        redis_secret=redis_secret, kms_arn=kms, queue_arn=queue_arn,
-        tenant=tenant, firmware_bucket=firmware_bucket,
+        read,
+        account,
+        kind,
+        execution=False,
+        db_secret=db_secret,
+        redis_secret=redis_secret,
+        kms_arn=kms,
+        queue_arn=queue_arn,
+        tenant=tenant,
+        firmware_bucket=firmware_bucket,
     )
     exec_role = role_policies(
-        read, account, kind, execution=True, db_secret=db_secret,
-        redis_secret=redis_secret, kms_arn=kms, queue_arn=queue_arn,
-        tenant=tenant, firmware_bucket=firmware_bucket,
+        read,
+        account,
+        kind,
+        execution=True,
+        db_secret=db_secret,
+        redis_secret=redis_secret,
+        kms_arn=kms,
+        queue_arn=queue_arn,
+        tenant=tenant,
+        firmware_bucket=firmware_bucket,
     )
     service = read("ecs", "describe-services", "--cluster", cluster, "--services", name)
     rows = service.get("services", [])
@@ -297,7 +368,8 @@ def verify_task(
     sg_data = read("ec2", "describe-security-groups", "--group-ids", sgs[0])
     groups = sg_data.get("SecurityGroups", [])
     require(
-        len(groups) == 1 and groups[0].get("GroupId") == sgs[0]
+        len(groups) == 1
+        and groups[0].get("GroupId") == sgs[0]
         and groups[0].get("GroupName", "").startswith(name + "-")
         and groups[0].get("VpcId") == vpc_id
         and groups[0].get("IpPermissions") == [],
@@ -306,10 +378,7 @@ def verify_task(
     egress = groups[0].get("IpPermissionsEgress", [])
     require(isinstance(egress, list), "Worker egress inventory malformed")
     def destination(item: dict[str, Any]) -> tuple[int, str] | None:
-        if (
-            item.get("IpProtocol") != "tcp"
-            or item.get("FromPort") != item.get("ToPort")
-        ):
+        if item.get("IpProtocol") != "tcp" or item.get("FromPort") != item.get("ToPort"):
             return None
         port = item.get("FromPort")
         targets = item.get("IpRanges", [])
@@ -332,15 +401,20 @@ def verify_task(
     )
     definition_arn = svc.get("taskDefinition")
     task = read(
-        "ecs", "describe-task-definition", "--task-definition", definition_arn,
+        "ecs",
+        "describe-task-definition",
+        "--task-definition",
+        definition_arn,
     ).get("taskDefinition", {})
     containers = task.get("containerDefinitions", [])
     require(
-        len(containers) == 1 and task.get("taskRoleArn") == task_role
+        len(containers) == 1
+        and task.get("taskRoleArn") == task_role
         and task.get("executionRoleArn") == exec_role
         and task.get("networkMode") == "awsvpc"
         and "FARGATE" in task.get("requiresCompatibilities", [])
-        and str(task.get("cpu")) == "512" and str(task.get("memory")) == "1024",
+        and str(task.get("cpu")) == "512"
+        and str(task.get("memory")) == "1024",
         "Worker Task Role, Execution Role or Fargate configuration drift",
     )
     container = containers[0]
@@ -354,16 +428,22 @@ def verify_task(
         "Worker executable/image/user/rootfs drift",
     )
     env_list = container.get("environment", [])
-    require(isinstance(env_list, list) and all(isinstance(e, dict) for e in env_list),
-            "malformed ECS environment")
+    require(
+        isinstance(env_list, list) and all(isinstance(e, dict) for e in env_list),
+        "malformed ECS environment",
+    )
     environment = {entry.get("name"): entry.get("value") for entry in env_list}
     require(len(environment) == len(env_list), "duplicate Worker environment key")
     expected = {
-        "APP_ENV": "staging", "CLOUD_RUNTIME": "aws", "AWS_REGION": REGION,
-        "AWS_ENDPOINT_URL": "", "AWS_EC2_METADATA_DISABLED": "true",
+        "APP_ENV": "staging",
+        "CLOUD_RUNTIME": "aws",
+        "AWS_REGION": REGION,
+        "AWS_ENDPOINT_URL": "",
+        "AWS_EC2_METADATA_DISABLED": "true",
         "DATABASE_TENANT_ID": tenant,
         "VEHICLE_COMMAND_QUEUE_NAME": f"{ROLE_PREFIX}-command",
-        "REDIS_HOST": redis_host, "REDIS_PORT": "6379",
+        "REDIS_HOST": redis_host,
+        "REDIS_PORT": "6379",
     }
     if kind == "outbox":
         expected["OUTBOX_DATABASE_SECRET_ID"] = db_secret
@@ -376,24 +456,45 @@ def verify_task(
     require(environment == expected, "Worker tenant, Secret, IoT or environment drift")
     secret_refs = container.get("secrets", [])
     require(
-        secret_refs == (
+        secret_refs
+        == (
             [{"name": "REDIS_PASSWORD", "valueFrom": redis_secret}]
-            if kind == "remote_command" else []
+            if kind == "remote_command"
+            else []
         ),
         "Worker contains unauthorized injected Secrets",
     )
-    return {"task_role_arn": task_role, "execution_role_arn": exec_role,
-            "service": name, "security_group_id": sgs[0], "task_definition": definition_arn}
+    return {
+        "task_role_arn": task_role,
+        "execution_role_arn": exec_role,
+        "service": name,
+        "security_group_id": sgs[0],
+        "task_definition": definition_arn,
+    }
 
 
 def inspect(
-    read: Reader, *, account: str, cluster: str, tenant: str, digest: str,
-    counts: dict[str, int], secrets: dict[str, str], redis_secret: str,
-    kms_arn: str, redis_host: str, iot_endpoint: str, firmware_bucket: str | None,
-    trust_file: str, vpc_id: str, database_sg: str, redis_sg: str,
+    read: Reader,
+    *,
+    account: str,
+    cluster: str,
+    tenant: str,
+    digest: str,
+    counts: dict[str, int],
+    secrets: dict[str, str],
+    redis_secret: str,
+    kms_arn: str,
+    redis_host: str,
+    iot_endpoint: str,
+    firmware_bucket: str | None,
+    trust_file: str,
+    vpc_id: str,
+    database_sg: str,
+    redis_sg: str,
 ) -> dict[str, Any]:
     require(
-        bool(re.fullmatch(r"[0-9]{12}", account)) and cluster == ROLE_PREFIX
+        bool(re.fullmatch(r"[0-9]{12}", account))
+        and cluster == ROLE_PREFIX
         and bool(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tenant)),
         "foreign account/cluster/tenant",
     )
@@ -408,8 +509,7 @@ def inspect(
     )
     require(bool(redis_host) and not redis_host.startswith("http"), "invalid Redis host")
     require(
-        all(re.fullmatch(r"sg-[a-f0-9]{8,17}", value)
-            for value in (database_sg, redis_sg))
+        all(re.fullmatch(r"sg-[a-f0-9]{8,17}", value) for value in (database_sg, redis_sg))
         and bool(re.fullmatch(r"vpc-[a-f0-9]{8,17}", vpc_id)),
         "invalid approved VPC/database/Redis Security Group",
     )
@@ -421,17 +521,23 @@ def inspect(
         "Campaign shares application DB role and lacks attested trusted key delivery",
     )
     identity = inspect_tasks(
-        read, account=account, cluster=cluster, tenant=tenant,
-        digest=digest, counts=counts,
+        read,
+        account=account,
+        cluster=cluster,
+        tenant=tenant,
+        digest=digest,
+        counts=counts,
     )
     require(identity["decision"] == "WORKER_IDENTITY_VERIFIED", "no active verified Workers")
     queue_arn = check_queue(read, account)
     if "remote_command" in kinds:
         require(
-            bool(re.fullmatch(
-                r"[a-z0-9-]+-ats\.iot\.ap-northeast-1\.amazonaws\.com",
-                iot_endpoint,
-            )),
+            bool(
+                re.fullmatch(
+                    r"[a-z0-9-]+-ats\.iot\.ap-northeast-1\.amazonaws\.com",
+                    iot_endpoint,
+                )
+            ),
             "unreviewed IoT Data Endpoint",
         )
     if "campaign" in kinds:
@@ -446,32 +552,60 @@ def inspect(
         db_secret = secrets[kind]
         verify_secret(read, account, DB_NAMES[kind], db_secret, kms_arn)
         observations[kind] = verify_task(
-            read, kind, account=account, tenant=tenant, digest=digest, cluster=cluster,
-            db_secret=db_secret, redis_secret=redis_secret, kms=kms_arn,
-            queue_arn=queue_arn, redis_host=redis_host, iot_endpoint=iot_endpoint,
-            firmware_bucket=firmware_bucket, trust_file=trust_file,
-            vpc_id=vpc_id, database_sg=database_sg, redis_sg=redis_sg,
+            read,
+            kind,
+            account=account,
+            tenant=tenant,
+            digest=digest,
+            cluster=cluster,
+            db_secret=db_secret,
+            redis_secret=redis_secret,
+            kms=kms_arn,
+            queue_arn=queue_arn,
+            redis_host=redis_host,
+            iot_endpoint=iot_endpoint,
+            firmware_bucket=firmware_bucket,
+            trust_file=trust_file,
+            vpc_id=vpc_id,
+            database_sg=database_sg,
+            redis_sg=redis_sg,
         )
     if "remote_command" in kinds:
-        verify_secret(read, account, "/connected-vehicle/staging/redis/auth",
-                      redis_secret, kms_arn)
+        verify_secret(read, account, "/connected-vehicle/staging/redis/auth", redis_secret, kms_arn)
     return {
         "decision": "WORKER_IAM_CONFIG_OBSERVED",
         "release_authorized": False,
         "credential_value_verified": False,
         "ota_runtime_verified": False,
-        "aws_account_id": account, "region": REGION, "tenant": tenant,
-        "image_digest": digest, "sqs_queue_arn": queue_arn, "verified": observations,
+        "aws_account_id": account,
+        "region": REGION,
+        "tenant": tenant,
+        "image_digest": digest,
+        "sqs_queue_arn": queue_arn,
+        "verified": observations,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in (
-        "account-id", "cluster", "tenant", "digest", "counts-json",
-        "application-secret-arn", "outbox-secret-arn", "remote-secret-arn",
-        "redis-secret-arn", "kms-key-arn", "redis-host", "iot-endpoint", "trust-file",
-        "vpc-id", "database-sg-id", "redis-sg-id", "source-sha",
+        "account-id",
+        "cluster",
+        "tenant",
+        "digest",
+        "counts-json",
+        "application-secret-arn",
+        "outbox-secret-arn",
+        "remote-secret-arn",
+        "redis-secret-arn",
+        "kms-key-arn",
+        "redis-host",
+        "iot-endpoint",
+        "trust-file",
+        "vpc-id",
+        "database-sg-id",
+        "redis-sg-id",
+        "source-sha",
     ):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--firmware-bucket-arn", default="")
@@ -483,13 +617,17 @@ def main() -> int:
             "evidence already exists",
         )
         require(
-            not any(name.startswith("AWS_ENDPOINT_URL") and value
-                    for name, value in os.environ.items()),
+            not any(
+                name.startswith("AWS_ENDPOINT_URL") and value for name, value in os.environ.items()
+            ),
             "AWS endpoint override forbidden",
         )
         checkout = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True,
-            text=True, timeout=10, check=False,
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
         require(
             bool(re.fullmatch(r"[a-f0-9]{40}", args.source_sha))
@@ -500,18 +638,25 @@ def main() -> int:
         counts = json.loads(args.counts_json)
         require(isinstance(counts, dict), "invalid count payload")
         report = inspect(
-            aws, account=args.account_id, cluster=args.cluster, tenant=args.tenant,
-            digest=args.digest, counts=counts,
+            aws,
+            account=args.account_id,
+            cluster=args.cluster,
+            tenant=args.tenant,
+            digest=args.digest,
+            counts=counts,
             secrets={
                 "outbox": args.outbox_secret_arn,
                 "remote_command": args.remote_secret_arn,
                 "campaign": args.application_secret_arn,
             },
-            redis_secret=args.redis_secret_arn, kms_arn=args.kms_key_arn,
-            redis_host=args.redis_host, iot_endpoint=args.iot_endpoint,
+            redis_secret=args.redis_secret_arn,
+            kms_arn=args.kms_key_arn,
+            redis_host=args.redis_host,
+            iot_endpoint=args.iot_endpoint,
             firmware_bucket=args.firmware_bucket_arn or None,
             trust_file=args.trust_file,
-            vpc_id=args.vpc_id, database_sg=args.database_sg_id,
+            vpc_id=args.vpc_id,
+            database_sg=args.database_sg_id,
             redis_sg=args.redis_sg_id,
         )
         report["source_sha"] = args.source_sha
