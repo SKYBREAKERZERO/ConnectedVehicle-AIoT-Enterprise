@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import random
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from enterprise_platform.reliability.policies import RetryPolicy
 from enterprise_platform.reliability.retry import (
     calculate_retry_delay,
 )
+
+logger = logging.getLogger(__name__)
 
 OutboxPublishFunction = Callable[
     [EventEnvelope],
@@ -190,7 +193,7 @@ class OutboxDispatcher:
             try:
                 event = deserialize_event_envelope(claimed.event_body)
                 publisher = self._destinations.resolve(claimed.destination)
-                await publisher(event)
+                transport_id = await publisher(event)
             except Exception as exc:
                 disposition = self._failure_classifier.classify(exc)
 
@@ -236,6 +239,14 @@ class OutboxDispatcher:
 
             if marked:
                 published += 1
+                # Actual SQS SendMessage MessageId correlates with the
+                # consumer's acknowledged receipt, without logging payloads.
+                if isinstance(transport_id, str):
+                    logger.info(
+                        "outbox_sqs_published event_id=%s message_id=%s",
+                        event.event_id,
+                        transport_id,
+                    )
             else:
                 stale_claims += 1
 
