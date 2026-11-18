@@ -47,8 +47,9 @@ def require(ok: Any, message: str) -> None:
 def source_checkout(sha: str) -> None:
     require(bool(re.fullmatch(r"[a-f0-9]{40}", sha)), "unapproved source SHA")
     result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], capture_output=True,
-        text=True, timeout=10, check=False,
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True, text=True, timeout=10, check=False,
     )
     require(result.returncode == 0 and result.stdout.strip() == sha, "checkout SHA drift")
 
@@ -176,7 +177,10 @@ async def remote_transport(args: argparse.Namespace, receipt: dict[str, Any]) ->
     )["endpointAddress"]
     require(endpoint == args.iot_endpoint, "IoT endpoint is not this AWS account's ATS endpoint")
     for path in (args.iot_cert, args.iot_key, args.iot_ca):
-        require(path.is_file() and not path.is_symlink(), "IoT simulator TLS key/cert missing")
+        require(
+            isinstance(path, Path) and path.is_file() and not path.is_symlink(),
+            "IoT simulator TLS key/cert missing",
+        )
     queue_arn = await asyncio.to_thread(checked_queue, args.account_id)
     topic = f"tenants/{args.tenant}/vehicles/{args.vehicle}/commands"
     ssl_params = aiomqtt.TLSParameters(
