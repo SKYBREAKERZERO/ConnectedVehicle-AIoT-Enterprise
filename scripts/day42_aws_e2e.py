@@ -19,7 +19,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -292,7 +292,7 @@ async def campaign_ecu(args: argparse.Namespace, receipt: dict[str, Any]) -> Non
             and row.get("job_id") == args.expected_job_id,
             "Campaign job/vehicle binding drift",
         )
-        return row
+        return cast(dict[str, Any], row)
 
     view = await api_get(f"/v2/ota/campaigns/{campaign_id}")
     require(
