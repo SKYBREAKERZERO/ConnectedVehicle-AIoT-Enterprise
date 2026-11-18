@@ -51,7 +51,7 @@ jobs:
     - uses: ./.github/actions/setup-ci-runtime
     - run: |-
         ruff check .
-        ruff format --check .
+        ruff format --check --diff .
     needs:
     - baseline
   types:
