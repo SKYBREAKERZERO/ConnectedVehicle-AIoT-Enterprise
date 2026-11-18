@@ -60,6 +60,8 @@ def evaluate(plan: dict[str, Any]) -> list[str]:
             after = change.get("after") or {}
             raw = after.get("assume_role_policy")
             try:
+                if not isinstance(raw, str):
+                    raise TypeError("Missing trust policy")
                 policy = json.loads(raw)
                 statement = policy["Statement"][0]
                 if (
