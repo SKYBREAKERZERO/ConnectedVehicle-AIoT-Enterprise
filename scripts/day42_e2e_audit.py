@@ -8,6 +8,7 @@ Nothing writes to RDS, queues, IoT or ECS. This is not production approval.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import asyncio
 import json
 import os
@@ -187,14 +188,24 @@ async def database_audit(dsn: str, report: dict[str, Any]) -> dict[str, Any]:
                 "no durable signed ECU success report in PostgreSQL",
             )
             camp = await con.fetchrow(
-                "SELECT status,target_count,job_count,succeeded,failed,snapshot_sha256 "
-                "FROM ota_campaigns WHERE tenant_id=$1 AND id=$2",
+                "SELECT status,snapshot_sha256 FROM ota_campaigns "
+                "WHERE tenant_id=$1 AND id=$2",
+                report["tenant_id"], report["campaign_id"],
+            )
+            counts = await con.fetchrow(
+                "SELECT count(*) AS targets,"
+                "count(*) FILTER (WHERE j.id IS NOT NULL) AS jobs,"
+                "count(*) FILTER (WHERE j.status='succeeded') AS succeeded,"
+                "count(*) FILTER (WHERE j.status='failed') AS failed "
+                "FROM ota_campaign_targets t LEFT JOIN ota_jobs j "
+                "ON j.tenant_id=t.tenant_id AND j.id=t.job_id "
+                "WHERE t.tenant_id=$1 AND t.campaign_id=$2",
                 report["tenant_id"], report["campaign_id"],
             )
             require(
-                camp is not None and camp["target_count"] == 1
-                and camp["job_count"] == 1 and camp["succeeded"] == 1
-                and camp["failed"] == 0
+                camp is not None and counts is not None
+                and counts["targets"] == 1 and counts["jobs"] == 1
+                and counts["succeeded"] == 1 and counts["failed"] == 0
                 and camp["snapshot_sha256"] == report["snapshot_sha256"],
                 "Campaign durable counters or frozen snapshot mismatch",
             )
@@ -286,7 +297,7 @@ async def audit(args: argparse.Namespace) -> dict[str, Any]:
         "aws_account_id": args.account_id, "region": REGION,
         "scenario": report["scenario"], "tenant_id": args.tenant,
         "vehicle_id": report["vehicle_id"],
-        "probe_receipt_sha256": __import__("hashlib").sha256(args.receipt.read_bytes()).hexdigest(),
+        "probe_receipt_sha256": hashlib.sha256(args.receipt.read_bytes()).hexdigest(),
         "db": db, "cloudwatch_sqs": sqs,
         "production_approved": False,
         "physical_ecu_tested": False,
