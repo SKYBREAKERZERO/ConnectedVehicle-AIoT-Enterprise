@@ -8,15 +8,30 @@ from pathlib import Path
 from typing import Any
 
 ALLOWED = {
-    "aws_vpc", "aws_subnet", "aws_route_table", "aws_route_table_association",
-    "aws_security_group", "aws_vpc_security_group_ingress_rule",
-    "aws_vpc_security_group_egress_rule", "aws_vpc_endpoint",
-    "aws_ecr_repository", "aws_cloudwatch_log_group", "aws_ecs_cluster",
-    "aws_iam_role", "aws_iam_role_policy",
+    "aws_vpc",
+    "aws_subnet",
+    "aws_route_table",
+    "aws_route_table_association",
+    "aws_security_group",
+    "aws_vpc_security_group_ingress_rule",
+    "aws_vpc_security_group_egress_rule",
+    "aws_vpc_endpoint",
+    "aws_ecr_repository",
+    "aws_cloudwatch_log_group",
+    "aws_ecs_cluster",
+    "aws_iam_role",
+    "aws_iam_role_policy",
 }
-EXPECTED = {"aws_vpc", "aws_subnet", "aws_vpc_endpoint", "aws_ecr_repository",
-            "aws_ecs_cluster", "aws_iam_role", "aws_iam_role_policy",
-            "aws_cloudwatch_log_group"}
+EXPECTED = {
+    "aws_vpc",
+    "aws_subnet",
+    "aws_vpc_endpoint",
+    "aws_ecr_repository",
+    "aws_ecs_cluster",
+    "aws_iam_role",
+    "aws_iam_role_policy",
+    "aws_cloudwatch_log_group",
+}
 
 
 def evaluate(plan: dict[str, Any]) -> list[str]:
@@ -53,9 +68,7 @@ def evaluate(plan: dict[str, Any]) -> list[str]:
                     or not statement.get("Condition", {})
                     .get("StringEquals", {})
                     .get("aws:SourceAccount")
-                    or not statement.get("Condition", {})
-                    .get("ArnLike", {})
-                    .get("aws:SourceArn")
+                    or not statement.get("Condition", {}).get("ArnLike", {}).get("aws:SourceArn")
                 ):
                     issues.append(f"{addr}: weak ECS trust policy")
             except (ValueError, TypeError, KeyError, IndexError):
@@ -74,7 +87,7 @@ def evaluate(plan: dict[str, Any]) -> list[str]:
             except (ValueError, TypeError, KeyError):
                 issues.append(f"{addr}: unreadable IAM policy")
     if not EXPECTED.issubset(kinds):
-        issues.append(f"Missing foundation resource kinds: {sorted(EXPECTED-kinds)}")
+        issues.append(f"Missing foundation resource kinds: {sorted(EXPECTED - kinds)}")
     if plan.get("planned_values") is None:
         issues.append("Missing planned values")
     return sorted(set(issues))
