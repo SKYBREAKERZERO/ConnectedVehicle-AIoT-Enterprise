@@ -249,8 +249,18 @@ async def campaign_ecu(args: argparse.Namespace, receipt: dict[str, Any]) -> Non
     campaign_id, ecu_id = str(UUID(args.campaign_id)), str(UUID(args.ecu_id))
     require(
         args.expected_job_id is not None
-        and bool(re.fullmatch(r"[0-9a-f-]{36}", args.expected_job_id)),
-        "expected immutable OTA Job ID required",
+        and str(UUID(args.expected_job_id)) == args.expected_job_id,
+        "expected canonical immutable OTA Job ID required",
+    )
+    require(
+        all(
+            isinstance(value, str) and bool(value)
+            for value in (args.device_id, args.ecu_type, args.hardware_version,
+                          args.bootstrap_version)
+        )
+        and bool(re.fullmatch(r"[a-f0-9]{64}", args.bootstrap_sha256))
+        and args.bootstrap_security_version >= 0,
+        "missing virtual ECU identity, factory version or digest",
     )
     for path in (
         args.ecu_token_file, args.ecu_private_key, args.trusted_keys,
@@ -321,8 +331,13 @@ async def campaign_ecu(args: argparse.Namespace, receipt: dict[str, Any]) -> Non
         "--bootstrap-security-version", str(args.bootstrap_security_version),
     ]
     # Never pass a cloud password, AWS access key or OTA private key as command text.
+    # Do not allow an isolated virtual ECU process to inherit AWS SDK,
+    # database, Docker or GitHub credentials from the authorized operator.
+    allowed = {"PATH", "HOME", "PYTHONPATH", "LANG", "LC_ALL", "SYSTEMROOT",
+               "TEMP", "TMP", "TMPDIR"}
+    device_env = {name: value for name, value in os.environ.items() if name in allowed}
     result = await asyncio.to_thread(
-        subprocess.run, cmd, capture_output=True, text=True,
+        subprocess.run, cmd, env=device_env, capture_output=True, text=True,
         timeout=args.deadline_seconds, check=False,
     )
     require(result.returncode == 0, "virtual ECU install or authenticated report failed")
