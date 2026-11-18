@@ -52,8 +52,8 @@ jobs:
     - name: Python, evidence policy, workflow contracts and safe Terraform root
       run: |
         set -euo pipefail
-        python -m compileall -q scripts/day37_gate.py scripts/day37_aws.py scripts/day37_preflight.py scripts/day39_staging_handoff.py scripts/day39_worker_verify.py scripts/day40_worker_boundary.py enterprise_platform/reliability/ecs_task_protection.py
-        python -m pytest tests/unit/test_day37_gate.py tests/unit/test_day37_aws.py tests/unit/test_day37_workflow.py tests/unit/test_day37_staging_static.py tests/unit/test_day37_preflight.py tests/unit/test_day39_staging_handoff.py tests/unit/test_day39_tenant_credentials.py tests/unit/test_day39_bootstrap_identity.py tests/unit/test_day39_aws_workers.py tests/unit/test_aws_worker_security.py tests/unit/test_day39_worker_verify.py tests/unit/test_day40_worker_boundary.py tests/unit/test_day41_ecs_scale_in.py -q
+        python -m compileall -q scripts/day37_gate.py scripts/day37_aws.py scripts/day37_preflight.py scripts/day39_staging_handoff.py scripts/day39_worker_verify.py scripts/day40_worker_boundary.py enterprise_platform/reliability/ecs_task_protection.py scripts/day42_aws_e2e.py scripts/day42_e2e_audit.py
+        python -m pytest tests/unit/test_day37_gate.py tests/unit/test_day37_aws.py tests/unit/test_day37_workflow.py tests/unit/test_day37_staging_static.py tests/unit/test_day37_preflight.py tests/unit/test_day39_staging_handoff.py tests/unit/test_day39_tenant_credentials.py tests/unit/test_day39_bootstrap_identity.py tests/unit/test_day39_aws_workers.py tests/unit/test_aws_worker_security.py tests/unit/test_day39_worker_verify.py tests/unit/test_day40_worker_boundary.py tests/unit/test_day41_ecs_scale_in.py tests/unit/test_day42_aws_staging_e2e.py -q
         terraform -chdir="${DAY37_TF_ROOT}" fmt -check -recursive -diff
         terraform -chdir="${DAY37_TF_ROOT}" init -backend=false -input=false
         terraform -chdir="${DAY37_TF_ROOT}" validate -no-color
