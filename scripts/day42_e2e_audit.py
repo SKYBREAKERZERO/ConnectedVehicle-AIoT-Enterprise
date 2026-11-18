@@ -359,7 +359,8 @@ def main() -> int:
             stream.write("\n")
         print("DAY42: live AWS E2E audit observed; staging release remains separately gated")
         return 0
-    except (E2EBlocked, OSError, ValueError, TypeError, TimeoutError) as exc:
+    except Exception as exc:
+        # Database/SDK failures must not print auditor DSNs or SQL parameters.
         print("DAY42 BLOCKED: " + type(exc).__name__, file=sys.stderr)
         return 1
 
