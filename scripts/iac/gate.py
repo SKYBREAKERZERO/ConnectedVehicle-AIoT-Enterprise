@@ -184,7 +184,7 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
     (candidate / "environments/local/terraform.tfvars.json").write_text(
         json.dumps({**TFVARS, "aws_endpoint_url": "http://127.0.0.1:4566"}), encoding="utf-8"
     )
-    terraform(candidate, "fmt", "-check", "-diff", "-recursive", "-no-color", env=env)
+    terraform(candidate, "fmt", "-check", "-recursive", "-no-color", env=env)
     roots = sorted(p for p in (candidate / "environments").iterdir() if list(p.glob("*.tf")))
     old_roots = {
         p.name for p in (original / "environments").iterdir() if p.is_dir() and list(p.glob("*.tf"))

@@ -136,7 +136,7 @@ resource "aws_iam_role" "vpc_flow" {
       Action    = "sts:AssumeRole"
       Condition = {
         StringEquals = { "aws:SourceAccount" = var.aws_account_id }
-        ArnLike = { "aws:SourceArn" = "arn:aws:ec2:${var.aws_region}:${var.aws_account_id}:vpc-flow-log/*" }
+        ArnLike      = { "aws:SourceArn" = "arn:aws:ec2:${var.aws_region}:${var.aws_account_id}:vpc-flow-log/*" }
       }
     }]
   })
@@ -147,8 +147,8 @@ resource "aws_iam_role_policy" "vpc_flow" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
-      Action = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"]
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"]
       Resource = "${aws_cloudwatch_log_group.vpc_flow.arn}:*"
     }]
   })
