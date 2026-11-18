@@ -47,10 +47,16 @@ def evaluate(plan: dict[str, Any]) -> list[str]:
             try:
                 policy = json.loads(raw)
                 statement = policy["Statement"][0]
-                if (statement.get("Principal") != {"Service": "ecs-tasks.amazonaws.com"}
+                if (
+                    statement.get("Principal") != {"Service": "ecs-tasks.amazonaws.com"}
                     or statement.get("Action") != "sts:AssumeRole"
-                    or not statement.get("Condition", {}).get("StringEquals", {}).get("aws:SourceAccount")
-                    or not statement.get("Condition", {}).get("ArnLike", {}).get("aws:SourceArn")):
+                    or not statement.get("Condition", {})
+                    .get("StringEquals", {})
+                    .get("aws:SourceAccount")
+                    or not statement.get("Condition", {})
+                    .get("ArnLike", {})
+                    .get("aws:SourceArn")
+                ):
                     issues.append(f"{addr}: weak ECS trust policy")
             except (ValueError, TypeError, KeyError, IndexError):
                 issues.append(f"{addr}: unreadable ECS trust policy")

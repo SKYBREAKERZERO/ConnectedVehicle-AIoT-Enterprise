@@ -217,7 +217,9 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
                 raise RuntimeError("Unapproved AWS environment root or missing state backend")
             provider_text = (root / "providers.tf").read_text(encoding="utf-8")
             if "allowed_account_ids" not in provider_text or "endpoints {" in provider_text:
-                raise RuntimeError("Real AWS provider must pin account and avoid emulator endpoints")
+                raise RuntimeError(
+                    "Real AWS provider must pin account and avoid emulator endpoints"
+                )
             if "aws_account_id" not in (root / "variables.tf").read_text(encoding="utf-8"):
                 raise RuntimeError("AWS account ID input missing")
             print("AWS dev offline validation: PASS (no cloud plan executed)", flush=True)
