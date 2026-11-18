@@ -8,23 +8,52 @@ Nothing writes to RDS, queues, IoT or ECS. This is not production approval.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import asyncio
+import hashlib
+import importlib
 import json
 import os
 import re
 import sys
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
-import asyncpg
 import boto3
 from botocore.config import Config
 
-from scripts.day42_aws_e2e import E2EBlocked, REGION, require, source_checkout
+from scripts.day42_aws_e2e import REGION, E2EBlocked, require, source_checkout
+
+class ReadOnlyPgConnection(Protocol):
+    def transaction(
+        self, *, isolation: str, readonly: bool
+    ) -> AbstractAsyncContextManager[None]: ...
+
+    async def fetchrow(self, statement: str, *args: object) -> dict[str, Any] | None: ...
+
+    async def fetch(self, statement: str, *args: object) -> list[dict[str, Any]]: ...
+
+    async def fetchval(self, statement: str, *args: object) -> Any: ...
+
+    async def execute(self, statement: str, *args: object) -> str: ...
+
+    async def close(self) -> None: ...
+
+
+class AsyncPgDriver(Protocol):
+    async def connect(
+        self, *, dsn: str, timeout: int, command_timeout: int,
+        server_settings: dict[str, str],
+    ) -> ReadOnlyPgConnection: ...
+
+
+# asyncpg does not ship PEP 561 metadata in the pinned environment.
+# This narrow read-only protocol preserves strict mypy.
+asyncpg = cast(AsyncPgDriver, importlib.import_module("asyncpg"))
+
 
 SQS_ID = re.compile(r"[0-9a-f-]{36}\Z")
 EVENT_ID = re.compile(r"remote-command:[0-9a-f-]{36}:requested\Z")
@@ -65,7 +94,7 @@ def validate_dsn_file(path: Path) -> str:
     require(
         url.scheme in {"postgresql", "postgres"}
         and bool(url.hostname)
-        and url.hostname.endswith(".rds.amazonaws.com")
+        and (url.hostname or "").endswith(".rds.amazonaws.com")
         and url.port == 5432
         and url.username == ROLE
         and params.get("sslmode") == ["verify-full"]
