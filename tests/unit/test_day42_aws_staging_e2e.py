@@ -189,6 +189,7 @@ def test_audit_dsn_must_use_dedicated_no_insecure_tls(tmp_path: Path) -> None:
         "db.abcdef.ap-northeast-1.rds.amazonaws.com:5432/app?"
         f"sslmode=verify-full&sslrootcert={ca}"
     )
+    f.chmod(0o600)
     assert audit.validate_dsn_file(f).startswith("postgresql://")
 
 
@@ -224,7 +225,7 @@ def test_independent_cloudwatch_correlates_exact_sqs_message_id(
         audit.cloudwatch_sqs_audit(ACCOUNT, "remote-command:" + COMMAND + ":requested")
 
 
-def test_e2e_audit_never_accepts_status_only(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_e2e_audit_never_accepts_status_only() -> None:
     source = (Path(__file__).resolve().parents[2] /
               "scripts/day42_e2e_audit.py").read_text(encoding="utf-8")
     assert "ota_execution_reports" in source
