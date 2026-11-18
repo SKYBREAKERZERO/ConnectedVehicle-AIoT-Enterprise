@@ -427,7 +427,8 @@ def main() -> int:
             stream.write("\n")
         print("DAY42: real transport/virtual-ECU receipt written; independent audit still required")
         return 0
-    except (E2EBlocked, OSError, ValueError, TypeError, TimeoutError, RuntimeError) as exc:
+    except Exception as exc:
+        # CLI safety boundary: never leak device keys, SDK diagnostics or OIDC tokens.
         print("DAY42 BLOCKED: " + type(exc).__name__, file=sys.stderr)
         return 1
 
