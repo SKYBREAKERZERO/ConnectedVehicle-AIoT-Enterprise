@@ -21,6 +21,10 @@ ALLOWED = {
     "aws_ecs_cluster",
     "aws_iam_role",
     "aws_iam_role_policy",
+    "aws_default_security_group",
+    "aws_kms_key",
+    "aws_kms_alias",
+    "aws_flow_log",
 }
 EXPECTED = {
     "aws_vpc",
@@ -31,6 +35,9 @@ EXPECTED = {
     "aws_iam_role",
     "aws_iam_role_policy",
     "aws_cloudwatch_log_group",
+    "aws_flow_log",
+    "aws_default_security_group",
+    "aws_kms_key",
 }
 
 
@@ -54,7 +61,14 @@ def evaluate(plan: dict[str, Any]) -> list[str]:
             issues.append(f"{addr}: unapproved resource type {kind}")
         change = resource.get("change", {})
         actions = change.get("actions", [])
-        if actions not in (["create"], ["no-op"], ["read"]):
+        # VPC's default SG exists at VPC creation and must be locked down.
+        default_sg_lockdown = (
+            kind == "aws_default_security_group"
+            and actions == ["update"]
+            and not (change.get("after") or {}).get("ingress")
+            and not (change.get("after") or {}).get("egress")
+        )
+        if actions not in (["create"], ["no-op"], ["read"]) and not default_sg_lockdown:
             issues.append(f"{addr}: mutation beyond first provisioning not approved: {actions}")
         if kind == "aws_iam_role":
             after = change.get("after") or {}
