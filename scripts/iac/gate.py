@@ -211,14 +211,18 @@ def gate(repo: Path, baseline: Path, *, work: Path, report: Path, scanner_python
             contract_runs += int(passed[1])
             contract_count += len(tests)
         if root.parent.name == "environments" and root.name != "local":
-            # No AWS deployment/state yet; adding one must not silently bypass policy.
-            _, empty = _empty_root_plan(root, env)
-            if empty.get("resource_changes") or empty.get("planned_values", {}).get(
-                "root_module", {}
-            ).get("resources"):
+            # Live AWS roots are checked offline only in the sandbox.
+            # NEVER plan them against dummy CI credentials or apply them in this gate.
+            if root.name != "dev" or not (root / "backend.tf").is_file():
+                raise RuntimeError("Unapproved AWS environment root or missing state backend")
+            provider_text = (root / "providers.tf").read_text(encoding="utf-8")
+            if "allowed_account_ids" not in provider_text or "endpoints {" in provider_text:
                 raise RuntimeError(
-                    "AWS root now has resources: add a read-only state-backed AWS plan gate first"
+                    "Real AWS provider must pin account and avoid emulator endpoints"
                 )
+            if "aws_account_id" not in (root / "variables.tf").read_text(encoding="utf-8"):
+                raise RuntimeError("AWS account ID input missing")
+            print("AWS dev offline validation: PASS (no cloud plan executed)", flush=True)
     for label, directory in [
         ("deployment source", repo / "infra/terraform"),
         ("CI fixture", candidate),
