@@ -180,6 +180,7 @@ def test_campaign_receipt_must_include_signed_virtual_ecu_and_snapshot() -> None
 def test_audit_dsn_must_use_dedicated_no_insecure_tls(tmp_path: Path) -> None:
     f = tmp_path / "dsn"
     f.write_text("postgresql://postgres:password@localhost:5432/db", encoding="utf-8")
+    f.chmod(0o600)
     with pytest.raises(probe.E2EBlocked, match="verify-full"):
         audit.validate_dsn_file(f)
     ca = tmp_path / "rds.pem"
