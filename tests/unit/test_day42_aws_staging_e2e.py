@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import boto3
 import pytest
 
 from scripts import day42_aws_e2e as probe
@@ -216,11 +217,11 @@ class FakeLogs:
 def test_independent_cloudwatch_correlates_exact_sqs_message_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(audit.boto3, "client", lambda *args, **kwargs: FakeLogs())
+    monkeypatch.setattr(boto3, "client", lambda *args, **kwargs: FakeLogs())
     result = audit.cloudwatch_sqs_audit(ACCOUNT, "remote-command:" + COMMAND + ":requested")
     assert result["sqs_message_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     monkeypatch.setattr(
-        audit.boto3, "client", lambda *args, **kwargs: FakeLogs(mismatch=True)
+        boto3, "client", lambda *args, **kwargs: FakeLogs(mismatch=True)
     )
     with pytest.raises(probe.E2EBlocked, match="not matched"):
         audit.cloudwatch_sqs_audit(ACCOUNT, "remote-command:" + COMMAND + ":requested")
