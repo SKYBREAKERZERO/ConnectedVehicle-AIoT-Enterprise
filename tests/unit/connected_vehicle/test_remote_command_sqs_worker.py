@@ -126,7 +126,7 @@ async def test_worker_processes_empty_batch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_counts_processing_outcomes() -> None:
+async def test_worker_counts_processing_outcomes(caplog: pytest.LogCaptureFixture) -> None:
     messages = tuple(create_message(index) for index in range(1, 5))
 
     queue = FakeQueue(messages=messages)
@@ -146,7 +146,16 @@ async def test_worker_counts_processing_outcomes() -> None:
         handler=noop_handler,
     )
 
-    result = await worker.run_once()
+    with caplog.at_level("INFO"):
+        result = await worker.run_once()
+    assert "remote_sqs_ack event_id=event-1 message_id=message-1 outcome=processed" in (
+        caplog.text
+    )
+    assert "remote_sqs_ack event_id=event-2 message_id=message-2 outcome=duplicate" in (
+        caplog.text
+    )
+    assert "event_id=event-3 message_id=message-3" not in caplog.text
+    assert "event_id=event-4 message_id=message-4" not in caplog.text
 
     assert result.received == 4
     assert result.processed == 1

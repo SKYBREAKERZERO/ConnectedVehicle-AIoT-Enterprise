@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from database.bootstrap_cluster import SQLDriver as SQLDriver
-from database.credential_journal import RecoveryScope
+from database.credential_journal import RecoveryScope, expected_targets
 from database.credential_rotation import (
     Target,
     password_manager,
@@ -20,11 +20,19 @@ from database.credential_rotation import (
 from database.schema_permissions import grant_runtimes, prepare_roles
 from enterprise_platform.cloud.client_factory import AWSClientFactory
 from enterprise_platform.config.settings import Settings
-from enterprise_platform.database.credentials import DATABASE_USERS
+from enterprise_platform.database.credentials import DATABASE_USERS, runtime_database_user
 
 
 async def provision(settings: Settings) -> None:
-    passwords = {user: os.environ[f"{user.upper()}_PASSWORD"] for user in DATABASE_USERS.values()}
+    """Provision the exact pinned tenant roles/Secrets, never global fallback roles."""
+    roles = {
+        runtime: runtime_database_user(runtime, settings.database_tenant_id)
+        for runtime in DATABASE_USERS
+    }
+    passwords = {
+        roles[runtime]: os.environ[f"{base.upper()}_PASSWORD"]
+        for runtime, base in DATABASE_USERS.items()
+    }
     if any(not password for password in passwords.values()) or len(set(passwords.values())) != 3:
         raise ValueError("Provide three nonempty, distinct runtime passwords")
     if any(
@@ -35,27 +43,18 @@ async def provision(settings: Settings) -> None:
         )
     ):
         raise ValueError("Runtime passwords must differ from management passwords")
-    roles = dict(DATABASE_USERS)
-    ids = {
-        "application": settings.application_database_secret_id,
-        "outbox": settings.outbox_database_secret_id,
-        "remote-command": settings.remote_command_database_secret_id,
-    }
     targets = [
-        Target(
-            runtime,
-            role,
-            ids[runtime]
-            or f"{settings.database_secret_prefix}/{settings.app_env.value}/database/{runtime}",
-        )
-        for runtime, role in roles.items()
+        Target(target.runtime, target.role, target.secret_id, target.tenant)
+        for target in expected_targets(settings, "runtimes")
     ]
+    if {target.role for target in targets} != set(passwords):
+        raise ValueError("Credential target roles differ from tenant-bound passwords")
     client = AWSClientFactory(settings).secrets_manager()
-    # Reject absent Terraform containers before role or Schema provisioning.
+    # Every Secret container must exist before role, grant or password changes.
     for target in targets:
         await ready_version(client, target.secret_id)
     await prepare_roles(settings, roles)
-    await grant_runtimes(settings, roles)
+    await grant_runtimes(settings, roles, settings.database_tenant_id)
     async with password_manager(settings, targets) as backend:
         await rotate(settings, targets, passwords, client, backend)
 

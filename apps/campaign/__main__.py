@@ -19,6 +19,10 @@ from enterprise_platform.database.credentials import load_runtime_database_setti
 from enterprise_platform.database.engine import create_database_engine
 from enterprise_platform.database.runtime_security import verify_runtime_database_security
 from enterprise_platform.database.session import create_session_factory
+from enterprise_platform.reliability.ecs_task_protection import (
+    TaskProtectionError,
+    protect_worker_batch,
+)
 
 
 async def run(identifier: str | None, once: bool, interval: float, crash: bool = False) -> None:
@@ -67,8 +71,13 @@ async def run(identifier: str | None, once: bool, interval: float, crash: bool =
                     os._exit(91)
                 # A deadline cancels IO; transaction rollback or durable operation IDs handle retry.
                 try:
-                    async with asyncio.timeout(120):
-                        result = await campaigns.dispatch(settings.database_tenant_id, current)
+                    async with protect_worker_batch(settings):
+                        # Leave 30 seconds for audit, DB pool cleanup and protection release.
+                        async with asyncio.timeout(90):
+                            result = await campaigns.dispatch(settings.database_tenant_id, current)
+                except TaskProtectionError:
+                    # Do not continue polling after AWS rejected protection.
+                    raise
                 except Exception as exc:
                     failures += 1
                     print(
@@ -87,6 +96,7 @@ async def run(identifier: str | None, once: bool, interval: float, crash: bool =
                     with suppress(TimeoutError):
                         await asyncio.wait_for(stop.wait(), timeout=min(30, 2**failures))
                     continue
+                failures = 0
                 print(
                     json.dumps(
                         dict(

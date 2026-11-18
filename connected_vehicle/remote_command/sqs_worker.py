@@ -93,8 +93,18 @@ class RemoteCommandSQSWorker:
 
             if result is MessageProcessingResult.PROCESSED:
                 processed += 1
+                logger.info(
+                    "remote_sqs_ack event_id=%s message_id=%s outcome=processed",
+                    message.event.event_id,
+                    message.message_id,
+                )
             elif result is MessageProcessingResult.DUPLICATE:
                 duplicates += 1
+                logger.info(
+                    "remote_sqs_ack event_id=%s message_id=%s outcome=duplicate",
+                    message.event.event_id,
+                    message.message_id,
+                )
             elif result is MessageProcessingResult.IN_PROGRESS:
                 in_progress += 1
             else:

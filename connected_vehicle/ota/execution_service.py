@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from connected_vehicle.ota.artifacts import ArtifactHandle, ArtifactVerifier, verify_signature
+from connected_vehicle.ota.campaign_retry import transaction_retry
 from connected_vehicle.ota.contracts import FirmwareRegistration
 from connected_vehicle.ota.device_proof import verify_boot
 from connected_vehicle.ota.execution_contracts import (
@@ -238,6 +239,7 @@ class OTAExecutionService:
             )
             return ExecutionView.model_validate(job)
 
+    @transaction_retry
     async def claim(
         self,
         tenant: str,
@@ -328,6 +330,7 @@ class OTAExecutionService:
             result.close()
             raise
 
+    @transaction_retry
     async def report(
         self,
         tenant: str,

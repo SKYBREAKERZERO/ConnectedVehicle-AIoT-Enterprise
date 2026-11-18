@@ -31,3 +31,20 @@ def test_metrics_disabled_without_explicit_scrape_credential() -> None:
     app = FastAPI()
     configure_metrics(app, isolated_settings(_env_file=None))
     assert TestClient(app).get("/metrics").status_code == 403
+
+
+def test_domain_collector_is_not_called_before_scrape_authentication() -> None:
+    app = FastAPI()
+    calls = []
+
+    async def extra() -> bytes:
+        calls.append(True)
+        return b"domain_metric 1\n"
+
+    configure_metrics(app, isolated_settings(_env_file=None, metrics_token="a" * 64), extra=extra)
+    with TestClient(app) as client:
+        assert client.get("/metrics").status_code == 403
+        assert client.get("/metrics", headers={"Authorization": "Bearer wrong"}).status_code == 403
+        assert not calls
+        response = client.get("/metrics", headers={"Authorization": "Bearer " + "a" * 64})
+    assert calls == [True] and "domain_metric 1" in response.text

@@ -10,10 +10,8 @@ from enterprise_platform.database.ota_authority_contract import FUNCTIONS
 from enterprise_platform.database.ota_campaign_contract import (
     CAMPAIGN_READY,
 )
-from enterprise_platform.database.ota_campaign_contract import (
-    FUNCTIONS as CAMPAIGN_FUNCTIONS,
-)
 from enterprise_platform.database.ota_campaign_contract import TABLES as CAMPAIGN_TABLES
+from enterprise_platform.database.ota_dispatch_contract import FUNCTIONS as CAMPAIGN_FUNCTIONS
 from enterprise_platform.database.ota_lifecycle_contract import FUNCTIONS as LIFECYCLE_FUNCTIONS
 from enterprise_platform.database.ota_lifecycle_contract import INITIAL_BODY
 

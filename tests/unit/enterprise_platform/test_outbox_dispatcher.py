@@ -176,7 +176,7 @@ def create_retry_policy() -> RetryPolicy:
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_publishes_and_marks_event() -> None:
+async def test_dispatcher_publishes_and_marks_event(caplog: pytest.LogCaptureFixture) -> None:
     now = datetime(
         2030,
         1,
@@ -214,7 +214,12 @@ async def test_dispatcher_publishes_and_marks_event() -> None:
         random_value=lambda: 0.5,
     )
 
-    result = await dispatcher.dispatch_batch(now=now)
+    with caplog.at_level("INFO"):
+        result = await dispatcher.dispatch_batch(now=now)
+    assert (
+        f"outbox_sqs_published event_id={original_event.event_id} "
+        "message_id=message-001"
+    ) in caplog.text
 
     assert result.claimed == 1
     assert result.published == 1

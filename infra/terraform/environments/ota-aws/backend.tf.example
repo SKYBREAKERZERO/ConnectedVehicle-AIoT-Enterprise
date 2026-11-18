@@ -1,0 +1,9 @@
+# Partial configuration only. Do not init/migrate against real AWS on Day26.
+# Supply bucket, key, region, KMS key and allowed_account_ids from a reviewed
+# private backend configuration; no credentials or placeholder accounts here.
+terraform {
+  backend "s3" {
+    encrypt      = true
+    use_lockfile = true
+  }
+}

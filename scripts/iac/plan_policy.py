@@ -45,6 +45,10 @@ SUPPORTED_TYPES = (
         "aws_s3_bucket",
         "aws_s3_bucket_server_side_encryption_configuration",
         "aws_dynamodb_table",
+        "aws_s3_bucket_versioning",
+        "aws_s3_bucket_public_access_block",
+        "aws_s3_bucket_ownership_controls",
+        "aws_s3_bucket_lifecycle_configuration",
     }
 )
 VALID_ACTIONS = {
@@ -179,6 +183,7 @@ def _evaluate(plan: Plan, phase: Literal["changes", "resolved"]) -> list[str]:
         change = resource.get("change", {})
         if change.get("after") is not None:
             by_address[resource["address"]] = {**resource, "values": change["after"]}
+    errors.extend(ota_storage_errors(list(by_address.values())))
     policy_arns = {
         r.get("values", {}).get("arn") for r in by_address.values() if r["type"] == "aws_iam_policy"
     } - {None}
@@ -239,9 +244,73 @@ def _evaluate(plan: Plan, phase: Literal["changes", "resolved"]) -> list[str]:
             sse.get("enabled") is True for sse in values.get("server_side_encryption", [])
         ):
             errors.append(f"{address}: DynamoDB encryption is disabled/missing/unknown")
+        if kind == "aws_s3_bucket_lifecycle_configuration":
+            for rule in values.get("rule", []):
+                if rule.get("expiration") or rule.get("noncurrent_version_expiration"):
+                    errors.append(
+                        f"{address}: version expiry needs a separately reviewed retention design"
+                    )
         if kind.endswith("_policy_attachment") and values.get("policy_arn") not in policy_arns:
             errors.append(f"{address}: attached policy is external or unverified")
     return sorted(set(errors))
+
+
+S3_CONTROL_TYPES = {
+    "aws_s3_bucket_versioning",
+    "aws_s3_bucket_public_access_block",
+    "aws_s3_bucket_ownership_controls",
+}
+PUBLIC_FLAGS = (
+    "block_public_acls",
+    "ignore_public_acls",
+    "block_public_policy",
+    "restrict_public_buckets",
+)
+
+
+def ota_storage_errors(inventory: list[dict[str, Any]]) -> list[str]:
+    controls: dict[str, set[str]] = {kind: set() for kind in S3_CONTROL_TYPES}
+    errors: list[str] = []
+    for resource in inventory:
+        kind = resource["type"]
+        if kind not in S3_CONTROL_TYPES:
+            continue
+        values = resource.get("values") or {}
+        bucket = values.get("bucket")
+        valid = isinstance(bucket, str) and bool(bucket)
+        if kind == "aws_s3_bucket_public_access_block":
+            valid = valid and all(values.get(flag) is True for flag in PUBLIC_FLAGS)
+        else:
+            field = "versioning_configuration" if kind.endswith("versioning") else "rule"
+            blocks = values.get(field)
+            key = "status" if kind.endswith("versioning") else "object_ownership"
+            expected = "Enabled" if kind.endswith("versioning") else "BucketOwnerEnforced"
+            valid = (
+                valid
+                and isinstance(blocks, list)
+                and len(blocks) == 1
+                and isinstance(blocks[0], dict)
+                and blocks[0].get(key) == expected
+            )
+        if valid and isinstance(bucket, str):
+            controls[kind].add(bucket)
+        else:
+            errors.append(f"{resource['address']}: invalid/unknown S3 protection")
+    for resource in inventory:
+        if resource["type"] != "aws_s3_bucket":
+            continue
+        values = resource.get("values") or {}
+        bucket = values.get("id")
+        # Unknown IDs cannot establish a relationship to an independent control.
+        if not isinstance(bucket, str) or not bucket:
+            errors.append(f"{resource['address']}: S3 bucket ID is unknown")
+            continue
+        for kind, protected in controls.items():
+            if bucket not in protected:
+                errors.append(f"{resource['address']}: missing {kind}")
+        if values.get("force_destroy") is not False:
+            errors.append(f"{resource['address']}: S3 force_destroy must be false")
+    return errors
 
 
 def main() -> int:

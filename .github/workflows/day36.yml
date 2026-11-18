@@ -1,0 +1,248 @@
+name: Day36 local staging deployment and rollback
+'on':
+  pull_request:
+    branches:
+    - main
+    types:
+    - labeled
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Open same-repository PR with latest Runtime and IaC SUCCESS
+        type: number
+        required: true
+        default: 15
+      baseline:
+        description: Full historical application commit (ancestor of tested candidate)
+        type: string
+        required: true
+        default: aefebb352c359e593a6b0fe572a0e8ca9dbcf97e
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+concurrency:
+  group: day36-local-staging-${{ github.ref }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  intake:
+    name: 01 Read-only latest CI and candidate admission
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'day36-staging' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      candidate: ${{ steps.identity.outputs.candidate }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - name: Audit current PR, latest attempts, jobs and artifacts
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ inputs.pr || github.event.pull_request.number }}
+      run: python -m scripts.day36_ci_input --pr "$PR_NUMBER" --output .day36/ci-input.json
+    - name: Bind dispatch identity to the tested PR candidate
+      id: identity
+      run: "python - <<'PY'\nimport json, os\nfrom pathlib import Path\ncandidate = json.loads(Path('.day36/ci-input.json').read_text())['candidate']\n\
+        event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())\nexpected = event['pull_request']['head']['sha']\
+        \ if 'pull_request' in event else os.environ['GITHUB_SHA']\nif candidate['head_sha'] != expected:\n    raise\
+        \ SystemExit('Dispatch must use the current tested PR head branch')\nif 'pull_request' in event and candidate['candidate_sha']\
+        \ != os.environ['GITHUB_SHA']:\n    raise SystemExit('PR merge candidate does not match this event')\nwith open(os.environ['GITHUB_OUTPUT'],\
+        \ 'a') as out:\n    out.write('candidate=' + candidate['candidate_sha'] + '\\n')\nPY\n"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day36-intake-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36/ci-input.json
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+  image:
+    name: 02 Contracts, locked dual images, CVE and SBOM
+    needs:
+    - intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.intake.outputs.candidate }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day36-intake-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .supply-reports
+    - name: Verify workflow graph and executable Python interfaces
+      run: python -m pytest tests/unit/test_day36_pipeline.py tests/unit/test_day36_supply.py -q -o junit_family=xunit1
+        --junitxml=.supply-reports/contracts.xml
+    - name: Build both images with full transitive wheel hash locks
+      env:
+        BASELINE_SHA: ${{ inputs.baseline || 'aefebb352c359e593a6b0fe572a0e8ca9dbcf97e' }}
+      run: python -m scripts.day36_build --baseline "$BASELINE_SHA" --output .supply-reports/images.json --archives .day36-images
+    - name: Block CVEs, scanner errors and absent SBOM for both actual images
+      run: python -m scripts.day36_supply scan --folder .supply-reports --archives .day36-images --cache .day36-trivy-cache
+    - name: Seal same-candidate and same-attempt supply chain
+      run: python -m scripts.iac.pipeline_evidence publish --stage day36-image-supply --folder .supply-reports --output
+        .supply-sealed
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day36-image-supply-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .supply-sealed
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day36-images-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-images/*.tar
+        if-no-files-found: error
+        retention-days: 3
+    - name: Preserve unverified supply-chain failures
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day36-supply-blocked-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .supply-reports
+        include-hidden-files: true
+        if-no-files-found: warn
+        retention-days: 7
+  staging:
+    name: 03 Load exact dual images and exercise real rollback
+    needs:
+    - intake
+    - image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      DAY36_REPORT_DIR: .day36-reports
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.intake.outputs.candidate }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day36-image-supply-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-image-input
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day36-images-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-images
+    - name: Verify sealed supply facts before using image TARs
+      run: python -m scripts.iac.pipeline_evidence consume --stage day36-image-supply --folder .day36-image-input --output
+        .day36-reports
+    - name: Authenticate TAR/config and load both immutable images
+      run: python -m scripts.day36_supply load --folder .day36-reports --archives .day36-images
+    - name: Real PostgreSQL, runtime role, HTTP faults and stable ingress rollback
+      run: python -m pytest tests/integration/day36 -q -o junit_family=xunit1 --junitxml=.day36-reports/staging.xml
+    - name: Recheck current CI identity after deployment exercise
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ inputs.pr || github.event.pull_request.number }}
+      run: python -m scripts.day36_ci_input --pr "$PR_NUMBER" --compare .day36-reports/ci-input.json --output .day36-reports/ci-final.json
+    - name: Verify staging evidence without granting deployment authority
+      run: python -m scripts.day36_evidence --folder .day36-reports --ci --output .day36-reports/day36-staging-acceptance.json
+    - name: Seal exact candidate/source/Run/Attempt and all reports
+      run: python -m scripts.iac.pipeline_evidence publish --stage day36-staging --folder .day36-reports --output .day36-sealed
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day36-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-sealed
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+    - name: Preserve failure diagnostics as unverified evidence
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day36-failed-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-reports
+        include-hidden-files: true
+        if-no-files-found: warn
+        retention-days: 3
+  evidence:
+    name: 04 Independent archive, CVE, SBOM and staging recomputation
+    needs:
+    - intake
+    - image
+    - staging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.intake.outputs.candidate }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day36-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-verify
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: day36-images-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-images
+    - name: Independently authenticate archives and actual installed dependency closure
+      run: python -m scripts.day36_supply load --folder .day36-verify --archives .day36-images
+    - run: python -m scripts.iac.pipeline_evidence verify --stage day36-staging --folder .day36-verify
+    - run: python -m scripts.day36_evidence --folder .day36-verify --ci --output day36-recomputed.json
+    - run: "python - <<'PY'\nimport json\nfrom pathlib import Path\nif json.loads(Path('day36-recomputed.json').read_text())\
+        \ != json.loads(Path('.day36-verify/day36-staging-acceptance.json').read_text()):\n    raise SystemExit('Staging\
+        \ decision failed independent recomputation')\nPY\n"
+    - name: Seal independently recomputed final decision
+      run: 'mkdir .day36-final
+
+        cp day36-recomputed.json .day36-final/decision.json
+
+        python -m scripts.iac.pipeline_evidence publish --stage day36-final --folder .day36-final --output .day36-final-sealed'
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: day36-final-proof-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-final-sealed
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+  gate:
+    name: 05 Fail-closed final evidence gate
+    needs:
+    - intake
+    - image
+    - staging
+    - evidence
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event.label.name == 'day36-staging') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ needs.intake.outputs.candidate }}
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: ./.github/actions/setup-ci-runtime
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: ${{ needs.intake.result == 'success' && needs.image.result == 'success' && needs.staging.result == 'success'
+        && needs.evidence.result == 'success' }}
+      with:
+        name: day36-final-proof-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .day36-final-proof
+    - name: Recheck sealed final proof or emit durable BLOCKED
+      if: ${{ always() }}
+      env:
+        PIPELINE_NEEDS: ${{ toJSON(needs) }}
+      run: python -m scripts.day36_final --folder .day36-final-proof --output day36-final.json
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: ${{ always() }}
+      with:
+        name: day36-final-${{ github.run_id }}-${{ github.run_attempt }}
+        path: day36-final.json
+        if-no-files-found: error
+        retention-days: 7

@@ -1,0 +1,15 @@
+name: Pinned Runtime test toolchain
+description: Install the application and its actual quality/test dependencies.
+runs:
+  using: composite
+  steps:
+  - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    with:
+      python-version: '3.12'
+  - shell: bash
+    run: |
+      set -euo pipefail
+      python -m venv "$RUNNER_TEMP/cv-runtime"
+      "$RUNNER_TEMP/cv-runtime/bin/python" -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r infra/staging/requirements/ci.lock
+      "$RUNNER_TEMP/cv-runtime/bin/python" -m pip install --disable-pip-version-check --no-deps --no-build-isolation --no-index -e .
+      echo "$RUNNER_TEMP/cv-runtime/bin" >> "$GITHUB_PATH"
