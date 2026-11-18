@@ -57,6 +57,8 @@ def load_receipt(path: Path) -> dict[str, Any]:
 def validate_dsn_file(path: Path) -> str:
     require(path.is_file() and not path.is_symlink(), "auditor DSN file missing")
     require(path.stat().st_size <= 2048, "oversized auditor DSN")
+    if os.name == "posix":
+        require(path.stat().st_mode & 0o077 == 0, "auditor DSN must be mode 0600")
     dsn = path.read_text(encoding="utf-8").strip()
     url = urlsplit(dsn)
     params = parse_qs(url.query, keep_blank_values=True)
@@ -86,7 +88,7 @@ def validate_receipt(data: dict[str, Any], *, account: str, sha: str, tenant: st
     stamp = datetime.fromisoformat(data["observed_at_utc"].replace("Z", "+00:00"))
     require(
         stamp.tzinfo is not None and -60 <= (datetime.now(UTC) - stamp).total_seconds()
-        <= 3600, "stale/future-dated probe",
+        <= 1200, "stale/future-dated probe",
     )
     if data.get("scenario") == "remote":
         item = data.get("iot_delivery")
@@ -272,6 +274,11 @@ async def audit(args: argparse.Namespace) -> dict[str, Any]:
     require(args.live and os.environ.get("DAY42_APPROVED_STAGING") == "true",
             "protected auditor approval required")
     source_checkout(args.source_sha)
+    require(
+        not any(name.startswith("AWS_ENDPOINT_URL") and value
+                for name, value in os.environ.items()),
+        "AWS endpoint override forbidden",
+    )
     require(bool(re.fullmatch(r"[0-9]{12}", args.account_id)), "bad staging account")
     identity = boto3.client("sts", region_name=REGION).get_caller_identity()
     require(identity.get("Account") == args.account_id, "STS account mismatch")
